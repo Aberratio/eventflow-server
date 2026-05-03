@@ -1,0 +1,35 @@
+{
+  "name": "zmierzymy-czas/server",
+  "description": "REST API for the Zmierzymy Czas frontend.",
+  "type": "project",
+  "license": "proprietary",
+  "require": {
+    "php": "^8.2",
+    "slim/slim": "^4.14",
+    "slim/psr7": "^1.7",
+    "firebase/php-jwt": "^6.10"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^10.5"
+  },
+  "autoload": {
+    "psr-4": {
+      "ZmierzymyCzas\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "ZmierzymyCzas\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "serve": [
+      "Composer\\Config::disableProcessTimeout",
+      "php -S localhost:8081 -t public"
+    ],
+    "migrate": "php bin/migrate.php",
+    "seed": "php bin/seed.php",
+    "test": "phpunit",
+    "lint": "php -l public/index.php && php -l bin/migrate.php && php -l bin/seed.php"
+  }
+}

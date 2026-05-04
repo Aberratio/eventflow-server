@@ -14,12 +14,14 @@ CREATE TABLE IF NOT EXISTS users (
   website VARCHAR(512) NULL,
   description TEXT NULL,
   status ENUM('active','blocked') NOT NULL DEFAULT 'active',
+  event_limit INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE users
-  MODIFY role ENUM('participant','organizer','moderator','admin','superadmin') NOT NULL DEFAULT 'participant';
+  MODIFY role ENUM('participant','organizer','moderator','admin','superadmin') NOT NULL DEFAULT 'participant',
+  ADD COLUMN IF NOT EXISTS event_limit INT NOT NULL DEFAULT 0 AFTER status;
 
 CREATE TABLE IF NOT EXISTS series (
   id VARCHAR(36) PRIMARY KEY,
@@ -52,7 +54,7 @@ CREATE TABLE IF NOT EXISTS events (
   organizer_id VARCHAR(36) NOT NULL,
   organizer_name VARCHAR(180) NOT NULL,
   organizer_contact JSON NULL,
-  status ENUM('draft','awaiting_approval','approved','published','completed','cancelled','rejected') NOT NULL DEFAULT 'draft',
+  status ENUM('draft','active','past','archived','deleted') NOT NULL DEFAULT 'draft',
   rejection_reason TEXT NULL,
   submitted_at VARCHAR(64) NULL,
   approved_at VARCHAR(64) NULL,
@@ -93,7 +95,7 @@ CREATE TABLE IF NOT EXISTS events (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE events
-  MODIFY status ENUM('draft','awaiting_approval','approved','published','completed','cancelled','rejected') NOT NULL DEFAULT 'draft';
+  MODIFY status ENUM('draft','awaiting_approval','approved','published','completed','cancelled','rejected','active','past','archived','deleted') NOT NULL DEFAULT 'draft';
 
 ALTER TABLE events
   ADD COLUMN IF NOT EXISTS approved_at VARCHAR(64) NULL,
@@ -132,6 +134,28 @@ CREATE TABLE IF NOT EXISTS organizer_event_credit_usages (
 
 ALTER TABLE organizer_event_credit_usages
   ADD COLUMN IF NOT EXISTS event_credit_kind ENUM('standard','virtual','timing') NOT NULL DEFAULT 'standard' AFTER batch_id;
+
+UPDATE events
+SET status = CASE status
+  WHEN 'published' THEN 'active'
+  WHEN 'completed' THEN 'past'
+  WHEN 'cancelled' THEN 'archived'
+  WHEN 'active' THEN 'active'
+  WHEN 'past' THEN 'past'
+  WHEN 'archived' THEN 'archived'
+  WHEN 'deleted' THEN 'deleted'
+  ELSE 'draft'
+END;
+
+ALTER TABLE events
+  MODIFY status ENUM('draft','active','past','archived','deleted') NOT NULL DEFAULT 'draft';
+
+UPDATE users u
+SET event_limit = GREATEST(
+  COALESCE((SELECT SUM(b.total_count) FROM organizer_event_credit_batches b WHERE b.organizer_id = u.id), 0),
+  COALESCE((SELECT COUNT(*) FROM events e WHERE e.organizer_id = u.id AND e.status <> 'deleted'), 0)
+)
+WHERE u.role = 'organizer';
 
 CREATE TABLE IF NOT EXISTS series_events (
   series_id VARCHAR(36) NOT NULL,

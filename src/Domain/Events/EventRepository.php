@@ -9,6 +9,7 @@ use ZmierzymyCzas\Domain\Repository;
 final class EventRepository extends Repository
 {
     private const CREDIT_KINDS = ['standard', 'virtual', 'timing'];
+    private const EVENT_STATUSES = ['draft', 'active', 'past', 'archived', 'deleted'];
 
     private const EVENT_COLUMNS = <<<'SQL'
 id, name, slug, discipline, date, location, city, description, image_url AS imageUrl,
@@ -70,7 +71,9 @@ SQL;
             $where[] = 'is_private = 0';
         }
         if (empty($filters['includeUnpublished'])) {
-            $where[] = "status IN ('published', 'completed')";
+            $where[] = "status IN ('active', 'past', 'archived')";
+        } elseif (empty($filters['includeDeleted'])) {
+            $where[] = "status <> 'deleted'";
         }
         if (!empty($filters['dateFrom'])) {
             $where[] = 'date >= :dateFrom';
@@ -127,21 +130,22 @@ SQL;
     /** @return array<int, array<string, mixed>> */
     public function featured(): array
     {
-        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE featured = 1 AND status IN ('published', 'completed') ORDER BY date ASC");
+        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE featured = 1 AND status IN ('active', 'past', 'archived') ORDER BY date ASC");
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
 
     /** @return array<int, array<string, mixed>> */
     public function live(): array
     {
-        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE is_live = 1 AND status IN ('published', 'completed') ORDER BY date ASC");
+        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE is_live = 1 AND status IN ('active', 'past', 'archived') ORDER BY date ASC");
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
 
     /** @return array<int, array<string, mixed>> */
-    public function byOrganizer(string $organizerId): array
+    public function byOrganizer(string $organizerId, bool $includeDeleted = false): array
     {
-        $stmt = $this->pdo->prepare('SELECT ' . self::EVENT_COLUMNS . ' FROM events WHERE organizer_id = :organizerId ORDER BY date ASC');
+        $deletedSql = $includeDeleted ? '' : " AND status <> 'deleted'";
+        $stmt = $this->pdo->prepare('SELECT ' . self::EVENT_COLUMNS . " FROM events WHERE organizer_id = :organizerId{$deletedSql} ORDER BY date ASC");
         $stmt->execute(['organizerId' => $organizerId]);
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
@@ -167,7 +171,7 @@ SQL;
             $payload['status'] = 'draft';
             $payload['createdBy'] = $actorId;
             $payload['eventCreditKind'] = $this->creditKindForEvent($payload);
-            $this->consumeCredit((string) $organizer['id'], $id, $this->creditKindForEvent($payload));
+            $this->assertOrganizerHasCapacity((string) $organizer['id']);
             $this->insert('events', $this->eventData($id, $payload, true));
             $this->replaceChildren($id, $payload);
             $this->pdo->commit();
@@ -197,8 +201,9 @@ SQL;
 
         $this->pdo->beginTransaction();
         try {
-            $this->releaseCredit($id);
-            $this->consumeCredit((string) $organizer['id'], $id, $this->creditKindForEvent($event));
+            if (($event['status'] ?? '') !== 'deleted') {
+                $this->assertOrganizerHasCapacity((string) $organizer['id']);
+            }
             $this->updateById('events', $id, [
                 'organizer_id' => $organizer['id'],
                 'organizer_name' => $organizer['companyName'] ?: $organizer['name'],
@@ -212,15 +217,15 @@ SQL;
 
     public function delete(string $id): void
     {
-        $this->pdo->prepare('DELETE FROM events WHERE id = :id')->execute(['id' => $id]);
+        $this->updateById('events', $id, ['status' => 'deleted']);
     }
 
     public function updateStatus(string $id, string $status, ?string $reason): ?array
     {
+        $status = $this->normalizeStatus($status);
         $this->updateById('events', $id, [
             'status' => $status,
             'rejection_reason' => $reason,
-            'submitted_at' => $status === 'awaiting_approval' ? date(DATE_ATOM) : null,
         ]);
         return $this->find($id);
     }
@@ -228,25 +233,20 @@ SQL;
     public function submit(string $id): ?array
     {
         $event = $this->find($id);
-        if (!$event || !in_array($event['status'], ['draft', 'rejected'], true)) {
+        if (!$event || $event['status'] === 'deleted') {
             return null;
         }
-        $this->updateById('events', $id, [
-            'status' => 'awaiting_approval',
-            'rejection_reason' => null,
-            'submitted_at' => date(DATE_ATOM),
-        ]);
-        return $this->find($id);
+        return $this->updateStatus($id, 'active', null);
     }
 
     public function approve(string $id, string $actorId): ?array
     {
         $event = $this->find($id);
-        if (!$event || $event['status'] !== 'awaiting_approval') {
+        if (!$event || $event['status'] === 'deleted') {
             return null;
         }
         $this->updateById('events', $id, [
-            'status' => 'approved',
+            'status' => 'active',
             'rejection_reason' => null,
             'approved_at' => date(DATE_ATOM),
             'approved_by' => $actorId,
@@ -257,11 +257,11 @@ SQL;
     public function reject(string $id, string $reason): ?array
     {
         $event = $this->find($id);
-        if (!$event || $event['status'] !== 'awaiting_approval') {
+        if (!$event || $event['status'] === 'deleted') {
             return null;
         }
         $this->updateById('events', $id, [
-            'status' => 'rejected',
+            'status' => 'draft',
             'rejection_reason' => $reason,
         ]);
         return $this->find($id);
@@ -270,15 +270,44 @@ SQL;
     public function publish(string $id, string $actorId): ?array
     {
         $event = $this->find($id);
-        if (!$event || $event['status'] !== 'approved') {
+        if (!$event || $event['status'] === 'deleted') {
             return null;
         }
         $this->updateById('events', $id, [
-            'status' => 'published',
+            'status' => 'active',
             'published_at' => date(DATE_ATOM),
             'published_by' => $actorId,
         ]);
         return $this->find($id);
+    }
+
+    /** @return array{limit: int, used: int, available: int} */
+    public function eventLimit(string $organizerId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT event_limit FROM users WHERE id = :organizerId AND role = :role');
+        $stmt->execute(['organizerId' => $organizerId, 'role' => 'organizer']);
+        $limit = (int) ($stmt->fetchColumn() ?: 0);
+        $used = $this->activeEventCount($organizerId);
+
+        return [
+            'limit' => $limit,
+            'used' => $used,
+            'available' => max(0, $limit - $used),
+        ];
+    }
+
+    /** @return array{limit: int, used: int, available: int} */
+    public function updateEventLimit(string $organizerId, int $limit): array
+    {
+        $used = $this->activeEventCount($organizerId);
+        if ($limit < $used) {
+            throw new \RuntimeException('event_limit_below_usage');
+        }
+
+        $this->pdo->prepare('UPDATE users SET event_limit = :limit WHERE id = :organizerId AND role = :role')
+            ->execute(['limit' => $limit, 'organizerId' => $organizerId, 'role' => 'organizer']);
+
+        return $this->eventLimit($organizerId);
     }
 
     /** @return array{total: int, used: int, available: int, byType: array<string, array{total: int, used: int, available: int}>} */
@@ -422,7 +451,8 @@ SQL;
         $out = $creating ? ['id' => $id, 'status' => 'draft', 'featured' => 0] : [];
         foreach ($map as $input => $column) {
             if (array_key_exists($input, $data)) {
-                $out[$column] = is_bool($data[$input]) ? (int) $data[$input] : $data[$input];
+                $value = is_bool($data[$input]) ? (int) $data[$input] : $data[$input];
+                $out[$column] = $input === 'status' ? $this->normalizeStatus((string) $value) : $value;
             }
         }
         foreach (['organizer_contact', 'banner_crop_area', 'payment_config', 'registration_embed', 'registration_form_config', 'display_options'] as $jsonField) {
@@ -466,6 +496,32 @@ SQL;
     private function normalizeCreditKind(string $kind): string
     {
         return in_array($kind, self::CREDIT_KINDS, true) ? $kind : 'standard';
+    }
+
+    private function normalizeStatus(string $status): string
+    {
+        return match ($status) {
+            'published' => 'active',
+            'completed' => 'past',
+            'cancelled' => 'archived',
+            'awaiting_approval', 'approved', 'rejected' => 'draft',
+            default => in_array($status, self::EVENT_STATUSES, true) ? $status : 'draft',
+        };
+    }
+
+    private function activeEventCount(string $organizerId): int
+    {
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM events WHERE organizer_id = :organizerId AND status <> 'deleted'");
+        $stmt->execute(['organizerId' => $organizerId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    private function assertOrganizerHasCapacity(string $organizerId): void
+    {
+        $limit = $this->eventLimit($organizerId);
+        if ($limit['used'] >= $limit['limit']) {
+            throw new \RuntimeException('event_limit_exceeded');
+        }
     }
 
     private function releaseCredit(string $eventId): void

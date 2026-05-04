@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class UserRepository extends Repository
 {
-    private const PUBLIC_COLUMNS = 'id, name, email, role, avatar, phone, birth_year AS birthYear, gender, club, company_name AS companyName, nip, website, description, status';
+    private const PUBLIC_COLUMNS = 'id, name, email, role, avatar, phone, birth_year AS birthYear, gender, club, company_name AS companyName, nip, website, description, status, event_limit AS eventLimit';
 
     /**
      * @param array<string, mixed> $filters
@@ -89,6 +89,7 @@ final class UserRepository extends Repository
             'website' => $data['website'] ?? null,
             'description' => $data['description'] ?? null,
             'status' => $data['status'] ?? 'active',
+            'event_limit' => $data['eventLimit'] ?? 0,
         ]);
 
         return $this->find($id);
@@ -112,6 +113,7 @@ final class UserRepository extends Repository
             'website' => 'website',
             'description' => 'description',
             'status' => 'status',
+            'eventLimit' => 'event_limit',
         ] as $input => $column) {
             if (array_key_exists($input, $data)) {
                 $mapped[$column] = $data[$input];

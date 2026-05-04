@@ -34,7 +34,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $staffRoles = ['admin', 'superadmin', 'moderator'];
     $eventManagerRoles = ['organizer', 'admin', 'superadmin', 'moderator'];
     $publisherRoles = ['admin', 'superadmin'];
-    $publicEventStatuses = ['published', 'completed'];
+    $publicEventStatuses = ['active', 'past', 'archived'];
     $isSuperAdmin = static fn (Request $request): bool => ((string) (((array) $request->getAttribute('auth'))['role'] ?? '')) === 'superadmin';
     $isStaffRole = static fn (string $role): bool => in_array($role, ['admin', 'superadmin', 'moderator'], true);
     $optionalAuth = static function (Request $request) use ($jwt): array {
@@ -57,6 +57,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         }
         $role = (string) ($auth['role'] ?? '');
         $userId = (string) ($auth['sub'] ?? '');
+        if (($event['status'] ?? '') === 'deleted' && !$isStaffRole($role)) {
+            return false;
+        }
         return $isStaffRole($role) || ($role === 'organizer' && $userId !== '' && $event['organizerId'] === $userId);
     };
     $canManageEvent = static function (?array $event, array $auth) use ($isStaffRole): bool {
@@ -65,6 +68,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         }
         $role = (string) ($auth['role'] ?? '');
         $userId = (string) ($auth['sub'] ?? '');
+        if (($event['status'] ?? '') === 'deleted' && !$isStaffRole($role)) {
+            return false;
+        }
         return $isStaffRole($role) || ($role === 'organizer' && $userId !== '' && $event['organizerId'] === $userId);
     };
     $touchesAdminAccount = static function (?array $existing, array $payload): bool {
@@ -124,6 +130,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             ->add(new AuthMiddleware($jwt, $adminRoles));
         $api->patch('/users/{id}', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount) {
             $payload = $body($request);
+            unset($payload['eventLimit']);
             $existing = $users->find($args['id']);
             if ($touchesAdminAccount($existing, $payload) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can modify admin accounts', 403);
@@ -168,8 +175,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if (!empty($filters['includeUnpublished']) && $isStaffRole((string) ($auth['role'] ?? ''))) {
                 $filters['includeUnpublished'] = true;
                 $filters['includePrivate'] = true;
+                $filters['includeDeleted'] = !empty($filters['includeDeleted']);
             } else {
                 unset($filters['includeUnpublished']);
+                unset($filters['includeDeleted']);
             }
             $page = $events->list($filters);
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
@@ -205,8 +214,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             try {
                 return JsonResponder::ok($response, $events->createForOrganizer($payload, $organizer, (string) ($auth['sub'] ?? '')), 'Event created', 201);
             } catch (RuntimeException $e) {
-                if ($e->getMessage() === 'no_event_credits') {
-                    return JsonResponder::error($response, 'no_event_credits', 'Organizer has no available event credits', 409);
+                if ($e->getMessage() === 'event_limit_exceeded') {
+                    return JsonResponder::error($response, 'event_limit_exceeded', 'Organizer has no available event slots', 409);
                 }
                 throw $e;
             }
@@ -222,7 +231,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if ($role === 'organizer') {
                 unset($payload['organizerId'], $payload['organizerName'], $payload['status']);
             } elseif (array_key_exists('organizerId', $payload) && ($payload['organizerId'] ?? '') !== ($event['organizerId'] ?? '')) {
-                if (($event['status'] ?? '') === 'published') {
+                if (($event['status'] ?? '') === 'active') {
                     return JsonResponder::error($response, 'published_organizer_locked', 'Published events cannot be transferred to another organizer', 409);
                 }
                 $organizer = $users->find((string) $payload['organizerId']);
@@ -232,8 +241,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 try {
                     $events->transferOrganizer($args['id'], $organizer);
                 } catch (RuntimeException $e) {
-                    if ($e->getMessage() === 'no_event_credits') {
-                        return JsonResponder::error($response, 'no_event_credits', 'Organizer has no available event credits', 409);
+                    if ($e->getMessage() === 'event_limit_exceeded') {
+                        return JsonResponder::error($response, 'event_limit_exceeded', 'Organizer has no available event slots', 409);
                     }
                     throw $e;
                 }
@@ -243,12 +252,26 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             return JsonResponder::ok($response, $events->update($args['id'], $payload));
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->delete('/events/{id}', function (Request $request, Response $response, array $args) use ($events) {
+        $api->delete('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $isStaffRole) {
+            $auth = (array) $request->getAttribute('auth');
+            $event = $events->find($args['id']);
+            if (!$canManageEvent($event, $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
+            }
+            $role = (string) ($auth['role'] ?? '');
+            if (!$isStaffRole($role) && (($event['status'] ?? '') === 'past' || ((string) ($event['date'] ?? '')) < date('Y-m-d'))) {
+                return JsonResponder::error($response, 'past_event_delete_forbidden', 'Organizer cannot delete events that already took place', 409);
+            }
             $events->delete($args['id']);
             return JsonResponder::ok($response, null);
-        })->add(new AuthMiddleware($jwt, ['admin']));
-        $api->patch('/events/{id}/status', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $events->updateStatus($args['id'], (string) ($body($request)['status'] ?? 'draft'), $body($request)['reason'] ?? null)))
-            ->add(new AuthMiddleware($jwt, $staffRoles));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->patch('/events/{id}/status', function (Request $request, Response $response, array $args) use ($events, $body, $canManageEvent) {
+            $auth = (array) $request->getAttribute('auth');
+            if (!$canManageEvent($events->find($args['id']), $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
+            }
+            return JsonResponder::ok($response, $events->updateStatus($args['id'], (string) ($body($request)['status'] ?? 'draft'), $body($request)['reason'] ?? null));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->post('/events/{id}/submit', function (Request $request, Response $response, array $args) use ($events, $canManageEvent) {
             $auth = (array) $request->getAttribute('auth');
             if (!$canManageEvent($events->find($args['id']), $auth)) {
@@ -280,38 +303,39 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             $published = $events->publish($args['id'], (string) ($auth['sub'] ?? ''));
             return $published ? JsonResponder::ok($response, $published) : JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be published in its current status', 409);
-        })->add(new AuthMiddleware($jwt, ['organizer', 'admin']));
+        })->add(new AuthMiddleware($jwt, ['organizer', 'admin', 'superadmin']));
         $api->get('/organizers/{organizerId}/events', function (Request $request, Response $response, array $args) use ($events, $isStaffRole) {
             $auth = (array) $request->getAttribute('auth');
             $role = (string) ($auth['role'] ?? '');
             if (!$isStaffRole($role) && (($auth['sub'] ?? '') !== $args['organizerId'])) {
                 return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
             }
-            return JsonResponder::ok($response, $events->byOrganizer($args['organizerId']));
+            return JsonResponder::ok($response, $events->byOrganizer($args['organizerId'], $isStaffRole($role)));
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->get('/organizers/{organizerId}/event-credits', function (Request $request, Response $response, array $args) use ($events, $isStaffRole) {
+        $api->get('/organizers/{organizerId}/event-limit', function (Request $request, Response $response, array $args) use ($events, $isStaffRole) {
             $auth = (array) $request->getAttribute('auth');
             $role = (string) ($auth['role'] ?? '');
             if (!$isStaffRole($role) && (($auth['sub'] ?? '') !== $args['organizerId'])) {
                 return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
             }
-            return JsonResponder::ok($response, $events->credits($args['organizerId']));
+            return JsonResponder::ok($response, $events->eventLimit($args['organizerId']));
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->post('/organizers/{organizerId}/event-credits', function (Request $request, Response $response, array $args) use ($events, $users, $body, $isStaffRole) {
-            $auth = (array) $request->getAttribute('auth');
-            $role = (string) ($auth['role'] ?? '');
-            if (!$isStaffRole($role) && (($auth['sub'] ?? '') !== $args['organizerId'])) {
-                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
-            }
+        $api->patch('/organizers/{organizerId}/event-limit', function (Request $request, Response $response, array $args) use ($events, $users, $body) {
             $organizer = $users->find($args['organizerId']);
             if (!$organizer || $organizer['role'] !== 'organizer') {
                 return JsonResponder::error($response, 'invalid_organizer', 'Organizer is required', 422);
             }
             $payload = $body($request);
-            $count = max(1, (int) ($payload['count'] ?? 1));
-            $kind = (string) ($payload['kind'] ?? 'standard');
-            return JsonResponder::ok($response, $events->grantCredits($args['organizerId'], $count, 'manual_grant', null, $kind), 'Credits granted', 201);
-        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+            $limit = max(0, (int) ($payload['limit'] ?? 0));
+            try {
+                return JsonResponder::ok($response, $events->updateEventLimit($args['organizerId'], $limit), 'Event limit updated');
+            } catch (RuntimeException $e) {
+                if ($e->getMessage() === 'event_limit_below_usage') {
+                    return JsonResponder::error($response, 'event_limit_below_usage', 'Event limit cannot be lower than organizer current event count', 409);
+                }
+                throw $e;
+            }
+        })->add(new AuthMiddleware($jwt, $staffRoles));
 
         $api->get('/registrations', function (Request $request, Response $response) use ($registrations, $query) {
             $page = $registrations->list($query($request));

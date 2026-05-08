@@ -8,12 +8,14 @@ use Slim\App;
 use Slim\Routing\RouteCollectorProxy;
 use ZmierzymyCzas\Domain\Admin\AdminRepository;
 use ZmierzymyCzas\Domain\Auth\JwtService;
+use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
 use ZmierzymyCzas\Domain\Cms\InfoPageRepository;
 use ZmierzymyCzas\Domain\Cms\PartnerRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
 use ZmierzymyCzas\Domain\Series\SeriesRepository;
+use ZmierzymyCzas\Domain\Shop\ShopRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
 use ZmierzymyCzas\Support\JsonResponder;
@@ -24,6 +26,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $registrations = new RegistrationRepository($pdo);
     $results = new ResultRepository($pdo);
     $series = new SeriesRepository($pdo);
+    $shop = new ShopRepository($pdo);
+    $challenges = new ChallengeRepository($pdo);
     $pages = new InfoPageRepository($pdo);
     $partners = new PartnerRepository($pdo);
     $admin = new AdminRepository($pdo);
@@ -79,7 +83,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         return in_array($existingRole, ['admin', 'superadmin'], true) || in_array($nextRole, ['admin', 'superadmin'], true);
     };
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($jwt, $users, $events, $registrations, $results, $series, $pages, $partners, $admin, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $isSuperAdmin, $touchesAdminAccount): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($jwt, $users, $events, $registrations, $results, $series, $shop, $challenges, $pages, $partners, $admin, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $isSuperAdmin, $touchesAdminAccount): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/auth/login', function (Request $request, Response $response) use ($users, $jwt, $body) {
@@ -374,12 +378,106 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->post('/events/{eventId}/result-documents', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->createDocument($args['eventId'], $body($request)), 'Document uploaded', 201))
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
-        $api->get('/series', function (Request $request, Response $response) use ($series, $query) {
-            $page = $series->list($query($request));
+        $api->get('/series', function (Request $request, Response $response) use ($series, $query, $optionalAuth, $isStaffRole) {
+            $filters = $query($request);
+            if (!empty($filters['includeArchived']) && $isStaffRole((string) ($optionalAuth($request)['role'] ?? ''))) {
+                $filters['includeArchived'] = true;
+            } else {
+                unset($filters['includeArchived']);
+            }
+            $page = $series->list($filters);
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
         });
         $api->get('/series/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->findBySlug($args['slug'])));
         $api->get('/series/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->find($args['id'])));
+        $api->post('/series', fn (Request $request, Response $response) => JsonResponder::ok($response, $series->create($body($request), (array) $request->getAttribute('auth')), 'Series created', 201))
+            ->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->patch('/series/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->update($args['id'], $body($request))))
+            ->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->post('/series/{id}/archive', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->archive($args['id']), 'Series archived'))
+            ->add(new AuthMiddleware($jwt, $staffRoles));
+
+        $api->get('/shop/categories', function (Request $request, Response $response) use ($shop, $optionalAuth, $isStaffRole) {
+            $filters = $request->getQueryParams();
+            $includeArchived = !empty($filters['includeArchived']) && $isStaffRole((string) ($optionalAuth($request)['role'] ?? ''));
+            return JsonResponder::ok($response, $shop->categories($includeArchived));
+        });
+        $api->post('/shop/categories', fn (Request $request, Response $response) => JsonResponder::ok($response, $shop->createCategory($body($request)), 'Category created', 201))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->patch('/shop/categories/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->updateCategory($args['id'], $body($request))))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->delete('/shop/categories/{id}', function (Request $request, Response $response, array $args) use ($shop) {
+            $shop->archiveCategory($args['id']);
+            return JsonResponder::ok($response, null);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+
+        $api->get('/shop/delivery-methods', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
+            ['id' => 'courier', 'name' => 'Kurier', 'price' => 15.99, 'estimatedDays' => '1-2 dni'],
+            ['id' => 'pickup', 'name' => 'Odbior osobisty', 'price' => 0, 'estimatedDays' => 'w dniu zawodow'],
+        ]));
+        $api->get('/shop/payment-methods', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
+            ['id' => 'card', 'name' => 'Karta platnicza'],
+            ['id' => 'blik', 'name' => 'BLIK'],
+            ['id' => 'bank', 'name' => 'Przelew bankowy'],
+        ]));
+
+        $api->get('/shop/products', function (Request $request, Response $response) use ($shop, $query, $optionalAuth, $isStaffRole) {
+            $filters = $query($request);
+            if (!empty($filters['includeArchived']) && $isStaffRole((string) ($optionalAuth($request)['role'] ?? ''))) {
+                $filters['includeArchived'] = true;
+            } else {
+                unset($filters['includeArchived']);
+            }
+            $page = $shop->products($filters);
+            return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
+        });
+        $api->get('/shop/products/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->findProductBySlug($args['slug'])));
+        $api->get('/shop/products/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->findProduct($args['id'])));
+        $api->post('/shop/products', fn (Request $request, Response $response) => JsonResponder::ok($response, $shop->createProduct($body($request)), 'Product created', 201))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->patch('/shop/products/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->updateProduct($args['id'], $body($request))))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->delete('/shop/products/{id}', function (Request $request, Response $response, array $args) use ($shop) {
+            $shop->archiveProduct($args['id']);
+            return JsonResponder::ok($response, null);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+
+        $api->get('/challenges', function (Request $request, Response $response) use ($challenges, $query, $optionalAuth, $isStaffRole) {
+            $filters = $query($request);
+            if (!empty($filters['includeArchived']) && $isStaffRole((string) ($optionalAuth($request)['role'] ?? ''))) {
+                $filters['includeArchived'] = true;
+            } else {
+                unset($filters['includeArchived']);
+            }
+            return JsonResponder::ok($response, $challenges->list($filters));
+        });
+        $api->get('/challenges/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->findBySlug($args['slug'])));
+        $api->get('/challenges/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->find($args['id'])));
+        $api->post('/challenges', function (Request $request, Response $response) use ($challenges, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            return JsonResponder::ok($response, $challenges->create($body($request), (string) ($auth['sub'] ?? '')), 'Challenge created', 201);
+        })->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->patch('/challenges/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->update($args['id'], $body($request))))
+            ->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->post('/challenges/{id}/archive', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->archive($args['id']), 'Challenge archived'))
+            ->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->get('/challenge-participations', fn (Request $request, Response $response) => JsonResponder::ok($response, $challenges->participations($request->getQueryParams()['challengeId'] ?? null, $request->getQueryParams()['userId'] ?? null)))
+            ->add(new AuthMiddleware($jwt));
+        $api->post('/challenges/{id}/join', function (Request $request, Response $response, array $args) use ($challenges, $users) {
+            $auth = (array) $request->getAttribute('auth');
+            $user = $users->find((string) ($auth['sub'] ?? ''));
+            if (!$user) {
+                return JsonResponder::error($response, 'not_found', 'User not found', 404);
+            }
+            return JsonResponder::ok($response, $challenges->join($args['id'], $user), 'Challenge joined', 201);
+        })->add(new AuthMiddleware($jwt));
+        $api->post('/challenge-entries', fn (Request $request, Response $response) => JsonResponder::ok($response, $challenges->submitEntry($body($request), (array) $request->getAttribute('auth')), 'Challenge entry submitted', 201))
+            ->add(new AuthMiddleware($jwt));
+        $api->patch('/challenge-entries/{id}/review', function (Request $request, Response $response, array $args) use ($challenges, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $payload = $body($request);
+            return JsonResponder::ok($response, $challenges->reviewEntry($args['id'], (string) ($payload['status'] ?? 'pending'), $payload['reason'] ?? null, (string) ($auth['sub'] ?? '')));
+        })->add(new AuthMiddleware($jwt, $staffRoles));
 
         $api->get('/info-pages', fn (Request $request, Response $response) => JsonResponder::ok($response, $pages->list()));
         $api->get('/info-pages/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $pages->findBySlug($args['slug'])));

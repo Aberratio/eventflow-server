@@ -16,6 +16,14 @@ TRUNCATE TABLE event_discount_codes;
 TRUNCATE TABLE event_merchandise;
 TRUNCATE TABLE event_payment_methods;
 TRUNCATE TABLE event_distances;
+TRUNCATE TABLE challenge_entries;
+TRUNCATE TABLE challenge_participations;
+TRUNCATE TABLE challenge_products;
+TRUNCATE TABLE challenge_events;
+TRUNCATE TABLE challenges;
+TRUNCATE TABLE series_products;
+TRUNCATE TABLE shop_products;
+TRUNCATE TABLE shop_categories;
 TRUNCATE TABLE series_events;
 TRUNCATE TABLE organizer_event_credit_usages;
 TRUNCATE TABLE organizer_event_credit_batches;
@@ -75,6 +83,53 @@ INSERT INTO series_events (series_id, event_id, sort_order) VALUES
 ('s-city-running', 'e-lodz-live', 1),
 ('s-city-running', 'e-gdynia-half', 2),
 ('s-tri-masters', 'e-mazury-tri', 0);
+
+INSERT INTO shop_categories (id, name, sort_order, status) VALUES
+('apparel', 'Odziez', 0, 'active'),
+('accessories', 'Akcesoria', 1, 'active'),
+('nutrition', 'Odzywianie', 2, 'active'),
+('services', 'Uslugi', 3, 'active'),
+('rewards', 'Nagrody', 4, 'active');
+
+INSERT INTO shop_products (id, name, slug, description, price, original_price, category, brand, sizes, colors, image_url, images, in_stock, stock_count, rating, review_count, featured, is_service, service_details, validity_days, visible_to_roles, service_kind, status) VALUES
+('prod-korona-medal', 'Medal Korony Polmaratonow', 'medal-korony-polmaratonow', 'Ekskluzywny medal z grawerem dla uczestnikow wyzwania.', 45.00, NULL, 'rewards', 'ZmierzymyCzas', JSON_ARRAY(), JSON_ARRAY(JSON_OBJECT('id','gold','name','Zloty','hex','#D4AF37')), 'https://images.unsplash.com/photo-1567427017947-545c5f8d16ad?w=800', JSON_ARRAY(), 1, 500, 4.90, 24, 1, 0, NULL, NULL, JSON_ARRAY('participant'), NULL, 'active'),
+('prod-korona-dyplom', 'Dyplom Korony PDF', 'dyplom-korony-pdf', 'Darmowy dyplom PDF z lista ukonczonych wydarzen.', 0.00, NULL, 'rewards', 'ZmierzymyCzas', JSON_ARRAY(), JSON_ARRAY(), 'https://images.unsplash.com/photo-1450101499163-c8848c66ca85?w=800', JSON_ARRAY(), 1, NULL, 5.00, 12, 0, 1, 'Generowany po ukonczeniu wyzwania.', NULL, JSON_ARRAY('participant'), NULL, 'active'),
+('prod-5dych-shirt', 'Koszulka 5 Dych', 'koszulka-5-dych', 'Techniczna koszulka dla finalistow wyzwania 5 Dych.', 35.00, NULL, 'apparel', 'ZmierzymyCzas', JSON_ARRAY('S','M','L','XL'), JSON_ARRAY(JSON_OBJECT('id','black','name','Czarny','hex','#111111')), 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=800', JSON_ARRAY(), 1, 200, 4.70, 31, 1, 0, NULL, NULL, JSON_ARRAY('participant'), NULL, 'active'),
+('prod-city-pack', 'Pakiet City Running Tour', 'pakiet-city-running-tour', 'Pakiet gadzetow dla uczestnikow serii miejskiej.', 79.00, 99.00, 'accessories', 'RunPoland', JSON_ARRAY(), JSON_ARRAY(), 'https://images.unsplash.com/photo-1506629905607-d9c297d3a5a4?w=800', JSON_ARRAY(), 1, 150, 4.60, 18, 1, 0, NULL, NULL, JSON_ARRAY('participant'), NULL, 'active'),
+('prod-organizer-license', 'Pakiet organizatora START', 'pakiet-organizatora-start', 'Aktywacja dodatkowych slotow wydarzen dla organizatora.', 499.00, NULL, 'services', 'ZmierzymyCzas', JSON_ARRAY(), JSON_ARRAY(), 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800', JSON_ARRAY(), 1, NULL, NULL, NULL, 0, 1, 'Pakiet aktywowany po oplaceniu zamowienia.', 365, JSON_ARRAY('organizer','admin','superadmin'), 'organizer_license', 'active');
+
+INSERT INTO series_products (series_id, product_id, purpose, sort_order) VALUES
+('s-city-running', 'prod-city-pack', 'reward', 0),
+('s-road-cup', 'prod-organizer-license', 'addon', 0);
+
+INSERT INTO challenges (id, name, slug, description, image_url, series_id, min_completed, max_time, start_date, end_date, status, created_by) VALUES
+('ch-korona-half', 'Korona Polmaratonow 2026', 'korona-polmaratonow-2026', 'Ukoncz wybrane polmaratony z kalendarza i zdobadz medal oraz dyplom.', 'https://images.unsplash.com/photo-1552674605-db6ffd4facb5?w=1200', 's-city-running', 2, NULL, '2026-01-01', '2026-12-31', 'active', 'u-admin'),
+('ch-5-dych', 'Wyzwanie 5 Dych', 'wyzwanie-5-dych', 'Ukoncz biegi na krotszych dystansach i odbierz okolicznosciowa koszulke.', 'https://images.unsplash.com/photo-1461896836934-bd45ba20b2a7?w=1200', 's-city-running', 2, '01:15:00', '2026-03-01', '2026-12-31', 'active', 'u-admin');
+
+INSERT INTO challenge_events (challenge_id, event_id, sort_order) VALUES
+('ch-korona-half', 'e-gdynia-half', 0),
+('ch-korona-half', 'e-lodz-live', 1),
+('ch-korona-half', 'e-poznan-five', 2),
+('ch-5-dych', 'e-warsaw-10k', 0),
+('ch-5-dych', 'e-poznan-five', 1),
+('ch-5-dych', 'e-wroclaw-night', 2);
+
+INSERT INTO challenge_products (challenge_id, product_id, purpose, sort_order) VALUES
+('ch-korona-half', 'prod-korona-medal', 'reward', 0),
+('ch-korona-half', 'prod-korona-dyplom', 'reward', 1),
+('ch-5-dych', 'prod-5dych-shirt', 'reward', 0);
+
+INSERT INTO challenge_participations (id, challenge_id, user_id, user_name, joined_at, reward_granted, reward_granted_at, selected_rewards, assigned_number) VALUES
+('cp-jan-korona', 'ch-korona-half', 'u-participant', 'Jan Kowalski', '2026-02-01T10:00:00+01:00', 0, NULL, JSON_ARRAY(JSON_OBJECT('rewardId','prod-korona-medal')), 42),
+('cp-anna-korona', 'ch-korona-half', 'u-anna', 'Anna Zielinska', '2026-02-05T10:00:00+01:00', 1, '2026-04-13T12:00:00+02:00', JSON_ARRAY(JSON_OBJECT('rewardId','prod-korona-dyplom')), 43),
+('cp-jan-5dych', 'ch-5-dych', 'u-participant', 'Jan Kowalski', '2026-03-15T10:00:00+01:00', 0, NULL, JSON_ARRAY(JSON_OBJECT('rewardId','prod-5dych-shirt','size','M')), NULL);
+
+INSERT INTO challenge_entries (id, challenge_id, user_id, event_id, status, submitted_time, submitted_position, proof_url, submitted_at, reviewed_at, reviewed_by, rejection_reason, source) VALUES
+('ce-jan-korona-poznan', 'ch-korona-half', 'u-participant', 'e-poznan-five', 'approved', '00:19:48', 3, NULL, '2026-04-12T14:00:00+02:00', '2026-04-12T14:00:00+02:00', 'system', NULL, 'result'),
+('ce-anna-korona-poznan', 'ch-korona-half', 'u-anna', 'e-poznan-five', 'approved', '00:21:05', 7, NULL, '2026-04-12T14:00:00+02:00', '2026-04-12T14:00:00+02:00', 'system', NULL, 'result'),
+('ce-anna-korona-lodz', 'ch-korona-half', 'u-anna', 'e-lodz-live', 'approved', '00:32:18', 8, NULL, '2026-05-02T14:00:00+02:00', '2026-05-02T14:00:00+02:00', 'system', NULL, 'result'),
+('ce-jan-5dych-warsaw', 'ch-5-dych', 'u-participant', 'e-warsaw-10k', 'approved', '00:44:12', 1, NULL, '2026-06-14T14:00:00+02:00', '2026-06-14T14:00:00+02:00', 'system', NULL, 'result'),
+('ce-jan-5dych-manual', 'ch-5-dych', 'u-participant', 'e-wroclaw-night', 'pending', '00:43:30', 10, 'https://wyniki.example.com/nocny-bieg-wroclaw/101', '2026-03-22T10:00:00+01:00', NULL, NULL, NULL, 'manual');
 
 INSERT INTO event_distances (id, event_id, name, length, unit, categories, participant_limit, registered_count, price, price_tier_mode, participant_count_type, price_tiers, sort_order)
 VALUES

@@ -9,6 +9,7 @@ use ZmierzymyCzas\Domain\Repository;
 final class SeriesRepository extends Repository
 {
     private const COLUMNS = 'id, name, slug, type, description, organizer_id AS organizerId, organizer_name AS organizerName, rules, start_date AS startDate, end_date AS endDate, status';
+    private const STATUSES = ['active', 'completed', 'upcoming', 'archived'];
 
     /**
      * @param array<string, mixed> $filters
@@ -23,6 +24,9 @@ final class SeriesRepository extends Repository
                 $where[] = "{$column} = :{$input}";
                 $params[$input] = $filters[$input];
             }
+        }
+        if (empty($filters['includeArchived'])) {
+            $where[] = "status <> 'archived'";
         }
         if (!empty($filters['search'])) {
             $where[] = 'name LIKE :search';
@@ -61,10 +65,54 @@ final class SeriesRepository extends Repository
 
     public function findBySlug(string $slug): ?array
     {
-        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM series WHERE slug = :slug');
+        $stmt = $this->pdo->prepare("SELECT " . self::COLUMNS . " FROM series WHERE slug = :slug AND status <> 'archived'");
         $stmt->execute(['slug' => $slug]);
         $row = $stmt->fetch();
         return $row ? $this->hydrate($row) : null;
+    }
+
+    /** @param array<string, mixed> $data */
+    public function create(array $data, array $actor): array
+    {
+        $id = $this->id();
+        $payload = $this->data($id, $data, $actor, true);
+        $this->pdo->beginTransaction();
+        try {
+            $this->insert('series', $payload);
+            $this->replaceEvents($id, $data['eventIds'] ?? []);
+            $this->replaceProducts($id, $data['products'] ?? []);
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+        return $this->find($id);
+    }
+
+    /** @param array<string, mixed> $data */
+    public function update(string $id, array $data): ?array
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $this->updateById('series', $id, $this->data($id, $data, [], false));
+            if (array_key_exists('eventIds', $data)) {
+                $this->replaceEvents($id, $data['eventIds'] ?? []);
+            }
+            if (array_key_exists('products', $data)) {
+                $this->replaceProducts($id, $data['products'] ?? []);
+            }
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+        return $this->find($id);
+    }
+
+    public function archive(string $id): ?array
+    {
+        $this->updateById('series', $id, ['status' => 'archived']);
+        return $this->find($id);
     }
 
     /** @param array<string, mixed> $row */
@@ -73,6 +121,82 @@ final class SeriesRepository extends Repository
         $stmt = $this->pdo->prepare('SELECT event_id FROM series_events WHERE series_id = :id ORDER BY sort_order ASC');
         $stmt->execute(['id' => $row['id']]);
         $row['eventIds'] = array_column($stmt->fetchAll(), 'event_id');
+        $products = $this->pdo->prepare('SELECT product_id AS productId, purpose, sort_order AS sortOrder FROM series_products WHERE series_id = :id ORDER BY sort_order ASC');
+        $products->execute(['id' => $row['id']]);
+        $row['products'] = array_map(static fn (array $product): array => [
+            'productId' => $product['productId'],
+            'purpose' => $product['purpose'],
+            'sortOrder' => (int) $product['sortOrder'],
+        ], $products->fetchAll());
         return $row;
+    }
+
+    /** @param array<string, mixed> $data */
+    private function data(string $id, array $data, array $actor, bool $creating): array
+    {
+        $out = $creating ? [
+            'id' => $id,
+            'organizer_id' => (string) ($data['organizerId'] ?? $actor['sub'] ?? ''),
+            'organizer_name' => (string) ($data['organizerName'] ?? $actor['email'] ?? 'ZmierzymyCzas'),
+            'status' => 'upcoming',
+        ] : [];
+
+        foreach ([
+            'name' => 'name',
+            'slug' => 'slug',
+            'type' => 'type',
+            'description' => 'description',
+            'organizerId' => 'organizer_id',
+            'organizerName' => 'organizer_name',
+            'rules' => 'rules',
+            'startDate' => 'start_date',
+            'endDate' => 'end_date',
+            'status' => 'status',
+        ] as $input => $column) {
+            if (array_key_exists($input, $data)) {
+                $out[$column] = $input === 'status' ? $this->status((string) $data[$input]) : $data[$input];
+            }
+        }
+        return $out;
+    }
+
+    /** @param array<int, string> $eventIds */
+    private function replaceEvents(string $seriesId, array $eventIds): void
+    {
+        $this->pdo->prepare('DELETE FROM series_events WHERE series_id = :id')->execute(['id' => $seriesId]);
+        foreach (array_values($eventIds) as $index => $eventId) {
+            $this->insert('series_events', [
+                'series_id' => $seriesId,
+                'event_id' => (string) $eventId,
+                'sort_order' => $index,
+            ]);
+            $this->pdo->prepare('UPDATE events SET series_id = :seriesId WHERE id = :eventId')->execute([
+                'seriesId' => $seriesId,
+                'eventId' => (string) $eventId,
+            ]);
+        }
+    }
+
+    /** @param array<int, array<string, mixed>> $products */
+    private function replaceProducts(string $seriesId, array $products): void
+    {
+        $this->pdo->prepare('DELETE FROM series_products WHERE series_id = :id')->execute(['id' => $seriesId]);
+        foreach (array_values($products) as $index => $product) {
+            $productId = (string) ($product['productId'] ?? '');
+            if ($productId === '') {
+                continue;
+            }
+            $this->insert('series_products', [
+                'series_id' => $seriesId,
+                'product_id' => $productId,
+                'purpose' => in_array(($product['purpose'] ?? 'reward'), ['reward', 'addon'], true) ? $product['purpose'] : 'reward',
+                'sort_order' => (int) ($product['sortOrder'] ?? $index),
+            ]);
+        }
+    }
+
+    private function status(string $status): string
+    {
+        return in_array($status, self::STATUSES, true) ? $status : 'upcoming';
     }
 }

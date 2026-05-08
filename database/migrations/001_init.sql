@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS series (
   INDEX idx_series_organizer (organizer_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+ALTER TABLE series
+  MODIFY status ENUM('active','completed','upcoming','archived') NOT NULL DEFAULT 'upcoming';
+
 CREATE TABLE IF NOT EXISTS events (
   id VARCHAR(36) PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
@@ -164,6 +167,128 @@ CREATE TABLE IF NOT EXISTS series_events (
   PRIMARY KEY (series_id, event_id),
   INDEX idx_series_events_series (series_id),
   INDEX idx_series_events_event (event_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS shop_categories (
+  id VARCHAR(80) PRIMARY KEY,
+  name VARCHAR(180) NOT NULL,
+  sort_order INT NOT NULL DEFAULT 99,
+  status ENUM('active','archived') NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS shop_products (
+  id VARCHAR(36) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  slug VARCHAR(255) NOT NULL UNIQUE,
+  description TEXT NOT NULL,
+  price DECIMAL(10,2) NOT NULL DEFAULT 0,
+  original_price DECIMAL(10,2) NULL,
+  category VARCHAR(80) NOT NULL,
+  brand VARCHAR(180) NOT NULL,
+  sizes JSON NULL,
+  colors JSON NULL,
+  image_url VARCHAR(512) NOT NULL,
+  images JSON NULL,
+  in_stock TINYINT(1) NOT NULL DEFAULT 1,
+  stock_count INT NULL,
+  rating DECIMAL(3,2) NULL,
+  review_count INT NULL,
+  featured TINYINT(1) NOT NULL DEFAULT 0,
+  is_service TINYINT(1) NOT NULL DEFAULT 0,
+  service_details TEXT NULL,
+  validity_days INT NULL,
+  visible_to_roles JSON NULL,
+  service_kind VARCHAR(80) NULL,
+  status ENUM('active','archived') NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_shop_products_category (category),
+  INDEX idx_shop_products_status (status, in_stock)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS series_products (
+  series_id VARCHAR(36) NOT NULL,
+  product_id VARCHAR(36) NOT NULL,
+  purpose ENUM('reward','addon') NOT NULL DEFAULT 'reward',
+  sort_order INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (series_id, product_id),
+  INDEX idx_series_products_series (series_id),
+  INDEX idx_series_products_product (product_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS challenges (
+  id VARCHAR(36) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  slug VARCHAR(255) NOT NULL UNIQUE,
+  description TEXT NOT NULL,
+  image_url VARCHAR(512) NULL,
+  series_id VARCHAR(36) NULL,
+  min_completed INT NOT NULL DEFAULT 1,
+  max_time VARCHAR(32) NULL,
+  start_date VARCHAR(64) NULL,
+  end_date VARCHAR(64) NULL,
+  status ENUM('active','completed','upcoming','archived') NOT NULL DEFAULT 'upcoming',
+  created_by VARCHAR(36) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_challenges_status (status),
+  INDEX idx_challenges_series (series_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS challenge_events (
+  challenge_id VARCHAR(36) NOT NULL,
+  event_id VARCHAR(36) NOT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (challenge_id, event_id),
+  INDEX idx_challenge_events_challenge (challenge_id),
+  INDEX idx_challenge_events_event (event_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS challenge_products (
+  challenge_id VARCHAR(36) NOT NULL,
+  product_id VARCHAR(36) NOT NULL,
+  purpose ENUM('reward','addon') NOT NULL DEFAULT 'reward',
+  sort_order INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (challenge_id, product_id),
+  INDEX idx_challenge_products_challenge (challenge_id),
+  INDEX idx_challenge_products_product (product_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS challenge_participations (
+  id VARCHAR(36) PRIMARY KEY,
+  challenge_id VARCHAR(36) NOT NULL,
+  user_id VARCHAR(36) NOT NULL,
+  user_name VARCHAR(180) NOT NULL,
+  joined_at VARCHAR(64) NOT NULL,
+  reward_granted TINYINT(1) NOT NULL DEFAULT 0,
+  reward_granted_at VARCHAR(64) NULL,
+  selected_rewards JSON NULL,
+  assigned_number INT NULL,
+  UNIQUE KEY uniq_challenge_participant (challenge_id, user_id),
+  INDEX idx_challenge_participations_challenge (challenge_id),
+  INDEX idx_challenge_participations_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS challenge_entries (
+  id VARCHAR(36) PRIMARY KEY,
+  challenge_id VARCHAR(36) NOT NULL,
+  user_id VARCHAR(36) NOT NULL,
+  event_id VARCHAR(36) NOT NULL,
+  status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  submitted_time VARCHAR(32) NULL,
+  submitted_position INT NULL,
+  proof_url VARCHAR(512) NULL,
+  submitted_at VARCHAR(64) NULL,
+  reviewed_at VARCHAR(64) NULL,
+  reviewed_by VARCHAR(36) NULL,
+  rejection_reason TEXT NULL,
+  source ENUM('manual','result') NOT NULL DEFAULT 'manual',
+  UNIQUE KEY uniq_challenge_entry_event (challenge_id, user_id, event_id),
+  INDEX idx_challenge_entries_challenge (challenge_id),
+  INDEX idx_challenge_entries_user (user_id),
+  INDEX idx_challenge_entries_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS event_distances (

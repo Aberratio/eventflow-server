@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Repository;
 final class EventRepository extends Repository
 {
     private const CREDIT_KINDS = ['standard', 'virtual', 'timing'];
-    private const EVENT_STATUSES = ['draft', 'active', 'past', 'archived', 'deleted'];
+    private const EVENT_STATUSES = ['draft', 'awaiting_approval', 'approved', 'active', 'past', 'archived', 'deleted'];
 
     private const EVENT_COLUMNS = <<<'SQL'
 id, name, slug, discipline, date, location, city, description, image_url AS imageUrl,
@@ -84,8 +84,11 @@ SQL;
             $params['dateTo'] = $filters['dateTo'];
         }
         if (!empty($filters['search'])) {
-            $where[] = '(name LIKE :search OR city LIKE :search OR location LIKE :search)';
-            $params['search'] = '%' . $filters['search'] . '%';
+            $where[] = '(name LIKE :searchName OR city LIKE :searchCity OR location LIKE :searchLocation)';
+            $search = '%' . $filters['search'] . '%';
+            $params['searchName'] = $search;
+            $params['searchCity'] = $search;
+            $params['searchLocation'] = $search;
         }
 
         $whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';
@@ -222,7 +225,13 @@ SQL;
 
     public function updateStatus(string $id, string $status, ?string $reason): ?array
     {
+        $event = $this->find($id);
+        if (!$event || $event['status'] === 'deleted') {
+            return null;
+        }
+
         $status = $this->normalizeStatus($status);
+        $this->assertStatusTransition($event, $status);
         $this->updateById('events', $id, [
             'status' => $status,
             'rejection_reason' => $reason,
@@ -236,17 +245,25 @@ SQL;
         if (!$event || $event['status'] === 'deleted') {
             return null;
         }
-        return $this->updateStatus($id, 'active', null);
+        if ((string) $event['status'] !== 'draft') {
+            return null;
+        }
+        $this->updateById('events', $id, [
+            'status' => 'awaiting_approval',
+            'rejection_reason' => null,
+            'submitted_at' => date(DATE_ATOM),
+        ]);
+        return $this->find($id);
     }
 
     public function approve(string $id, string $actorId): ?array
     {
         $event = $this->find($id);
-        if (!$event || $event['status'] === 'deleted') {
+        if (!$event || $event['status'] !== 'awaiting_approval') {
             return null;
         }
         $this->updateById('events', $id, [
-            'status' => 'active',
+            'status' => 'approved',
             'rejection_reason' => null,
             'approved_at' => date(DATE_ATOM),
             'approved_by' => $actorId,
@@ -257,7 +274,7 @@ SQL;
     public function reject(string $id, string $reason): ?array
     {
         $event = $this->find($id);
-        if (!$event || $event['status'] === 'deleted') {
+        if (!$event || $event['status'] !== 'awaiting_approval') {
             return null;
         }
         $this->updateById('events', $id, [
@@ -270,7 +287,7 @@ SQL;
     public function publish(string $id, string $actorId): ?array
     {
         $event = $this->find($id);
-        if (!$event || $event['status'] === 'deleted') {
+        if (!$event || $event['status'] !== 'approved') {
             return null;
         }
         $this->updateById('events', $id, [
@@ -504,9 +521,25 @@ SQL;
             'published' => 'active',
             'completed' => 'past',
             'cancelled' => 'archived',
-            'awaiting_approval', 'approved', 'rejected' => 'draft',
+            'rejected' => 'draft',
             default => in_array($status, self::EVENT_STATUSES, true) ? $status : 'draft',
         };
+    }
+
+    /** @param array<string, mixed> $event */
+    private function assertStatusTransition(array $event, string $status): void
+    {
+        if ($status === 'archived' && !$this->hasEventEnded($event)) {
+            throw new \RuntimeException('event_archive_before_start');
+        }
+
+        if ($status === (string) ($event['status'] ?? '')) {
+            return;
+        }
+
+        if (!in_array($status, ['draft', 'past', 'archived'], true)) {
+            throw new \RuntimeException('invalid_status_transition');
+        }
     }
 
     private function activeEventCount(string $organizerId): int
@@ -514,6 +547,34 @@ SQL;
         $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM events WHERE organizer_id = :organizerId AND status <> 'deleted'");
         $stmt->execute(['organizerId' => $organizerId]);
         return (int) $stmt->fetchColumn();
+    }
+
+    /** @param array<string, mixed> $event */
+    public function canDeleteBeforeRegistrationOpened(array $event): bool
+    {
+        if (in_array((string) ($event['status'] ?? ''), ['past', 'archived', 'deleted'], true)) {
+            return false;
+        }
+
+        $eventDate = (string) ($event['date'] ?? '');
+        if ($eventDate !== '' && substr($eventDate, 0, 10) < date('Y-m-d')) {
+            return false;
+        }
+
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM registrations WHERE event_id = :eventId AND status <> 'removed'");
+        $stmt->execute(['eventId' => $event['id']]);
+        return (int) $stmt->fetchColumn() === 0;
+    }
+
+    /** @param array<string, mixed> $event */
+    private function hasEventEnded(array $event): bool
+    {
+        $endDate = (string) (($event['endDate'] ?? '') ?: ($event['date'] ?? ''));
+        if ($endDate === '') {
+            return false;
+        }
+
+        return substr($endDate, 0, 10) < date('Y-m-d');
     }
 
     private function assertOrganizerHasCapacity(string $organizerId): void

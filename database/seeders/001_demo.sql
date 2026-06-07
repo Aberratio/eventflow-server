@@ -33,16 +33,16 @@ TRUNCATE TABLE users;
 SET FOREIGN_KEY_CHECKS=1;
 
 INSERT INTO users (id, name, email, password_hash, role, phone, birth_year, gender, club, company_name, status, event_limit) VALUES
-('u-participant', 'Jan Kowalski', 'jan@example.com', '$2y$10$9ehvIKKs3R7u/e7MNgKSke0as34eKIOtgjlmFe5CL9TEM/qElnVyW', 'participant', '500100200', 1990, 'M', 'Biegacze Warszawy', NULL, 'active', 0),
-('u-anna', 'Anna Zielinska', 'anna@example.com', '$2y$10$9ehvIKKs3R7u/e7MNgKSke0as34eKIOtgjlmFe5CL9TEM/qElnVyW', 'participant', '501101202', 1994, 'K', 'Run Club Lodz', NULL, 'active', 0),
-('u-piotr', 'Piotr Wisniewski', 'piotr@example.com', '$2y$10$9ehvIKKs3R7u/e7MNgKSke0as34eKIOtgjlmFe5CL9TEM/qElnVyW', 'participant', '502202303', 1986, 'M', 'Tri Team Gdansk', NULL, 'active', 0),
-('u-kasia', 'Katarzyna Wozniak', 'kasia@example.com', '$2y$10$9ehvIKKs3R7u/e7MNgKSke0as34eKIOtgjlmFe5CL9TEM/qElnVyW', 'participant', '503303404', 1998, 'K', 'Rowerowy Krakow', NULL, 'active', 0),
-('u-organizer', 'Marek Nowak', 'marek@timing.pl', '$2y$10$9ehvIKKs3R7u/e7MNgKSke0as34eKIOtgjlmFe5CL9TEM/qElnVyW', 'organizer', '500200300', NULL, NULL, NULL, 'Timing Pro', 'active', 11),
-('u-organizer-2', 'Ewa Mazur', 'ewa@runpoland.pl', '$2y$10$9ehvIKKs3R7u/e7MNgKSke0as34eKIOtgjlmFe5CL9TEM/qElnVyW', 'organizer', '504404505', NULL, NULL, NULL, 'RunPoland', 'active', 11),
-('u-organizer-3', 'Tomasz Lewandowski', 'tomasz@sportevents.pl', '$2y$10$9ehvIKKs3R7u/e7MNgKSke0as34eKIOtgjlmFe5CL9TEM/qElnVyW', 'organizer', '505505606', NULL, NULL, NULL, 'Sportowe Wydarzenia', 'active', 11),
-('u-moderator', 'Monika Zielinska', 'monika@zmierzymyczas.pl', '$2y$10$9ehvIKKs3R7u/e7MNgKSke0as34eKIOtgjlmFe5CL9TEM/qElnVyW', 'moderator', NULL, NULL, NULL, NULL, NULL, 'active', 0),
-('u-admin', 'Admin ZmierzymyCzas', 'admin@zmierzymyczas.pl', '$2y$10$9ehvIKKs3R7u/e7MNgKSke0as34eKIOtgjlmFe5CL9TEM/qElnVyW', 'admin', NULL, NULL, NULL, NULL, NULL, 'active', 0),
-('u-superadmin', 'Superadmin ZmierzymyCzas', 'superadmin@zmierzymyczas.pl', '$2y$10$9ehvIKKs3R7u/e7MNgKSke0as34eKIOtgjlmFe5CL9TEM/qElnVyW', 'superadmin', NULL, NULL, NULL, NULL, NULL, 'active', 0);
+('u-participant', 'Jan Kowalski', 'jan@example.com', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'participant', '500100200', 1990, 'M', 'Biegacze Warszawy', NULL, 'active', 0),
+('u-anna', 'Anna Zielinska', 'anna@example.com', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'participant', '501101202', 1994, 'K', 'Run Club Lodz', NULL, 'active', 0),
+('u-piotr', 'Piotr Wisniewski', 'piotr@example.com', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'participant', '502202303', 1986, 'M', 'Tri Team Gdansk', NULL, 'active', 0),
+('u-kasia', 'Katarzyna Wozniak', 'kasia@example.com', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'participant', '503303404', 1998, 'K', 'Rowerowy Krakow', NULL, 'active', 0),
+('u-organizer', 'Marek Nowak', 'marek@timing.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'organizer', '500200300', NULL, NULL, NULL, 'Timing Pro', 'active', 11),
+('u-organizer-2', 'Ewa Mazur', 'ewa@runpoland.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'organizer', '504404505', NULL, NULL, NULL, 'RunPoland', 'active', 11),
+('u-organizer-3', 'Tomasz Lewandowski', 'tomasz@sportevents.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'organizer', '505505606', NULL, NULL, NULL, 'Sportowe Wydarzenia', 'active', 11),
+('u-moderator', 'Monika Zielinska', 'monika@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'moderator', NULL, NULL, NULL, NULL, NULL, 'active', 0),
+('u-admin', 'Admin ZmierzymyCzas', 'admin@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'admin', NULL, NULL, NULL, NULL, NULL, 'active', 0),
+('u-superadmin', 'Superadmin ZmierzymyCzas', 'superadmin@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'superadmin', NULL, NULL, NULL, NULL, NULL, 'active', 0);
 
 INSERT INTO organizer_event_credit_batches (id, organizer_id, event_credit_kind, total_count, used_count, source_type, source_id, created_at, expires_at) VALUES
 ('credit-u-organizer-standard-demo', 'u-organizer', 'standard', 8, 0, 'demo_seed', NULL, '2026-01-01T00:00:00+00:00', NULL),

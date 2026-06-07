@@ -61,7 +61,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         }
         $role = (string) ($auth['role'] ?? '');
         $userId = (string) ($auth['sub'] ?? '');
-        if (($event['status'] ?? '') === 'deleted' && !$isStaffRole($role)) {
+        if (($event['status'] ?? '') === 'deleted' && $role !== 'superadmin') {
             return false;
         }
         return $isStaffRole($role) || ($role === 'organizer' && $userId !== '' && $event['organizerId'] === $userId);
@@ -72,7 +72,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         }
         $role = (string) ($auth['role'] ?? '');
         $userId = (string) ($auth['sub'] ?? '');
-        if (($event['status'] ?? '') === 'deleted' && !$isStaffRole($role)) {
+        if (($event['status'] ?? '') === 'deleted' && $role !== 'superadmin') {
             return false;
         }
         return $isStaffRole($role) || ($role === 'organizer' && $userId !== '' && $event['organizerId'] === $userId);
@@ -176,10 +176,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->get('/events', function (Request $request, Response $response) use ($events, $query, $optionalAuth, $isStaffRole) {
             $filters = $query($request);
             $auth = $optionalAuth($request);
-            if (!empty($filters['includeUnpublished']) && $isStaffRole((string) ($auth['role'] ?? ''))) {
+            $role = (string) ($auth['role'] ?? '');
+            if (!empty($filters['includeUnpublished']) && $isStaffRole($role)) {
                 $filters['includeUnpublished'] = true;
                 $filters['includePrivate'] = true;
-                $filters['includeDeleted'] = !empty($filters['includeDeleted']);
+                $filters['includeDeleted'] = $role === 'superadmin' && !empty($filters['includeDeleted']);
             } else {
                 unset($filters['includeUnpublished']);
                 unset($filters['includeDeleted']);
@@ -207,6 +208,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $auth = (array) $request->getAttribute('auth');
             $payload = $body($request);
             $role = (string) ($auth['role'] ?? '');
+            if (!$isStaffRole($role)) {
+                unset($payload['featured']);
+            }
             $organizerId = $role === 'organizer' ? (string) ($auth['sub'] ?? '') : (string) ($payload['organizerId'] ?? '');
             $organizer = $users->find($organizerId);
             if (!$organizer || $organizer['role'] !== 'organizer' || ($organizer['status'] ?? 'active') !== 'active') {
@@ -233,7 +237,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $payload = $body($request);
             $role = (string) ($auth['role'] ?? '');
             if ($role === 'organizer') {
-                unset($payload['organizerId'], $payload['organizerName'], $payload['status']);
+                unset($payload['organizerId'], $payload['organizerName'], $payload['status'], $payload['featured']);
+                if (in_array((string) ($event['status'] ?? ''), ['awaiting_approval', 'approved'], true)) {
+                    $payload['status'] = 'draft';
+                    $payload['submittedAt'] = null;
+                    $payload['approvedAt'] = null;
+                    $payload['approvedBy'] = null;
+                }
             } elseif (array_key_exists('organizerId', $payload) && ($payload['organizerId'] ?? '') !== ($event['organizerId'] ?? '')) {
                 if (($event['status'] ?? '') === 'active') {
                     return JsonResponder::error($response, 'published_organizer_locked', 'Published events cannot be transferred to another organizer', 409);
@@ -263,18 +273,35 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
             }
             $role = (string) ($auth['role'] ?? '');
-            if (!$isStaffRole($role) && (($event['status'] ?? '') === 'past' || ((string) ($event['date'] ?? '')) < date('Y-m-d'))) {
-                return JsonResponder::error($response, 'past_event_delete_forbidden', 'Organizer cannot delete events that already took place', 409);
+            if (!$event || !$events->canDeleteBeforeRegistrationOpened($event)) {
+                return JsonResponder::error($response, 'event_delete_forbidden', 'Only upcoming events without registrations can be deleted. Archive past events instead.', 409);
             }
             $events->delete($args['id']);
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->patch('/events/{id}/status', function (Request $request, Response $response, array $args) use ($events, $body, $canManageEvent) {
+        $api->patch('/events/{id}/status', function (Request $request, Response $response, array $args) use ($events, $body, $canManageEvent, $isStaffRole) {
             $auth = (array) $request->getAttribute('auth');
-            if (!$canManageEvent($events->find($args['id']), $auth)) {
+            $event = $events->find($args['id']);
+            if (!$canManageEvent($event, $auth)) {
                 return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
             }
-            return JsonResponder::ok($response, $events->updateStatus($args['id'], (string) ($body($request)['status'] ?? 'draft'), $body($request)['reason'] ?? null));
+            $role = (string) ($auth['role'] ?? '');
+            $status = (string) ($body($request)['status'] ?? 'draft');
+            if (!$isStaffRole($role) && $status !== 'archived') {
+                return JsonResponder::error($response, 'forbidden', 'Organizer cannot manually change event status', 403);
+            }
+            try {
+                $event = $events->updateStatus($args['id'], $status, $body($request)['reason'] ?? null);
+            } catch (RuntimeException $e) {
+                if ($e->getMessage() === 'event_archive_before_start') {
+                    return JsonResponder::error($response, 'event_archive_before_start', 'Only events that already ended can be archived', 409);
+                }
+                if ($e->getMessage() === 'invalid_status_transition') {
+                    return JsonResponder::error($response, 'invalid_status_transition', 'Use submit, approve, reject and publish actions for moderation workflow', 409);
+                }
+                throw $e;
+            }
+            return $event ? JsonResponder::ok($response, $event) : JsonResponder::error($response, 'not_found', 'Event not found', 404);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->post('/events/{id}/submit', function (Request $request, Response $response, array $args) use ($events, $canManageEvent) {
             $auth = (array) $request->getAttribute('auth');
@@ -314,7 +341,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if (!$isStaffRole($role) && (($auth['sub'] ?? '') !== $args['organizerId'])) {
                 return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
             }
-            return JsonResponder::ok($response, $events->byOrganizer($args['organizerId'], $isStaffRole($role)));
+            return JsonResponder::ok($response, $events->byOrganizer($args['organizerId'], $role === 'superadmin'));
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->get('/organizers/{organizerId}/event-limit', function (Request $request, Response $response, array $args) use ($events, $isStaffRole) {
             $auth = (array) $request->getAttribute('auth');
@@ -339,7 +366,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 }
                 throw $e;
             }
-        })->add(new AuthMiddleware($jwt, $staffRoles));
+        })->add(new AuthMiddleware($jwt, $adminRoles));
 
         $api->get('/registrations', function (Request $request, Response $response) use ($registrations, $query) {
             $page = $registrations->list($query($request));

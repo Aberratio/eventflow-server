@@ -62,6 +62,7 @@ Demo users seeded by `composer seed` all use password `demo1234`:
 - `marek@timing.pl` organizer
 - `monika@zmierzymyczas.pl` moderator
 - `admin@zmierzymyczas.pl` admin
+- `superadmin@zmierzymyczas.pl` superadmin
 
 ## Frontend
 

@@ -151,7 +151,7 @@ SET status = CASE status
 END;
 
 ALTER TABLE events
-  MODIFY status ENUM('draft','active','past','archived','deleted') NOT NULL DEFAULT 'draft';
+  MODIFY status ENUM('draft','awaiting_approval','approved','active','past','archived','deleted') NOT NULL DEFAULT 'draft';
 
 UPDATE users u
 SET event_limit = GREATEST(

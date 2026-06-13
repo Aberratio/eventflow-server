@@ -167,7 +167,7 @@ SQL;
      */
     private function pricingForRegistration(array $data): array
     {
-        $stmt = $this->pdo->prepare('SELECT e.name AS eventName, d.name AS distanceName, d.price AS distancePrice FROM events e INNER JOIN event_distances d ON d.event_id = e.id WHERE e.id = :eventId AND d.id = :distanceId');
+        $stmt = $this->pdo->prepare('SELECT e.name AS eventName, d.id AS distanceId, d.name AS distanceName, d.price AS distancePrice, d.registered_count AS registeredCount, d.price_tier_mode AS priceTierMode, d.participant_count_type AS participantCountType, d.price_tiers AS priceTiers FROM events e INNER JOIN event_distances d ON d.event_id = e.id WHERE e.id = :eventId AND d.id = :distanceId');
         $stmt->execute([
             'eventId' => $data['eventId'],
             'distanceId' => $data['distanceId'],
@@ -177,7 +177,7 @@ SQL;
             throw new \RuntimeException('registration_distance_invalid');
         }
 
-        $distancePrice = $this->roundMoney((float) $row['distancePrice']);
+        $distancePrice = $this->currentDistancePrice($row, (string) $data['eventId']);
         $discountCode = trim((string) ($data['discountCode'] ?? ''));
         if ($discountCode === '') {
             return [
@@ -213,6 +213,79 @@ SQL;
                 ? (json_decode((string) $discount['used_by'], true) ?: [])
                 : [],
         ];
+    }
+
+    /** @param array<string, mixed> $distance */
+    private function currentDistancePrice(array $distance, string $eventId): float
+    {
+        $basePrice = $this->roundMoney((float) $distance['distancePrice']);
+        $tiers = $this->decodeTiers($distance['priceTiers'] ?? null);
+        if ($tiers === []) {
+            return $basePrice;
+        }
+
+        $mode = (string) ($distance['priceTierMode'] ?: 'date');
+        if ($mode === 'participants') {
+            $count = ((string) ($distance['participantCountType'] ?? 'registered')) === 'paid'
+                ? $this->paidRegistrationCount($eventId, (string) $distance['distanceId'])
+                : (int) ($distance['registeredCount'] ?? 0);
+
+            usort($tiers, static fn (array $a, array $b): int => ((int) ($a['participantLimit'] ?? 0)) <=> ((int) ($b['participantLimit'] ?? 0)));
+            foreach ($tiers as $tier) {
+                $limit = (int) ($tier['participantLimit'] ?? 0);
+                if ($limit > 0 && $count < $limit) {
+                    return $this->priceForTier($basePrice, $tier);
+                }
+            }
+            return $basePrice;
+        }
+
+        usort($tiers, static fn (array $a, array $b): int => strcmp((string) ($a['endDate'] ?? ''), (string) ($b['endDate'] ?? '')));
+        $today = date('Y-m-d');
+        foreach ($tiers as $tier) {
+            $endDate = (string) ($tier['endDate'] ?? '');
+            if ($endDate !== '' && substr($endDate, 0, 10) >= $today) {
+                return $this->priceForTier($basePrice, $tier);
+            }
+        }
+
+        return $basePrice;
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function decodeTiers(mixed $raw): array
+    {
+        if (!is_string($raw) || trim($raw) === '') {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? array_values(array_filter($decoded, 'is_array')) : [];
+    }
+
+    /** @param array<string, mixed> $tier */
+    private function priceForTier(float $basePrice, array $tier): float
+    {
+        if (array_key_exists('price', $tier) && $tier['price'] !== null && $tier['price'] !== '') {
+            return $this->roundMoney(max(0, (float) $tier['price']));
+        }
+
+        $value = (float) ($tier['discountValue'] ?? 0);
+        if (($tier['discountType'] ?? 'percent') === 'fixed') {
+            return $this->roundMoney(max(0, $basePrice - $value));
+        }
+
+        return $this->roundMoney(max(0, $basePrice * (1 - ($value / 100))));
+    }
+
+    private function paidRegistrationCount(string $eventId, string $distanceId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM registrations r INNER JOIN registration_payment_details pd ON pd.registration_id = r.id WHERE r.event_id = :eventId AND r.distance_id = :distanceId AND r.status <> :removed AND pd.start_fee_paid = 1');
+        $stmt->execute([
+            'eventId' => $eventId,
+            'distanceId' => $distanceId,
+            'removed' => 'removed',
+        ]);
+        return (int) $stmt->fetchColumn();
     }
 
     /** @return array<string, mixed> */

@@ -376,7 +376,10 @@ SQL;
         foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate'] as $bool) {
             $event[$bool] = (bool) ($event[$bool] ?? false);
         }
-        $event['distances'] = $this->children('event_distances', 'event_id', $event['id'], self::DISTANCE_JSON);
+        $event['distances'] = $this->withPaidCounts(
+            $event['id'],
+            $this->children('event_distances', 'event_id', $event['id'], self::DISTANCE_JSON)
+        );
         $event['paymentMethods'] = $this->children('event_payment_methods', 'event_id', $event['id']);
         $event['merchandise'] = $this->children('event_merchandise', 'event_id', $event['id'], ['sizes', 'colors']);
         $event['discountCodes'] = $this->children('event_discount_codes', 'event_id', $event['id'], ['distanceIds', 'usedBy']);
@@ -384,6 +387,29 @@ SQL;
         $event['resultDocuments'] = $this->children('event_result_documents', 'event_id', $event['id']);
 
         return $event;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $distances
+     * @return array<int, array<string, mixed>>
+     */
+    private function withPaidCounts(string $eventId, array $distances): array
+    {
+        if ($distances === []) {
+            return $distances;
+        }
+
+        $stmt = $this->pdo->prepare('SELECT r.distance_id AS distanceId, COUNT(*) AS paidCount FROM registrations r INNER JOIN registration_payment_details pd ON pd.registration_id = r.id WHERE r.event_id = :eventId AND r.status <> :removed AND pd.start_fee_paid = 1 GROUP BY r.distance_id');
+        $stmt->execute(['eventId' => $eventId, 'removed' => 'removed']);
+        $counts = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $counts[(string) $row['distanceId']] = (int) $row['paidCount'];
+        }
+
+        return array_map(static function (array $distance) use ($counts): array {
+            $distance['paidCount'] = $counts[(string) ($distance['id'] ?? '')] ?? 0;
+            return $distance;
+        }, $distances);
     }
 
     /**

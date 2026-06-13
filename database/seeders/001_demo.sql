@@ -42,7 +42,12 @@ INSERT INTO users (id, name, email, password_hash, role, phone, birth_year, gend
 ('u-organizer-3', 'Tomasz Lewandowski', 'tomasz@sportevents.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'organizer', '505505606', NULL, NULL, NULL, 'Sportowe Wydarzenia', 'active', 11),
 ('u-moderator', 'Monika Zielinska', 'monika@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'moderator', NULL, NULL, NULL, NULL, NULL, 'active', 0),
 ('u-admin', 'Admin ZmierzymyCzas', 'admin@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'admin', NULL, NULL, NULL, NULL, NULL, 'active', 0),
-('u-superadmin', 'Superadmin ZmierzymyCzas', 'superadmin@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'superadmin', NULL, NULL, NULL, NULL, NULL, 'active', 0);
+('u-superadmin', 'Superadmin ZmierzymyCzas', 'superadmin@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'superadmin', NULL, NULL, NULL, NULL, NULL, 'active', 0),
+('test-participant', 'Test Participant', 'test.participant@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'participant', '510000001', 1992, 'M', 'Test Club', NULL, 'active', 0),
+('test-organizer', 'Test Organizer', 'test.organizer@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'organizer', '510000002', NULL, NULL, NULL, 'Test Organizer Sp. z o.o.', 'active', 11),
+('test-moderator', 'Test Moderator', 'test.moderator@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'moderator', '510000003', NULL, NULL, NULL, NULL, 'active', 0),
+('test-admin', 'Test Admin', 'test.admin@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'admin', '510000004', NULL, NULL, NULL, NULL, 'active', 0),
+('test-superadmin', 'Test Superadmin', 'test.superadmin@zmierzymyczas.pl', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'superadmin', '510000005', NULL, NULL, NULL, NULL, 'active', 0);
 
 INSERT INTO organizer_event_credit_batches (id, organizer_id, event_credit_kind, total_count, used_count, source_type, source_id, created_at, expires_at) VALUES
 ('credit-u-organizer-standard-demo', 'u-organizer', 'standard', 8, 0, 'demo_seed', NULL, '2026-01-01T00:00:00+00:00', NULL),
@@ -53,7 +58,10 @@ INSERT INTO organizer_event_credit_batches (id, organizer_id, event_credit_kind,
 ('credit-u-organizer-2-timing-demo', 'u-organizer-2', 'timing', 1, 0, 'demo_seed', NULL, '2026-01-01T00:00:00+00:00', NULL),
 ('credit-u-organizer-3-standard-demo', 'u-organizer-3', 'standard', 8, 0, 'demo_seed', NULL, '2026-01-01T00:00:00+00:00', NULL),
 ('credit-u-organizer-3-virtual-demo', 'u-organizer-3', 'virtual', 2, 0, 'demo_seed', NULL, '2026-01-01T00:00:00+00:00', NULL),
-('credit-u-organizer-3-timing-demo', 'u-organizer-3', 'timing', 1, 0, 'demo_seed', NULL, '2026-01-01T00:00:00+00:00', NULL);
+('credit-u-organizer-3-timing-demo', 'u-organizer-3', 'timing', 1, 0, 'demo_seed', NULL, '2026-01-01T00:00:00+00:00', NULL),
+('credit-test-organizer-standard-demo', 'test-organizer', 'standard', 8, 0, 'demo_seed', NULL, '2026-01-01T00:00:00+00:00', NULL),
+('credit-test-organizer-virtual-demo', 'test-organizer', 'virtual', 2, 0, 'demo_seed', NULL, '2026-01-01T00:00:00+00:00', NULL),
+('credit-test-organizer-timing-demo', 'test-organizer', 'timing', 1, 0, 'demo_seed', NULL, '2026-01-01T00:00:00+00:00', NULL);
 
 INSERT INTO series (id, name, slug, type, description, organizer_id, organizer_name, rules, start_date, end_date, status) VALUES
 ('s-road-cup', 'Puchar Szosowy 2026', 'puchar-szosowy-2026', 'cup', 'Cykl lokalnych zawodow dla amatorow i klubow.', 'u-organizer', 'Marek Nowak', 'Punktacja wedlug miejsc open.', '2026-03-01', '2026-10-31', 'active'),

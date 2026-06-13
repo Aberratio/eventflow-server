@@ -484,6 +484,7 @@ CREATE TABLE IF NOT EXISTS partners (
   id VARCHAR(36) PRIMARY KEY,
   name VARCHAR(180) NOT NULL,
   logo_url VARCHAR(512) NOT NULL,
+  logo_dark_url VARCHAR(512) NULL,
   website_url VARCHAR(512) NULL,
   featured TINYINT(1) NOT NULL DEFAULT 0,
   sort_order INT NOT NULL DEFAULT 99,

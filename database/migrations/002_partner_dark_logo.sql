@@ -1,0 +1,1 @@
+ALTER TABLE partners ADD COLUMN IF NOT EXISTS logo_dark_url VARCHAR(512) NULL AFTER logo_url;

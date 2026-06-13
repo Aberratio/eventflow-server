@@ -72,5 +72,6 @@ Set the client env variable:
 VITE_API_URL=http://localhost:8081/api/v1
 ```
 
-When `VITE_API_URL` is set, the React app uses the real HTTP adapter. To use mock
-data instead, leave `VITE_API_URL` empty in the client env file.
+The React app uses the real HTTP adapter by default and falls back to
+`http://localhost:8081/api/v1` when `VITE_API_URL` is not set. Override
+`VITE_API_URL` only when the API is available at a different address.

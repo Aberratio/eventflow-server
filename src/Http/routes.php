@@ -135,6 +135,28 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $result, 'Image uploaded', 201);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
+        $api->post('/uploads/partner-logos', function (Request $request, Response $response) use ($uploads) {
+            $files = $request->getUploadedFiles();
+            $file = $files['file'] ?? null;
+            if (!$file instanceof \Psr\Http\Message\UploadedFileInterface) {
+                return JsonResponder::error($response, 'validation_error', 'Logo file is required', 422);
+            }
+
+            try {
+                $result = $uploads->storeImage($file, 'partners');
+            } catch (RuntimeException $e) {
+                $messages = [
+                    'file_too_large' => 'Uploaded image is too large',
+                    'unsupported_file_type' => 'Only JPG, PNG and WebP images are supported',
+                    'upload_dir_unavailable' => 'Upload directory is unavailable',
+                    'upload_failed' => 'File upload failed',
+                ];
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Upload failed', 422);
+            }
+
+            return JsonResponder::ok($response, $result, 'Logo uploaded', 201);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+
         $api->get('/uploads/{path:.+}', function (Request $request, Response $response, array $args) use ($uploads) {
             $path = $uploads->resolvePublicPath((string) ($args['path'] ?? ''));
             if ($path === null) {
@@ -602,6 +624,30 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
 
         $api->get('/partners', fn (Request $request, Response $response) => JsonResponder::ok($response, $partners->list()));
         $api->get('/partners/featured', fn (Request $request, Response $response) => JsonResponder::ok($response, $partners->featured()));
+        $api->get('/partners/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $partners->find((string) $args['id'])));
+        $api->post('/partners', function (Request $request, Response $response) use ($partners, $body) {
+            $payload = $body($request);
+            if (trim((string) ($payload['name'] ?? '')) === '' || trim((string) ($payload['logoUrl'] ?? '')) === '') {
+                return JsonResponder::error($response, 'validation_error', 'Name and logo are required', 422);
+            }
+
+            return JsonResponder::ok($response, $partners->create($payload), 'Partner created', 201);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->patch('/partners/{id}', function (Request $request, Response $response, array $args) use ($partners, $body) {
+            $payload = $body($request);
+            if (array_key_exists('name', $payload) && trim((string) $payload['name']) === '') {
+                return JsonResponder::error($response, 'validation_error', 'Name is required', 422);
+            }
+            if (array_key_exists('logoUrl', $payload) && trim((string) $payload['logoUrl']) === '') {
+                return JsonResponder::error($response, 'validation_error', 'Logo is required', 422);
+            }
+
+            return JsonResponder::ok($response, $partners->update((string) $args['id'], $payload));
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->delete('/partners/{id}', function (Request $request, Response $response, array $args) use ($partners) {
+            $partners->delete((string) $args['id']);
+            return JsonResponder::ok($response, null);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
 
         $api->get('/admin/activity-logs', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->activityLogs($query($request))))
             ->add(new AuthMiddleware($jwt, $staffRoles));

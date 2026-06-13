@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS events (
   banner_url VARCHAR(512) NULL,
   banner_crop_area JSON NULL,
   organizer_logo_url VARCHAR(512) NULL,
+  organizer_logo_shape ENUM('square','portrait','landscape') NOT NULL DEFAULT 'square',
   is_virtual TINYINT(1) NOT NULL DEFAULT 0,
   event_credit_kind ENUM('standard','virtual','timing') NOT NULL DEFAULT 'standard',
   start_date VARCHAR(64) NULL,
@@ -106,6 +107,7 @@ ALTER TABLE events
   ADD COLUMN IF NOT EXISTS published_at VARCHAR(64) NULL,
   ADD COLUMN IF NOT EXISTS published_by VARCHAR(36) NULL,
   ADD COLUMN IF NOT EXISTS event_credit_kind ENUM('standard','virtual','timing') NOT NULL DEFAULT 'standard' AFTER is_virtual,
+  ADD COLUMN IF NOT EXISTS organizer_logo_shape ENUM('square','portrait','landscape') NOT NULL DEFAULT 'square' AFTER organizer_logo_url,
   ADD COLUMN IF NOT EXISTS created_by VARCHAR(36) NULL;
 
 CREATE TABLE IF NOT EXISTS organizer_event_credit_batches (

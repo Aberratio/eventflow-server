@@ -25,7 +25,7 @@
   "scripts": {
     "serve": [
       "Composer\\Config::disableProcessTimeout",
-      "php -S localhost:8081 -t public"
+      "php -S localhost:8081 -t public router.php"
     ],
     "migrate": "php bin/migrate.php",
     "seed": "php bin/seed.php",

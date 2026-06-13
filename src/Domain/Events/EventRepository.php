@@ -13,6 +13,7 @@ final class EventRepository extends Repository
 
     private const EVENT_COLUMNS = <<<'SQL'
 id, name, slug, discipline, date, location, city, description, image_url AS imageUrl,
+original_image_url AS originalImageUrl,
 series_id AS seriesId, organizer_id AS organizerId, organizer_name AS organizerName,
 organizer_contact AS organizerContact, status, rejection_reason AS rejectionReason,
 submitted_at AS submittedAt, approved_at AS approvedAt, approved_by AS approvedBy,
@@ -20,7 +21,9 @@ published_at AS publishedAt, published_by AS publishedBy, created_by AS createdB
 registration_deadline AS registrationDeadline, featured,
 live_results_url AS liveResultsUrl, is_live AS isLive, registration_status AS registrationStatus,
 route_map_url AS routeMapUrl, route_gpx_url AS routeGpxUrl, route_elevation_profile AS routeElevationProfile,
-banner_url AS bannerUrl, banner_crop_area AS bannerCropArea, organizer_logo_url AS organizerLogoUrl,
+banner_url AS bannerUrl, original_banner_url AS originalBannerUrl,
+banner_crop_area AS bannerCropArea, organizer_logo_url AS organizerLogoUrl,
+original_organizer_logo_url AS originalOrganizerLogoUrl,
 organizer_logo_shape AS organizerLogoShape,
 is_virtual AS isVirtual, event_credit_kind AS eventCreditKind, start_date AS startDate, end_date AS endDate, payment_config AS paymentConfig,
 organizers_html AS organizersHtml, rules_html AS rulesHtml, final_acceptance_html AS finalAcceptanceHtml,
@@ -386,6 +389,7 @@ SQL;
         $event['discountCodes'] = $this->children('event_discount_codes', 'event_id', $event['id'], ['distanceIds', 'usedBy']);
         $event['galleryAlbums'] = $this->children('event_gallery_albums', 'event_id', $event['id']);
         $event['resultDocuments'] = $this->children('event_result_documents', 'event_id', $event['id']);
+        $event['documents'] = $this->children('event_documents', 'event_id', $event['id']);
 
         return $event;
     }
@@ -454,6 +458,7 @@ SQL;
             'city' => 'city',
             'description' => 'description',
             'imageUrl' => 'image_url',
+            'originalImageUrl' => 'original_image_url',
             'seriesId' => 'series_id',
             'organizerId' => 'organizer_id',
             'organizerName' => 'organizer_name',
@@ -475,8 +480,10 @@ SQL;
             'routeGpxUrl' => 'route_gpx_url',
             'routeElevationProfile' => 'route_elevation_profile',
             'bannerUrl' => 'banner_url',
+            'originalBannerUrl' => 'original_banner_url',
             'bannerCropArea' => 'banner_crop_area',
             'organizerLogoUrl' => 'organizer_logo_url',
+            'originalOrganizerLogoUrl' => 'original_organizer_logo_url',
             'organizerLogoShape' => 'organizer_logo_shape',
             'isVirtual' => 'is_virtual',
             'eventCreditKind' => 'event_credit_kind',
@@ -636,6 +643,8 @@ SQL;
             'discountCodes' => ['table' => 'event_discount_codes', 'json' => ['distanceIds', 'usedBy']],
             'galleryAlbums' => ['table' => 'event_gallery_albums', 'json' => []],
         ];
+
+        $children['documents'] = ['table' => 'event_documents', 'json' => []];
 
         foreach ($children as $input => $meta) {
             if (!array_key_exists($input, $data)) {

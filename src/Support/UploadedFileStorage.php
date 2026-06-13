@@ -16,6 +16,19 @@ final class UploadedFileStorage
         'image/webp' => 'webp',
     ];
 
+    /** @var array<string, string> */
+    private const DOCUMENT_EXTENSIONS = [
+        'application/pdf' => 'pdf',
+        'application/msword' => 'doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+        'application/vnd.ms-excel' => 'xls',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+        'text/plain' => 'txt',
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+    ];
+
     public function __construct(
         private readonly string $storageDir,
         private readonly string $publicBasePath,
@@ -67,6 +80,50 @@ final class UploadedFileStorage
             'path' => $relativePath,
             'mimeType' => (string) ($imageInfo['mime'] ?? $mimeType),
             'size' => filesize($targetPath) ?: $size,
+        ];
+    }
+
+    /**
+     * @return array{url: string, path: string, mimeType: string, size: int, originalName: string}
+     */
+    public function storeDocument(UploadedFileInterface $file, string $folder = 'event-docs'): array
+    {
+        if ($file->getError() !== UPLOAD_ERR_OK) {
+            throw new RuntimeException('upload_failed');
+        }
+
+        $size = $file->getSize() ?? 0;
+        if ($size <= 0 || $size > $this->maxBytes) {
+            throw new RuntimeException('file_too_large');
+        }
+
+        $mimeType = strtolower((string) $file->getClientMediaType());
+        if (!array_key_exists($mimeType, self::DOCUMENT_EXTENSIONS)) {
+            throw new RuntimeException('unsupported_file_type');
+        }
+
+        $folder = trim(preg_replace('/[^a-z0-9_-]+/i', '-', $folder) ?? 'event-docs', '-');
+        $folder = $folder === '' ? 'event-docs' : $folder;
+        $targetDir = rtrim($this->storageDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $folder;
+        if (!is_dir($targetDir) && !mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
+            throw new RuntimeException('upload_dir_unavailable');
+        }
+
+        $ext = self::DOCUMENT_EXTENSIONS[$mimeType];
+        $filename = bin2hex(random_bytes(16)) . '.' . $ext;
+        $targetPath = $targetDir . DIRECTORY_SEPARATOR . $filename;
+        $file->moveTo($targetPath);
+
+        $relativePath = $folder . '/' . $filename;
+        $basePath = '/' . trim($this->publicBasePath, '/');
+        $originalName = (string) $file->getClientFilename();
+
+        return [
+            'url' => $basePath . '/' . str_replace('\\', '/', $relativePath),
+            'path' => $relativePath,
+            'mimeType' => $mimeType,
+            'size' => filesize($targetPath) ?: $size,
+            'originalName' => $originalName,
         ];
     }
 

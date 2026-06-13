@@ -135,6 +135,28 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $result, 'Image uploaded', 201);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
+        $api->post('/uploads/event-documents', function (Request $request, Response $response) use ($uploads) {
+            $files = $request->getUploadedFiles();
+            $file = $files['file'] ?? null;
+            if (!$file instanceof \Psr\Http\Message\UploadedFileInterface) {
+                return JsonResponder::error($response, 'validation_error', 'File is required', 422);
+            }
+
+            try {
+                $result = $uploads->storeDocument($file, 'event-docs');
+            } catch (RuntimeException $e) {
+                $messages = [
+                    'file_too_large' => 'Uploaded file is too large',
+                    'unsupported_file_type' => 'Only PDF, DOC, DOCX, XLS, XLSX, TXT and image files are supported',
+                    'upload_dir_unavailable' => 'Upload directory is unavailable',
+                    'upload_failed' => 'File upload failed',
+                ];
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Upload failed', 422);
+            }
+
+            return JsonResponder::ok($response, $result, 'Document uploaded', 201);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
         $api->post('/uploads/partner-logos', function (Request $request, Response $response) use ($uploads) {
             $files = $request->getUploadedFiles();
             $file = $files['file'] ?? null;

@@ -29,7 +29,7 @@ is_virtual AS isVirtual, event_credit_kind AS eventCreditKind, start_date AS sta
 organizers_html AS organizersHtml, rules_html AS rulesHtml, final_acceptance_html AS finalAcceptanceHtml,
 require_final_acceptance AS requireFinalAcceptance, is_private AS isPrivate, access_code AS accessCode,
 registration_embed AS registrationEmbed, registration_form_config AS registrationFormConfig,
-display_options AS displayOptions
+display_options AS displayOptions, logistics_info AS logisticsInfo
 SQL;
 
     private const EVENT_JSON = [
@@ -39,6 +39,7 @@ SQL;
         'registrationEmbed',
         'registrationFormConfig',
         'displayOptions',
+        'logisticsInfo',
     ];
 
     private const DISTANCE_JSON = [
@@ -499,6 +500,7 @@ SQL;
             'registrationEmbed' => 'registration_embed',
             'registrationFormConfig' => 'registration_form_config',
             'displayOptions' => 'display_options',
+            'logisticsInfo' => 'logistics_info',
         ];
         $out = $creating ? ['id' => $id, 'status' => 'draft', 'featured' => 0] : [];
         foreach ($map as $input => $column) {
@@ -507,7 +509,7 @@ SQL;
                 $out[$column] = $input === 'status' ? $this->normalizeStatus((string) $value) : $value;
             }
         }
-        foreach (['organizer_contact', 'banner_crop_area', 'payment_config', 'registration_embed', 'registration_form_config', 'display_options'] as $jsonField) {
+        foreach (['organizer_contact', 'banner_crop_area', 'payment_config', 'registration_embed', 'registration_form_config', 'display_options', 'logistics_info'] as $jsonField) {
             if (array_key_exists($jsonField, $out) && $out[$jsonField] !== null && !is_string($out[$jsonField])) {
                 $out[$jsonField] = json_encode($out[$jsonField], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             }

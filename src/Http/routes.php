@@ -18,7 +18,9 @@ use ZmierzymyCzas\Domain\Series\SeriesRepository;
 use ZmierzymyCzas\Domain\Shop\ShopRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
+use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Support\JsonResponder;
+use ZmierzymyCzas\Support\UploadedFileStorage;
 
 return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $users = new UserRepository($pdo);
@@ -31,6 +33,15 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $pages = new InfoPageRepository($pdo);
     $partners = new PartnerRepository($pdo);
     $admin = new AdminRepository($pdo);
+    $uploadDir = (string) Env::get('APP_UPLOAD_DIR', 'public/uploads');
+    if (!preg_match('/^(?:[a-z]:[\/\\\\]|\/|\\\\\\\\)/i', $uploadDir)) {
+        $uploadDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . $uploadDir;
+    }
+    $uploads = new UploadedFileStorage(
+        $uploadDir,
+        (string) Env::get('APP_UPLOAD_PUBLIC_BASE', '/uploads'),
+        (int) Env::get('APP_UPLOAD_MAX_BYTES', 5242880)
+    );
 
     $body = static fn (Request $request): array => is_array($request->getParsedBody()) ? $request->getParsedBody() : [];
     $query = static fn (Request $request): array => $request->getQueryParams();
@@ -83,8 +94,59 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         return in_array($existingRole, ['admin', 'superadmin'], true) || in_array($nextRole, ['admin', 'superadmin'], true);
     };
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($jwt, $users, $events, $registrations, $results, $series, $shop, $challenges, $pages, $partners, $admin, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $isSuperAdmin, $touchesAdminAccount): void {
+    $publicUploadBase = '/' . trim((string) Env::get('APP_UPLOAD_PUBLIC_BASE', '/uploads'), '/');
+    if (!str_starts_with($publicUploadBase, '/api/v1/')) {
+        $app->get($publicUploadBase . '/{path:.+}', function (Request $request, Response $response, array $args) use ($uploads) {
+            $path = $uploads->resolvePublicPath((string) ($args['path'] ?? ''));
+            if ($path === null) {
+                return JsonResponder::error($response, 'not_found', 'File not found', 404);
+            }
+
+            $mimeType = mime_content_type($path) ?: 'application/octet-stream';
+            $response->getBody()->write((string) file_get_contents($path));
+            return $response
+                ->withHeader('Content-Type', $mimeType)
+                ->withHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        });
+    }
+
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($jwt, $users, $events, $registrations, $results, $series, $shop, $challenges, $pages, $partners, $admin, $uploads, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $isSuperAdmin, $touchesAdminAccount): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
+
+        $api->post('/uploads/event-images', function (Request $request, Response $response) use ($uploads) {
+            $files = $request->getUploadedFiles();
+            $file = $files['file'] ?? null;
+            if (!$file instanceof \Psr\Http\Message\UploadedFileInterface) {
+                return JsonResponder::error($response, 'validation_error', 'Image file is required', 422);
+            }
+
+            try {
+                $result = $uploads->storeImage($file, 'events');
+            } catch (RuntimeException $e) {
+                $messages = [
+                    'file_too_large' => 'Uploaded image is too large',
+                    'unsupported_file_type' => 'Only JPG, PNG and WebP images are supported',
+                    'upload_dir_unavailable' => 'Upload directory is unavailable',
+                    'upload_failed' => 'File upload failed',
+                ];
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Upload failed', 422);
+            }
+
+            return JsonResponder::ok($response, $result, 'Image uploaded', 201);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        $api->get('/uploads/{path:.+}', function (Request $request, Response $response, array $args) use ($uploads) {
+            $path = $uploads->resolvePublicPath((string) ($args['path'] ?? ''));
+            if ($path === null) {
+                return JsonResponder::error($response, 'not_found', 'File not found', 404);
+            }
+
+            $mimeType = mime_content_type($path) ?: 'application/octet-stream';
+            $response->getBody()->write((string) file_get_contents($path));
+            return $response
+                ->withHeader('Content-Type', $mimeType)
+                ->withHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        });
 
         $api->post('/auth/login', function (Request $request, Response $response) use ($users, $jwt, $body) {
             $payload = $body($request);
@@ -376,8 +438,25 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->get('/users/{userId}/registrations', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->byUser($args['userId'])))
             ->add(new AuthMiddleware($jwt));
-        $api->post('/registrations', fn (Request $request, Response $response) => JsonResponder::ok($response, $registrations->create($body($request)), 'Registration created', 201))
-            ->add(new AuthMiddleware($jwt));
+        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $body) {
+            try {
+                return JsonResponder::ok($response, $registrations->create($body($request)), 'Registration created', 201);
+            } catch (RuntimeException $e) {
+                $discountErrors = [
+                    'discount_code_invalid' => 'Discount code is invalid.',
+                    'discount_code_inactive' => 'Discount code is inactive.',
+                    'discount_code_not_started' => 'Discount code is not active yet.',
+                    'discount_code_expired' => 'Discount code has expired.',
+                    'discount_code_used_up' => 'Discount code usage limit has been reached.',
+                    'discount_code_distance_mismatch' => 'Discount code does not apply to the selected distance.',
+                    'registration_distance_invalid' => 'Selected distance is invalid.',
+                ];
+                if (array_key_exists($e->getMessage(), $discountErrors)) {
+                    return JsonResponder::error($response, $e->getMessage(), $discountErrors[$e->getMessage()], 422);
+                }
+                throw $e;
+            }
+        })->add(new AuthMiddleware($jwt));
         $api->patch('/registrations/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->update($args['id'], $body($request))))
             ->add(new AuthMiddleware($jwt));
         $api->post('/registrations/{id}/cancel', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->cancel($args['id'])))

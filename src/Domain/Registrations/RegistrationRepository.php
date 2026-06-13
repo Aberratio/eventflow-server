@@ -85,23 +85,37 @@ SQL;
     public function create(array $data): array
     {
         $id = $this->id();
-        $this->insert('registrations', [
-            'id' => $id,
-            'event_id' => $data['eventId'],
-            'event_name' => $data['eventName'],
-            'user_id' => $data['userId'],
-            'user_name' => $data['userName'],
-            'user_email' => $data['userEmail'],
-            'distance_id' => $data['distanceId'],
-            'distance_name' => $data['distanceName'],
-            'category' => $data['category'],
-            'registered_at' => date(DATE_ATOM),
-            'status' => 'pending',
-            'team_name' => $data['teamName'] ?? null,
-            'team_id' => $data['teamId'] ?? null,
-            'discount_code' => $data['discountCode'] ?? null,
-        ]);
-        $this->replaceMerchandise($id, $data['merchandiseOrders'] ?? []);
+        $this->pdo->beginTransaction();
+        try {
+            $pricing = $this->pricingForRegistration($data);
+            $this->insert('registrations', [
+                'id' => $id,
+                'event_id' => $data['eventId'],
+                'event_name' => $pricing['eventName'],
+                'user_id' => $data['userId'],
+                'user_name' => $data['userName'],
+                'user_email' => $data['userEmail'],
+                'distance_id' => $data['distanceId'],
+                'distance_name' => $pricing['distanceName'],
+                'category' => $data['category'],
+                'registered_at' => date(DATE_ATOM),
+                'status' => 'pending',
+                'team_name' => $data['teamName'] ?? null,
+                'team_id' => $data['teamId'] ?? null,
+                'discount_code' => $pricing['discountCode'],
+                'discount_amount' => $pricing['discountAmount'],
+                'price_paid' => $pricing['pricePaid'],
+            ]);
+            if ($pricing['discountId'] !== null) {
+                $this->markDiscountUsed($pricing['discountId'], $id, $data, $pricing);
+            }
+            $this->replaceMerchandise($id, $data['merchandiseOrders'] ?? []);
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
         return $this->find($id);
     }
 
@@ -145,6 +159,121 @@ SQL;
     {
         $this->upsertPaymentDetails($id, $paymentDetails);
         return $this->find($id);
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @return array{eventName: string, distanceName: string, pricePaid: float, discountAmount: ?float, discountCode: ?string, discountId: ?string, usedBy: array<int, mixed>}
+     */
+    private function pricingForRegistration(array $data): array
+    {
+        $stmt = $this->pdo->prepare('SELECT e.name AS eventName, d.name AS distanceName, d.price AS distancePrice FROM events e INNER JOIN event_distances d ON d.event_id = e.id WHERE e.id = :eventId AND d.id = :distanceId');
+        $stmt->execute([
+            'eventId' => $data['eventId'],
+            'distanceId' => $data['distanceId'],
+        ]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            throw new \RuntimeException('registration_distance_invalid');
+        }
+
+        $distancePrice = $this->roundMoney((float) $row['distancePrice']);
+        $discountCode = trim((string) ($data['discountCode'] ?? ''));
+        if ($discountCode === '') {
+            return [
+                'eventName' => (string) $row['eventName'],
+                'distanceName' => (string) $row['distanceName'],
+                'pricePaid' => $distancePrice,
+                'discountAmount' => null,
+                'discountCode' => null,
+                'discountId' => null,
+                'usedBy' => [],
+            ];
+        }
+
+        $discount = $this->discountForRegistration(
+            (string) $data['eventId'],
+            (string) $data['distanceId'],
+            $discountCode
+        );
+        $discountValue = (float) $discount['discount_value'];
+        $discountAmount = $discount['discount_type'] === 'percent'
+            ? $this->roundMoney($distancePrice * ($discountValue / 100))
+            : min($distancePrice, $this->roundMoney($discountValue));
+        $discountAmount = $this->roundMoney($discountAmount);
+
+        return [
+            'eventName' => (string) $row['eventName'],
+            'distanceName' => (string) $row['distanceName'],
+            'pricePaid' => $this->roundMoney(max(0, $distancePrice - $discountAmount)),
+            'discountAmount' => $discountAmount,
+            'discountCode' => strtoupper($discountCode),
+            'discountId' => (string) $discount['id'],
+            'usedBy' => $discount['used_by'] !== null && $discount['used_by'] !== ''
+                ? (json_decode((string) $discount['used_by'], true) ?: [])
+                : [],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function discountForRegistration(string $eventId, string $distanceId, string $code): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM event_discount_codes WHERE event_id = :eventId AND UPPER(code) = UPPER(:code) LIMIT 1');
+        $stmt->execute(['eventId' => $eventId, 'code' => $code]);
+        $discount = $stmt->fetch();
+        if (!$discount) {
+            throw new \RuntimeException('discount_code_invalid');
+        }
+        if (!(bool) $discount['active']) {
+            throw new \RuntimeException('discount_code_inactive');
+        }
+
+        $now = time();
+        if (!empty($discount['valid_from']) && strtotime((string) $discount['valid_from']) > $now) {
+            throw new \RuntimeException('discount_code_not_started');
+        }
+        if (!empty($discount['valid_to']) && strtotime((string) $discount['valid_to']) < $now) {
+            throw new \RuntimeException('discount_code_expired');
+        }
+        if ($discount['max_uses'] !== null && (int) $discount['used_count'] >= (int) $discount['max_uses']) {
+            throw new \RuntimeException('discount_code_used_up');
+        }
+
+        $distanceIds = $discount['distance_ids'] !== null && $discount['distance_ids'] !== ''
+            ? (json_decode((string) $discount['distance_ids'], true) ?: [])
+            : [];
+        if ($distanceIds !== [] && !in_array($distanceId, $distanceIds, true)) {
+            throw new \RuntimeException('discount_code_distance_mismatch');
+        }
+
+        return $discount;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param array{eventName: string, distanceName: string, pricePaid: float, discountAmount: ?float, discountCode: ?string, discountId: ?string, usedBy: array<int, mixed>} $pricing
+     */
+    private function markDiscountUsed(string $discountId, string $registrationId, array $data, array $pricing): void
+    {
+        $usedBy = $pricing['usedBy'];
+        $usedBy[] = [
+            'userId' => $data['userId'],
+            'userName' => $data['userName'],
+            'usedAt' => date(DATE_ATOM),
+            'registrationId' => $registrationId,
+            'distanceName' => $pricing['distanceName'],
+        ];
+
+        $stmt = $this->pdo->prepare('UPDATE event_discount_codes SET used_count = used_count + 1, used_by = :usedBy WHERE id = :id');
+        $stmt->execute([
+            'id' => $discountId,
+            'usedBy' => json_encode($usedBy, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ]);
+    }
+
+    private function roundMoney(float $value): float
+    {
+        return round($value, 2);
     }
 
     /** @param array<string, mixed> $row */

@@ -56,6 +56,7 @@ final class EventRepositoryTest extends TestCase
             $this->pdo->prepare('DELETE FROM event_merchandise WHERE event_id = :id')->execute(['id' => $id]);
             $this->pdo->prepare('DELETE FROM event_discount_codes WHERE event_id = :id')->execute(['id' => $id]);
             $this->pdo->prepare('DELETE FROM event_gallery_albums WHERE event_id = :id')->execute(['id' => $id]);
+            $this->pdo->prepare('DELETE FROM registrations WHERE event_id = :id')->execute(['id' => $id]);
             $this->pdo->prepare('DELETE FROM events WHERE id = :id')->execute(['id' => $id]);
         }
     }
@@ -173,6 +174,47 @@ final class EventRepositoryTest extends TestCase
         self::assertSame('phpunit-updated-half', $distances[0]['id']);
         self::assertSame('Polmaraton', $distances[0]['name']);
         self::assertSame(120, (int) $distances[0]['participant_limit']);
+    }
+
+    public function testCreatePersistsDiscountCodesForEvent(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-discounts',
+            'discountCodes' => [
+                [
+                    'id' => 'phpunit-fixed-decimal',
+                    'code' => 'SAVE25',
+                    'discountType' => 'fixed',
+                    'discountValue' => 25.50,
+                    'maxUses' => 3,
+                    'usedCount' => 0,
+                    'distanceIds' => [$this->slugPrefix . '-discounts-10k'],
+                    'active' => true,
+                ],
+                [
+                    'id' => 'phpunit-percent',
+                    'code' => 'TEN',
+                    'discountType' => 'percent',
+                    'discountValue' => 10,
+                    'usedCount' => 0,
+                    'distanceIds' => [],
+                    'active' => false,
+                ],
+            ],
+        ]));
+
+        self::assertCount(2, $event['discountCodes']);
+        self::assertSame('SAVE25', $event['discountCodes'][0]['code']);
+        self::assertSame('fixed', $event['discountCodes'][0]['discountType']);
+        self::assertEquals(25.50, (float) $event['discountCodes'][0]['discountValue']);
+        self::assertSame([$this->slugPrefix . '-discounts-10k'], $event['discountCodes'][0]['distanceIds']);
+
+        $rawCodes = $this->rawDiscountCodes((string) $event['id']);
+        self::assertCount(2, $rawCodes);
+        self::assertSame('SAVE25', $rawCodes[0]['code']);
+        self::assertSame('25.50', (string) $rawCodes[0]['discount_value']);
+        self::assertSame([$this->slugPrefix . '-discounts-10k'], json_decode((string) $rawCodes[0]['distance_ids'], true));
+        self::assertSame(1, (int) $rawCodes[0]['active']);
     }
 
     public function testPublicListShowsOnlyParticipantVisibleEvents(): void
@@ -414,6 +456,14 @@ final class EventRepositoryTest extends TestCase
     private function rawDistances(string $eventId): array
     {
         $stmt = $this->pdo->prepare('SELECT * FROM event_distances WHERE event_id = :id ORDER BY sort_order ASC');
+        $stmt->execute(['id' => $eventId]);
+        return $stmt->fetchAll();
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function rawDiscountCodes(string $eventId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM event_discount_codes WHERE event_id = :id ORDER BY sort_order ASC');
         $stmt->execute(['id' => $eventId]);
         return $stmt->fetchAll();
     }

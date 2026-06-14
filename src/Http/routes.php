@@ -113,6 +113,34 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $app->group('/api/v1', function (RouteCollectorProxy $api) use ($jwt, $users, $events, $registrations, $results, $series, $shop, $challenges, $pages, $partners, $admin, $uploads, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $isSuperAdmin, $touchesAdminAccount): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
+        $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
+            $files = $request->getUploadedFiles();
+            $file = $files['file'] ?? null;
+            if (!$file instanceof \Psr\Http\Message\UploadedFileInterface) {
+                return JsonResponder::error($response, 'validation_error', 'Image file is required', 422);
+            }
+
+            try {
+                $result = $uploads->storeImage($file, 'avatars');
+            } catch (RuntimeException $e) {
+                $messages = [
+                    'file_too_large' => 'Uploaded image is too large',
+                    'unsupported_file_type' => 'Only JPG, PNG and WebP images are supported',
+                    'upload_dir_unavailable' => 'Upload directory is unavailable',
+                    'upload_failed' => 'File upload failed',
+                ];
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Upload failed', 422);
+            }
+
+            $auth = (array) $request->getAttribute('auth');
+            $userId = (string) ($auth['sub'] ?? '');
+            if ($userId !== '') {
+                $users->update($userId, ['avatar' => $result['url']]);
+            }
+
+            return JsonResponder::ok($response, $result, 'Avatar uploaded', 201);
+        })->add(new AuthMiddleware($jwt));
+
         $api->post('/uploads/event-images', function (Request $request, Response $response) use ($uploads) {
             $files = $request->getUploadedFiles();
             $file = $files['file'] ?? null;
@@ -480,6 +508,16 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         })->add(new AuthMiddleware($jwt));
         $api->get('/events/{eventId}/registrations', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->byEvent($args['eventId'])))
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->get('/events/{eventId}/start-list', function (Request $request, Response $response, array $args) use ($events, $registrations, $optionalAuth, $canViewEvent) {
+            $event = $events->find($args['eventId']);
+            if (!$canViewEvent($event, $optionalAuth($request))) {
+                return JsonResponder::error($response, 'not_found', 'Event not found', 404);
+            }
+            $displayOptions = $event['displayOptions'] ?? [];
+            $showAll = (($displayOptions['showParticipants'] ?? null) === 'all')
+                || (isset($displayOptions['hideUnpaid']) && !(bool) $displayOptions['hideUnpaid'] && !isset($displayOptions['showParticipants']));
+            return JsonResponder::ok($response, $registrations->publicStartList($args['eventId'], $showAll));
+        });
         $api->get('/users/{userId}/registrations', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->byUser($args['userId'])))
             ->add(new AuthMiddleware($jwt));
         $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $body) {

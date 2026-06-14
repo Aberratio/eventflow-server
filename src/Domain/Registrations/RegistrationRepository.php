@@ -66,6 +66,19 @@ SQL;
     }
 
     /** @return array<int, array<string, mixed>> */
+    public function publicStartList(string $eventId, bool $showAll): array
+    {
+        $statusFilter = $showAll
+            ? "status IN ('pending', 'confirmed')"
+            : "status = 'confirmed'";
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::COLUMNS . " FROM registrations WHERE event_id = :eventId AND {$statusFilter} ORDER BY registered_at DESC"
+        );
+        $stmt->execute(['eventId' => $eventId]);
+        return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
+    }
+
+    /** @return array<int, array<string, mixed>> */
     public function byUser(string $userId): array
     {
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE user_id = :userId ORDER BY registered_at DESC');

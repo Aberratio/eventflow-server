@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class UserRepository extends Repository
 {
-    private const PUBLIC_COLUMNS = 'id, name, email, role, avatar, phone, birth_year AS birthYear, gender, club, company_name AS companyName, nip, website, description, status, event_limit AS eventLimit';
+    private const PUBLIC_COLUMNS = 'id, name, email, role, avatar, phone, birth_year AS birthYear, birth_date AS birthDate, gender, club, company_name AS companyName, nip, website, description, address, sos_contacts AS sosContacts, status, event_limit AS eventLimit';
 
     /**
      * @param array<string, mixed> $filters
@@ -48,18 +48,33 @@ final class UserRepository extends Repository
         $stmt->execute();
 
         return [
-            'data' => $stmt->fetchAll(),
+            'data' => array_map(fn (array $row) => $this->hydrate($row) ?? $row, $stmt->fetchAll()),
             'total' => $total,
             'page' => $pagination['page'],
             'pageSize' => $pagination['pageSize'],
         ];
     }
 
+    /** @param array<string, mixed>|false $row */
+    private function hydrate(array|false $row): ?array
+    {
+        if ($row === false) {
+            return null;
+        }
+        if (isset($row['address']) && is_string($row['address'])) {
+            $row['address'] = json_decode($row['address'], true);
+        }
+        if (isset($row['sosContacts']) && is_string($row['sosContacts'])) {
+            $row['sosContacts'] = json_decode($row['sosContacts'], true);
+        }
+        return $row;
+    }
+
     public function find(string $id): ?array
     {
         $stmt = $this->pdo->prepare('SELECT ' . self::PUBLIC_COLUMNS . ' FROM users WHERE id = :id');
         $stmt->execute(['id' => $id]);
-        return $stmt->fetch() ?: null;
+        return $this->hydrate($stmt->fetch());
     }
 
     public function findByEmail(string $email, bool $withPassword = false): ?array
@@ -67,7 +82,7 @@ final class UserRepository extends Repository
         $columns = $withPassword ? self::PUBLIC_COLUMNS . ', password_hash AS passwordHash' : self::PUBLIC_COLUMNS;
         $stmt = $this->pdo->prepare("SELECT {$columns} FROM users WHERE email = :email");
         $stmt->execute(['email' => $email]);
-        return $stmt->fetch() ?: null;
+        return $this->hydrate($stmt->fetch());
     }
 
     /** @param array<string, mixed> $data */
@@ -82,12 +97,15 @@ final class UserRepository extends Repository
             'role' => $data['role'] ?? 'participant',
             'phone' => $data['phone'] ?? null,
             'birth_year' => $data['birthYear'] ?? null,
+            'birth_date' => $data['birthDate'] ?? null,
             'gender' => $data['gender'] ?? null,
             'club' => $data['club'] ?? null,
             'company_name' => $data['companyName'] ?? null,
             'nip' => $data['nip'] ?? null,
             'website' => $data['website'] ?? null,
             'description' => $data['description'] ?? null,
+            'address' => isset($data['address']) ? json_encode($data['address']) : null,
+            'sos_contacts' => isset($data['sosContacts']) ? json_encode($data['sosContacts']) : null,
             'status' => $data['status'] ?? 'active',
             'event_limit' => $data['eventLimit'] ?? 0,
         ]);
@@ -106,6 +124,7 @@ final class UserRepository extends Repository
             'avatar' => 'avatar',
             'phone' => 'phone',
             'birthYear' => 'birth_year',
+            'birthDate' => 'birth_date',
             'gender' => 'gender',
             'club' => 'club',
             'companyName' => 'company_name',
@@ -118,6 +137,12 @@ final class UserRepository extends Repository
             if (array_key_exists($input, $data)) {
                 $mapped[$column] = $data[$input];
             }
+        }
+        if (array_key_exists('address', $data)) {
+            $mapped['address'] = $data['address'] !== null ? json_encode($data['address']) : null;
+        }
+        if (array_key_exists('sosContacts', $data)) {
+            $mapped['sos_contacts'] = $data['sosContacts'] !== null ? json_encode($data['sosContacts']) : null;
         }
         $this->updateById('users', $id, $mapped);
 

@@ -306,6 +306,7 @@ CREATE TABLE IF NOT EXISTS event_distances (
   registered_count INT NOT NULL DEFAULT 0,
   price DECIMAL(10,2) NOT NULL DEFAULT 0,
   office_price DECIMAL(10,2) NULL,
+  info_html TEXT NULL,
   price_tier_mode VARCHAR(32) NULL,
   participant_count_type VARCHAR(32) NULL,
   price_tiers JSON NULL,

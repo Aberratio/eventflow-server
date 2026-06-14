@@ -1,0 +1,4 @@
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS birth_date VARCHAR(16) NULL AFTER birth_year,
+  ADD COLUMN IF NOT EXISTS address JSON NULL AFTER birth_date,
+  ADD COLUMN IF NOT EXISTS sos_contacts JSON NULL AFTER address;

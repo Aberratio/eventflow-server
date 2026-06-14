@@ -28,10 +28,11 @@ banner_crop_area AS bannerCropArea, organizer_logo_url AS organizerLogoUrl,
 original_organizer_logo_url AS originalOrganizerLogoUrl,
 organizer_logo_shape AS organizerLogoShape,
 is_virtual AS isVirtual, event_credit_kind AS eventCreditKind, start_date AS startDate, end_date AS endDate, payment_config AS paymentConfig,
-organizers_html AS organizersHtml, rules_html AS rulesHtml, final_acceptance_html AS finalAcceptanceHtml,
+rules_html AS rulesHtml, final_acceptance_html AS finalAcceptanceHtml,
 require_final_acceptance AS requireFinalAcceptance, is_private AS isPrivate, access_code AS accessCode,
 registration_embed AS registrationEmbed, registration_form_config AS registrationFormConfig,
-display_options AS displayOptions, logistics_info AS logisticsInfo
+display_options AS displayOptions, logistics_info AS logisticsInfo,
+organizer_info AS organizerInfo
 SQL;
 
     private const EVENT_JSON = [
@@ -42,6 +43,7 @@ SQL;
         'registrationFormConfig',
         'displayOptions',
         'logisticsInfo',
+        'organizerInfo',
     ];
 
     private const DISTANCE_JSON = [
@@ -476,6 +478,7 @@ SQL;
             'organizerId' => 'organizer_id',
             'organizerName' => 'organizer_name',
             'organizerContact' => 'organizer_contact',
+            'organizerInfo' => 'organizer_info',
             'status' => 'status',
             'rejectionReason' => 'rejection_reason',
             'submittedAt' => 'submitted_at',
@@ -505,7 +508,6 @@ SQL;
             'startDate' => 'start_date',
             'endDate' => 'end_date',
             'paymentConfig' => 'payment_config',
-            'organizersHtml' => 'organizers_html',
             'rulesHtml' => 'rules_html',
             'finalAcceptanceHtml' => 'final_acceptance_html',
             'requireFinalAcceptance' => 'require_final_acceptance',
@@ -523,7 +525,7 @@ SQL;
                 $out[$column] = $input === 'status' ? $this->normalizeStatus((string) $value) : $value;
             }
         }
-        foreach (['organizer_contact', 'banner_crop_area', 'payment_config', 'registration_embed', 'registration_form_config', 'display_options', 'logistics_info'] as $jsonField) {
+        foreach (['organizer_contact', 'banner_crop_area', 'payment_config', 'registration_embed', 'registration_form_config', 'display_options', 'logistics_info', 'organizer_info'] as $jsonField) {
             if (array_key_exists($jsonField, $out) && $out[$jsonField] !== null && !is_string($out[$jsonField])) {
                 $out[$jsonField] = json_encode($out[$jsonField], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             }

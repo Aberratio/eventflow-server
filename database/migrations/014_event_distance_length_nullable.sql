@@ -1,0 +1,2 @@
+ALTER TABLE event_distances
+  MODIFY COLUMN length DECIMAL(10,3) NULL DEFAULT NULL;

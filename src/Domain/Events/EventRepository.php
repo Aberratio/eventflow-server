@@ -18,7 +18,9 @@ series_id AS seriesId, organizer_id AS organizerId, organizer_name AS organizerN
 organizer_contact AS organizerContact, status, rejection_reason AS rejectionReason,
 submitted_at AS submittedAt, approved_at AS approvedAt, approved_by AS approvedBy,
 published_at AS publishedAt, published_by AS publishedBy, created_by AS createdBy,
-registration_deadline AS registrationDeadline, featured,
+registration_deadline AS registrationDeadline,
+registration_open_date AS registrationOpenDate,
+registration_until_event_start AS registrationUntilEventStart, featured,
 live_results_url AS liveResultsUrl, is_live AS isLive, registration_status AS registrationStatus,
 route_map_url AS routeMapUrl, route_gpx_url AS routeGpxUrl, route_elevation_profile AS routeElevationProfile,
 banner_url AS bannerUrl, original_banner_url AS originalBannerUrl,
@@ -378,7 +380,7 @@ SQL;
     private function hydrate(array $row): array
     {
         $event = $this->decode($row, self::EVENT_JSON);
-        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate'] as $bool) {
+        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'registrationUntilEventStart'] as $bool) {
             $event[$bool] = (bool) ($event[$bool] ?? false);
         }
         $event['distances'] = $this->withPaidCounts(
@@ -405,15 +407,24 @@ SQL;
             return $distances;
         }
 
-        $stmt = $this->pdo->prepare('SELECT r.distance_id AS distanceId, COUNT(*) AS paidCount FROM registrations r INNER JOIN registration_payment_details pd ON pd.registration_id = r.id WHERE r.event_id = :eventId AND r.status <> :removed AND pd.start_fee_paid = 1 GROUP BY r.distance_id');
-        $stmt->execute(['eventId' => $eventId, 'removed' => 'removed']);
-        $counts = [];
+        $stmt = $this->pdo->prepare("SELECT r.distance_id AS distanceId, COUNT(*) AS cnt FROM registrations r WHERE r.event_id = :eventId AND r.status NOT IN ('removed', 'cancelled') GROUP BY r.distance_id");
+        $stmt->execute(['eventId' => $eventId]);
+        $registered = [];
         foreach ($stmt->fetchAll() as $row) {
-            $counts[(string) $row['distanceId']] = (int) $row['paidCount'];
+            $registered[(string) $row['distanceId']] = (int) $row['cnt'];
         }
 
-        return array_map(static function (array $distance) use ($counts): array {
-            $distance['paidCount'] = $counts[(string) ($distance['id'] ?? '')] ?? 0;
+        $stmt = $this->pdo->prepare('SELECT r.distance_id AS distanceId, COUNT(*) AS paidCount FROM registrations r INNER JOIN registration_payment_details pd ON pd.registration_id = r.id WHERE r.event_id = :eventId AND r.status <> :removed AND pd.start_fee_paid = 1 GROUP BY r.distance_id');
+        $stmt->execute(['eventId' => $eventId, 'removed' => 'removed']);
+        $paid = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $paid[(string) $row['distanceId']] = (int) $row['paidCount'];
+        }
+
+        return array_map(static function (array $distance) use ($registered, $paid): array {
+            $id = (string) ($distance['id'] ?? '');
+            $distance['registeredCount'] = $registered[$id] ?? 0;
+            $distance['paidCount'] = $paid[$id] ?? 0;
             return $distance;
         }, $distances);
     }
@@ -473,6 +484,8 @@ SQL;
             'publishedBy' => 'published_by',
             'createdBy' => 'created_by',
             'registrationDeadline' => 'registration_deadline',
+            'registrationOpenDate' => 'registration_open_date',
+            'registrationUntilEventStart' => 'registration_until_event_start',
             'featured' => 'featured',
             'liveResultsUrl' => 'live_results_url',
             'isLive' => 'is_live',

@@ -16,6 +16,14 @@ price_paid AS pricePaid, discount_code AS discountCode, discount_amount AS disco
 insurance_paid AS insurancePaid, removed_at AS removedAt
 SQL;
 
+    private const COLUMNS_R = <<<'SQL'
+r.id, r.event_id AS eventId, r.event_name AS eventName, r.user_id AS userId, r.user_name AS userName,
+r.user_email AS userEmail, r.distance_id AS distanceId, r.distance_name AS distanceName, r.category,
+r.registered_at AS registeredAt, r.status, r.bib_number AS bibNumber, r.team_name AS teamName, r.team_id AS teamId,
+r.price_paid AS pricePaid, r.discount_code AS discountCode, r.discount_amount AS discountAmount,
+r.insurance_paid AS insurancePaid, r.removed_at AS removedAt
+SQL;
+
     /**
      * @param array<string, mixed> $filters
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, pageSize: int}
@@ -68,12 +76,15 @@ SQL;
     /** @return array<int, array<string, mixed>> */
     public function publicStartList(string $eventId, bool $showAll): array
     {
-        $statusFilter = $showAll
-            ? "status IN ('pending', 'confirmed')"
-            : "status = 'confirmed'";
-        $stmt = $this->pdo->prepare(
-            'SELECT ' . self::COLUMNS . " FROM registrations WHERE event_id = :eventId AND {$statusFilter} ORDER BY registered_at DESC"
-        );
+        if ($showAll) {
+            $stmt = $this->pdo->prepare(
+                'SELECT ' . self::COLUMNS . " FROM registrations WHERE event_id = :eventId AND status NOT IN ('removed', 'cancelled') ORDER BY registered_at DESC"
+            );
+        } else {
+            $stmt = $this->pdo->prepare(
+                'SELECT ' . self::COLUMNS_R . " FROM registrations r LEFT JOIN registration_payment_details pd ON pd.registration_id = r.id WHERE r.event_id = :eventId AND r.status NOT IN ('removed', 'cancelled') AND (r.status = 'confirmed' OR pd.start_fee_paid = 1) ORDER BY r.registered_at DESC"
+            );
+        }
         $stmt->execute(['eventId' => $eventId]);
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
@@ -101,6 +112,8 @@ SQL;
         $this->pdo->beginTransaction();
         try {
             $pricing = $this->pricingForRegistration($data);
+            $paymentDetails = $data['paymentDetails'] ?? null;
+            $startFeePaid = is_array($paymentDetails) && (bool) ($paymentDetails['startFeePaid'] ?? false);
             $this->insert('registrations', [
                 'id' => $id,
                 'event_id' => $data['eventId'],
@@ -112,7 +125,7 @@ SQL;
                 'distance_name' => $pricing['distanceName'],
                 'category' => $data['category'],
                 'registered_at' => date(DATE_ATOM),
-                'status' => 'pending',
+                'status' => $startFeePaid ? 'confirmed' : 'pending',
                 'team_name' => $data['teamName'] ?? null,
                 'team_id' => $data['teamId'] ?? null,
                 'discount_code' => $pricing['discountCode'],
@@ -123,6 +136,9 @@ SQL;
                 $this->markDiscountUsed($pricing['discountId'], $id, $data, $pricing);
             }
             $this->replaceMerchandise($id, $data['merchandiseOrders'] ?? []);
+            if (is_array($paymentDetails)) {
+                $this->upsertPaymentDetails($id, $paymentDetails);
+            }
             $this->pdo->commit();
         } catch (\Throwable $e) {
             $this->pdo->rollBack();

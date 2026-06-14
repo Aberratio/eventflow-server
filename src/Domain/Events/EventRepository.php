@@ -12,7 +12,7 @@ final class EventRepository extends Repository
     private const EVENT_STATUSES = ['draft', 'awaiting_approval', 'approved', 'active', 'past', 'archived', 'deleted'];
 
     private const EVENT_COLUMNS = <<<'SQL'
-id, name, slug, discipline, date, location, city, description, image_url AS imageUrl,
+id, name, slug, discipline, date, location, location_maps_url AS locationMapsUrl, city, description, image_url AS imageUrl,
 original_image_url AS originalImageUrl,
 series_id AS seriesId, organizer_id AS organizerId, organizer_name AS organizerName,
 organizer_contact AS organizerContact, status, rejection_reason AS rejectionReason,
@@ -467,6 +467,7 @@ SQL;
             'discipline' => 'discipline',
             'date' => 'date',
             'location' => 'location',
+            'locationMapsUrl' => 'location_maps_url',
             'city' => 'city',
             'description' => 'description',
             'imageUrl' => 'image_url',

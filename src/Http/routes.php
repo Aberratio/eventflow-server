@@ -67,7 +67,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         if (!$event) {
             return false;
         }
-        if (in_array((string) $event['status'], $publicEventStatuses, true)) {
+        if (
+            in_array((string) $event['status'], $publicEventStatuses, true)
+            && empty($event['isPrivate'])
+        ) {
             return true;
         }
         $role = (string) ($auth['role'] ?? '');

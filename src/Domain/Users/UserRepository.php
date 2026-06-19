@@ -27,8 +27,10 @@ final class UserRepository extends Repository
             $params['status'] = $filters['status'];
         }
         if (!empty($filters['search'])) {
-            $where[] = '(name LIKE :search OR email LIKE :search)';
-            $params['search'] = '%' . $filters['search'] . '%';
+            $where[] = '(name LIKE :searchName OR email LIKE :searchEmail)';
+            $search = '%' . $filters['search'] . '%';
+            $params['searchName'] = $search;
+            $params['searchEmail'] = $search;
         }
         $whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';
         $pagination = $this->pagination($filters);

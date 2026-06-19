@@ -1,0 +1,61 @@
+name: Server Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  unit:
+    name: Backend unit gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          coverage: none
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - run: composer lint
+      - run: composer test -- --testsuite Unit
+
+  integration:
+    name: Backend integration gate
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: zmierzymy_czas_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          coverage: none
+          extensions: pdo_mysql
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - name: Configure test env
+        run: |
+          cat > .env <<'ENV'
+          DB_HOST=127.0.0.1
+          DB_PORT=3306
+          DB_DATABASE=zmierzymy_czas_test
+          DB_USERNAME=root
+          DB_PASSWORD=
+          JWT_SECRET=ci-test-secret
+          APP_CORS_ORIGIN=*
+          ENV
+      - run: composer migrate
+      - run: composer seed
+      - run: composer test -- --testsuite Integration

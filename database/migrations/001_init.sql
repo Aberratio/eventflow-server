@@ -545,3 +545,18 @@ CREATE TABLE IF NOT EXISTS password_resets (
   used_at VARCHAR(64) NULL,
   INDEX idx_password_resets_user (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Extend event_merchandise with shop-product-compatible fields
+ALTER TABLE event_merchandise
+  ADD COLUMN IF NOT EXISTS images JSON NULL AFTER image_url,
+  ADD COLUMN IF NOT EXISTS original_price DECIMAL(10,2) NULL AFTER price,
+  ADD COLUMN IF NOT EXISTS brand VARCHAR(180) NULL AFTER description,
+  ADD COLUMN IF NOT EXISTS description_html MEDIUMTEXT NULL AFTER brand,
+  ADD COLUMN IF NOT EXISTS documents JSON NULL AFTER description_html,
+  ADD COLUMN IF NOT EXISTS quantity_mode ENUM('any','max','one') NOT NULL DEFAULT 'any' AFTER sort_order,
+  ADD COLUMN IF NOT EXISTS quantity_max INT NULL AFTER quantity_mode,
+  ADD COLUMN IF NOT EXISTS sale_from VARCHAR(64) NULL AFTER quantity_max,
+  ADD COLUMN IF NOT EXISTS sale_to VARCHAR(64) NULL AFTER sale_from,
+  ADD COLUMN IF NOT EXISTS stock_count INT NULL AFTER available,
+  ADD COLUMN IF NOT EXISTS distance_ids JSON NULL AFTER quantity_max,
+  ADD COLUMN IF NOT EXISTS shop_product_id VARCHAR(36) NULL AFTER distance_ids;

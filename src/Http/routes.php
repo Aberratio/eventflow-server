@@ -11,6 +11,7 @@ use ZmierzymyCzas\Domain\Auth\JwtService;
 use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
 use ZmierzymyCzas\Domain\Cms\InfoPageRepository;
 use ZmierzymyCzas\Domain\Cms\PartnerRepository;
+use ZmierzymyCzas\Domain\Events\EventBackgroundRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
@@ -33,6 +34,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $pages = new InfoPageRepository($pdo);
     $partners = new PartnerRepository($pdo);
     $admin = new AdminRepository($pdo);
+    $backgrounds = new EventBackgroundRepository($pdo);
     $uploadDir = (string) Env::get('APP_UPLOAD_DIR', 'public/uploads');
     if (!preg_match('/^(?:[a-z]:[\/\\\\]|\/|\\\\\\\\)/i', $uploadDir)) {
         $uploadDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . $uploadDir;
@@ -113,7 +115,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($jwt, $users, $events, $registrations, $results, $series, $shop, $challenges, $pages, $partners, $admin, $uploads, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $isSuperAdmin, $touchesAdminAccount): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($jwt, $users, $events, $registrations, $results, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $isSuperAdmin, $touchesAdminAccount): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
@@ -711,6 +713,56 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $partners->delete((string) $args['id']);
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $adminRoles));
+
+        $api->get('/event-backgrounds', fn (Request $request, Response $response) => JsonResponder::ok($response, $backgrounds->list()));
+        $api->get('/event-backgrounds/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $backgrounds->find($args['id'])));
+        $api->get('/event-backgrounds/{id}/usages', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $backgrounds->usages($args['id'])))
+            ->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->post('/uploads/event-backgrounds', function (Request $request, Response $response) use ($uploads) {
+            $files = $request->getUploadedFiles();
+            $file = $files['file'] ?? null;
+            if (!$file instanceof \Psr\Http\Message\UploadedFileInterface) {
+                return JsonResponder::error($response, 'validation_error', 'Image file is required', 422);
+            }
+            try {
+                $result = $uploads->storeImage($file, 'event-backgrounds');
+            } catch (RuntimeException $e) {
+                $messages = [
+                    'file_too_large' => 'Uploaded image is too large',
+                    'unsupported_file_type' => 'Only JPG, PNG and WebP images are supported',
+                    'upload_dir_unavailable' => 'Upload directory is unavailable',
+                    'upload_failed' => 'File upload failed',
+                ];
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Upload failed', 422);
+            }
+            return JsonResponder::ok($response, $result, 'Background uploaded', 201);
+        })->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->post('/event-backgrounds', function (Request $request, Response $response) use ($backgrounds, $body) {
+            $payload = $body($request);
+            if (trim((string) ($payload['name'] ?? '')) === '' || trim((string) ($payload['imageUrl'] ?? '')) === '') {
+                return JsonResponder::error($response, 'validation_error', 'Name and imageUrl are required', 422);
+            }
+            return JsonResponder::ok($response, $backgrounds->create($payload), 'Background created', 201);
+        })->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->patch('/event-backgrounds/{id}', function (Request $request, Response $response, array $args) use ($backgrounds, $body) {
+            $bg = $backgrounds->find($args['id']);
+            if (!$bg) {
+                return JsonResponder::error($response, 'not_found', 'Background not found', 404);
+            }
+            return JsonResponder::ok($response, $backgrounds->update($args['id'], $body($request)));
+        })->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->delete('/event-backgrounds/{id}', function (Request $request, Response $response, array $args) use ($backgrounds) {
+            $bg = $backgrounds->find($args['id']);
+            if (!$bg) {
+                return JsonResponder::error($response, 'not_found', 'Background not found', 404);
+            }
+            $usages = $backgrounds->usages($args['id']);
+            if ($usages !== []) {
+                return JsonResponder::error($response, 'background_in_use', 'Background is used by one or more events', 409);
+            }
+            $backgrounds->delete($args['id']);
+            return JsonResponder::ok($response, null);
+        })->add(new AuthMiddleware($jwt, $staffRoles));
 
         $api->get('/admin/activity-logs', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->activityLogs($query($request))))
             ->add(new AuthMiddleware($jwt, $staffRoles));

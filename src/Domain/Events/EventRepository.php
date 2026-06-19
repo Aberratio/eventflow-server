@@ -32,7 +32,8 @@ rules_html AS rulesHtml, final_acceptance_html AS finalAcceptanceHtml,
 require_final_acceptance AS requireFinalAcceptance, is_private AS isPrivate, access_code AS accessCode,
 registration_embed AS registrationEmbed, registration_form_config AS registrationFormConfig,
 display_options AS displayOptions, logistics_info AS logisticsInfo,
-organizer_info AS organizerInfo
+organizer_info AS organizerInfo,
+background_id AS backgroundId
 SQL;
 
     private const EVENT_JSON = [
@@ -390,7 +391,7 @@ SQL;
             $this->children('event_distances', 'event_id', $event['id'], self::DISTANCE_JSON)
         );
         $event['paymentMethods'] = $this->children('event_payment_methods', 'event_id', $event['id']);
-        $event['merchandise'] = $this->children('event_merchandise', 'event_id', $event['id'], ['sizes', 'colors']);
+        $event['merchandise'] = $this->children('event_merchandise', 'event_id', $event['id'], ['sizes', 'colors', 'images', 'distanceIds', 'documents']);
         $event['discountCodes'] = $this->children('event_discount_codes', 'event_id', $event['id'], ['distanceIds', 'usedBy']);
         $event['galleryAlbums'] = $this->children('event_gallery_albums', 'event_id', $event['id']);
         $event['resultDocuments'] = $this->children('event_result_documents', 'event_id', $event['id']);
@@ -517,6 +518,7 @@ SQL;
             'registrationFormConfig' => 'registration_form_config',
             'displayOptions' => 'display_options',
             'logisticsInfo' => 'logistics_info',
+            'backgroundId' => 'background_id',
         ];
         $out = $creating ? ['id' => $id, 'status' => 'draft', 'featured' => 0] : [];
         foreach ($map as $input => $column) {
@@ -657,7 +659,7 @@ SQL;
         $children = [
             'distances' => ['table' => 'event_distances', 'json' => self::DISTANCE_JSON],
             'paymentMethods' => ['table' => 'event_payment_methods', 'json' => []],
-            'merchandise' => ['table' => 'event_merchandise', 'json' => ['sizes', 'colors']],
+            'merchandise' => ['table' => 'event_merchandise', 'json' => ['sizes', 'colors', 'images', 'distanceIds', 'documents']],
             'discountCodes' => ['table' => 'event_discount_codes', 'json' => ['distanceIds', 'usedBy']],
             'galleryAlbums' => ['table' => 'event_gallery_albums', 'json' => []],
         ];

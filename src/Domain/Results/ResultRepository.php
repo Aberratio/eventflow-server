@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class ResultRepository extends Repository
 {
-    private const COLUMNS = 'id, event_id AS eventId, event_name AS eventName, distance_id AS distanceId, distance_name AS distanceName, user_id AS userId, user_name AS userName, bib_number AS bibNumber, category, time, time_in_seconds AS timeInSeconds, position, category_position AS categoryPosition, status, gender, birth_year AS birthYear';
+    private const COLUMNS = 'id, event_id AS eventId, event_name AS eventName, distance_id AS distanceId, distance_name AS distanceName, user_id AS userId, registration_id AS registrationId, user_name AS userName, bib_number AS bibNumber, category, time, time_in_seconds AS timeInSeconds, position, category_position AS categoryPosition, status, gender, birth_year AS birthYear';
 
     /**
      * @param array<string, mixed> $filters
@@ -159,6 +159,7 @@ final class ResultRepository extends Repository
             'distanceId' => 'distance_id',
             'distanceName' => 'distance_name',
             'userId' => 'user_id',
+            'registrationId' => 'registration_id',
             'userName' => 'user_name',
             'bibNumber' => 'bib_number',
             'category' => 'category',

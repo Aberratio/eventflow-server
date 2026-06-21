@@ -14,9 +14,15 @@ use ZmierzymyCzas\Domain\Cms\PartnerRepository;
 use ZmierzymyCzas\Domain\Events\EventBackgroundRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
+use ZmierzymyCzas\Domain\Results\ResultImportRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
+use ZmierzymyCzas\Domain\Results\VirtualResultRepository;
 use ZmierzymyCzas\Domain\Series\SeriesRepository;
+use ZmierzymyCzas\Domain\Certificate\CertificateRepository;
+use ZmierzymyCzas\Domain\Insurance\InsuranceRepository;
+use ZmierzymyCzas\Domain\Shop\OrderRepository;
 use ZmierzymyCzas\Domain\Shop\ShopRepository;
+use ZmierzymyCzas\Domain\Ticket\TicketRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
 use ZmierzymyCzas\Support\Env;
@@ -28,6 +34,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $events = new EventRepository($pdo);
     $registrations = new RegistrationRepository($pdo);
     $results = new ResultRepository($pdo);
+    $resultImports = new ResultImportRepository($pdo);
+    $virtualResults = new VirtualResultRepository($pdo);
     $series = new SeriesRepository($pdo);
     $shop = new ShopRepository($pdo);
     $challenges = new ChallengeRepository($pdo);
@@ -35,6 +43,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $partners = new PartnerRepository($pdo);
     $admin = new AdminRepository($pdo);
     $backgrounds = new EventBackgroundRepository($pdo);
+    $insurance = new InsuranceRepository($pdo);
+    $orders = new OrderRepository($pdo);
+    $tickets = new TicketRepository($pdo);
+    $certificates = new CertificateRepository($pdo);
     $uploadDir = (string) Env::get('APP_UPLOAD_DIR', 'public/uploads');
     if (!preg_match('/^(?:[a-z]:[\/\\\\]|\/|\\\\\\\\)/i', $uploadDir)) {
         $uploadDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . $uploadDir;
@@ -93,6 +105,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         }
         return $isStaffRole($role) || ($role === 'organizer' && $userId !== '' && $event['organizerId'] === $userId);
     };
+    $canUploadResults = static function (?array $event, array $auth) use ($canManageEvent): bool {
+        return $canManageEvent($event, $auth)
+            && in_array((string) ($event['status'] ?? ''), ['active', 'past'], true);
+    };
     $touchesAdminAccount = static function (?array $existing, array $payload): bool {
         $existingRole = (string) ($existing['role'] ?? '');
         $nextRole = array_key_exists('role', $payload) ? (string) $payload['role'] : '';
@@ -115,26 +131,28 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($jwt, $users, $events, $registrations, $results, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $isSuperAdmin, $touchesAdminAccount): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($jwt, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $tickets, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
             $files = $request->getUploadedFiles();
             $file = $files['file'] ?? null;
             if (!$file instanceof \Psr\Http\Message\UploadedFileInterface) {
-                return JsonResponder::error($response, 'validation_error', 'Image file is required', 422);
+                return JsonResponder::error($response, 'validation_error', 'Wybierz plik obrazu.', 422);
             }
 
             try {
                 $result = $uploads->storeImage($file, 'avatars');
             } catch (RuntimeException $e) {
                 $messages = [
-                    'file_too_large' => 'Uploaded image is too large',
-                    'unsupported_file_type' => 'Only JPG, PNG and WebP images are supported',
-                    'upload_dir_unavailable' => 'Upload directory is unavailable',
-                    'upload_failed' => 'File upload failed',
+                    'file_too_large' => 'Obraz jest za duży. Maksymalny rozmiar pliku to 5 MB.',
+                    'unsupported_file_type' => 'Nieobsługiwany format obrazu. Wgraj plik JPG, PNG albo WebP.',
+                    'invalid_image_dimensions' => 'Nie udało się odczytać wymiarów obrazu. Wybierz inny plik.',
+                    'image_dimensions_too_large' => 'Obraz ma zbyt dużą rozdzielczość. Zmniejsz go i spróbuj ponownie.',
+                    'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
+                    'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Upload failed', 422);
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
             }
 
             $auth = (array) $request->getAttribute('auth');
@@ -143,73 +161,78 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 $users->update($userId, ['avatar' => $result['url']]);
             }
 
-            return JsonResponder::ok($response, $result, 'Avatar uploaded', 201);
+            return JsonResponder::ok($response, $result, 'Zdjęcie profilowe zostało wgrane.', 201);
         })->add(new AuthMiddleware($jwt));
 
         $api->post('/uploads/event-images', function (Request $request, Response $response) use ($uploads) {
             $files = $request->getUploadedFiles();
             $file = $files['file'] ?? null;
             if (!$file instanceof \Psr\Http\Message\UploadedFileInterface) {
-                return JsonResponder::error($response, 'validation_error', 'Image file is required', 422);
+                return JsonResponder::error($response, 'validation_error', 'Wybierz plik obrazu.', 422);
             }
 
             try {
                 $result = $uploads->storeImage($file, 'events');
             } catch (RuntimeException $e) {
                 $messages = [
-                    'file_too_large' => 'Uploaded image is too large',
-                    'unsupported_file_type' => 'Only JPG, PNG and WebP images are supported',
-                    'upload_dir_unavailable' => 'Upload directory is unavailable',
-                    'upload_failed' => 'File upload failed',
+                    'file_too_large' => 'Obraz jest za duży. Maksymalny rozmiar pliku to 5 MB.',
+                    'unsupported_file_type' => 'Nieobsługiwany format obrazu. Wgraj plik JPG, PNG albo WebP.',
+                    'invalid_image_dimensions' => 'Nie udało się odczytać wymiarów obrazu. Wybierz inny plik.',
+                    'image_dimensions_too_large' => 'Obraz ma zbyt dużą rozdzielczość. Zmniejsz go i spróbuj ponownie.',
+                    'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
+                    'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Upload failed', 422);
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
             }
 
-            return JsonResponder::ok($response, $result, 'Image uploaded', 201);
+            return JsonResponder::ok($response, $result, 'Obraz został wgrany.', 201);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
         $api->post('/uploads/event-documents', function (Request $request, Response $response) use ($uploads) {
             $files = $request->getUploadedFiles();
             $file = $files['file'] ?? null;
             if (!$file instanceof \Psr\Http\Message\UploadedFileInterface) {
-                return JsonResponder::error($response, 'validation_error', 'File is required', 422);
+                return JsonResponder::error($response, 'validation_error', 'Wybierz plik do wgrania.', 422);
             }
 
             try {
                 $result = $uploads->storeDocument($file, 'event-docs');
             } catch (RuntimeException $e) {
                 $messages = [
-                    'file_too_large' => 'Uploaded file is too large',
-                    'unsupported_file_type' => 'Only PDF, DOC, DOCX, XLS, XLSX, TXT and image files are supported',
-                    'upload_dir_unavailable' => 'Upload directory is unavailable',
-                    'upload_failed' => 'File upload failed',
+                    'file_too_large' => 'Plik jest za duży. Maksymalny rozmiar pliku to 5 MB.',
+                    'unsupported_file_type' => 'Nieobsługiwany format pliku. Dozwolone są PDF, DOC, DOCX, XLS, XLSX, TXT oraz JPG, PNG i WebP.',
+                    'image_dimensions_too_large' => 'Obraz ma zbyt dużą rozdzielczość. Zmniejsz go i spróbuj ponownie.',
+                    'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
+                    'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Upload failed', 422);
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
             }
 
-            return JsonResponder::ok($response, $result, 'Document uploaded', 201);
+            return JsonResponder::ok($response, $result, 'Plik został wgrany.', 201);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
         $api->post('/uploads/partner-logos', function (Request $request, Response $response) use ($uploads) {
             $files = $request->getUploadedFiles();
             $file = $files['file'] ?? null;
             if (!$file instanceof \Psr\Http\Message\UploadedFileInterface) {
-                return JsonResponder::error($response, 'validation_error', 'Logo file is required', 422);
+                return JsonResponder::error($response, 'validation_error', 'Wybierz plik logo.', 422);
             }
 
             try {
                 $result = $uploads->storeImage($file, 'partners');
             } catch (RuntimeException $e) {
                 $messages = [
-                    'file_too_large' => 'Uploaded image is too large',
-                    'unsupported_file_type' => 'Only JPG, PNG and WebP images are supported',
-                    'upload_dir_unavailable' => 'Upload directory is unavailable',
-                    'upload_failed' => 'File upload failed',
+                    'file_too_large' => 'Logo jest za duże. Maksymalny rozmiar pliku to 5 MB.',
+                    'unsupported_file_type' => 'Nieobsługiwany format logo. Wgraj plik JPG, PNG albo WebP.',
+                    'invalid_image_dimensions' => 'Nie udało się odczytać wymiarów logo. Wybierz inny plik.',
+                    'image_dimensions_too_large' => 'Logo ma zbyt dużą rozdzielczość. Zmniejsz je i spróbuj ponownie.',
+                    'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
+                    'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Upload failed', 422);
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
             }
 
-            return JsonResponder::ok($response, $result, 'Logo uploaded', 201);
+            return JsonResponder::ok($response, $result, 'Logo zostało wgrane.', 201);
         })->add(new AuthMiddleware($jwt, $adminRoles));
 
         $api->get('/uploads/{path:.+}', function (Request $request, Response $response, array $args) use ($uploads) {
@@ -356,7 +379,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'invalid_organizer', 'Active organizer is required', 422);
             }
             if ($role !== 'organizer' && !$isStaffRole($role)) {
-                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             try {
                 return JsonResponder::ok($response, $events->createForOrganizer($payload, $organizer, (string) ($auth['sub'] ?? '')), 'Event created', 201);
@@ -371,7 +394,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             if (!$canManageEvent($event, $auth)) {
-                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             $payload = $body($request);
             $role = (string) ($auth['role'] ?? '');
@@ -401,7 +424,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 }
                 unset($payload['organizerId'], $payload['organizerName']);
             } elseif (!$isStaffRole($role)) {
-                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             return JsonResponder::ok($response, $events->update($args['id'], $payload));
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
@@ -409,7 +432,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             if (!$canManageEvent($event, $auth)) {
-                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             $role = (string) ($auth['role'] ?? '');
             if (!$event || !$events->canDeleteBeforeRegistrationOpened($event)) {
@@ -422,7 +445,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             if (!$canManageEvent($event, $auth)) {
-                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             $role = (string) ($auth['role'] ?? '');
             $status = (string) ($body($request)['status'] ?? 'draft');
@@ -445,7 +468,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->post('/events/{id}/submit', function (Request $request, Response $response, array $args) use ($events, $canManageEvent) {
             $auth = (array) $request->getAttribute('auth');
             if (!$canManageEvent($events->find($args['id']), $auth)) {
-                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             $event = $events->submit($args['id']);
             return $event ? JsonResponder::ok($response, $event) : JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be submitted in its current status', 409);
@@ -469,7 +492,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $role = (string) ($auth['role'] ?? '');
             $isOwner = $role === 'organizer' && ($event['organizerId'] ?? '') === ($auth['sub'] ?? '');
             if (!$isOwner && !in_array($role, $publisherRoles, true)) {
-                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             $published = $events->publish($args['id'], (string) ($auth['sub'] ?? ''));
             return $published ? JsonResponder::ok($response, $published) : JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be published in its current status', 409);
@@ -478,7 +501,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $auth = (array) $request->getAttribute('auth');
             $role = (string) ($auth['role'] ?? '');
             if (!$isStaffRole($role) && (($auth['sub'] ?? '') !== $args['organizerId'])) {
-                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             return JsonResponder::ok($response, $events->byOrganizer($args['organizerId'], $role === 'superadmin'));
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
@@ -486,7 +509,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $auth = (array) $request->getAttribute('auth');
             $role = (string) ($auth['role'] ?? '');
             if (!$isStaffRole($role) && (($auth['sub'] ?? '') !== $args['organizerId'])) {
-                return JsonResponder::error($response, 'forbidden', 'Insufficient permissions', 403);
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             return JsonResponder::ok($response, $events->eventLimit($args['organizerId']));
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
@@ -551,25 +574,226 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->patch('/registrations/{id}/payment-details', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->updatePaymentDetails($args['id'], $body($request))))
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
+        $api->get('/virtual-results', function (Request $request, Response $response) use ($events, $virtualResults, $query, $isStaffRole, $canManageEvent) {
+            $auth = (array) $request->getAttribute('auth');
+            $role = (string) ($auth['role'] ?? '');
+            $userId = (string) ($auth['sub'] ?? '');
+            $filters = $query($request);
+
+            if ($isStaffRole($role) || $role === 'organizer') {
+                $eventId = (string) ($filters['eventId'] ?? '');
+                if ($eventId !== '' && !$canManageEvent($events->find($eventId), $auth)) {
+                    return JsonResponder::error($response, 'forbidden', 'You cannot manage this event', 403);
+                }
+                if ($role === 'organizer' && $eventId === '') {
+                    $managedEventIds = array_map(static fn (array $event): string => (string) $event['id'], $events->byOrganizer($userId));
+                    $items = array_values(array_filter($virtualResults->list($filters), static fn (array $submission): bool => in_array((string) $submission['eventId'], $managedEventIds, true)));
+                    return JsonResponder::ok($response, $items);
+                }
+                return JsonResponder::ok($response, $virtualResults->list($filters));
+            }
+
+            $filters['userId'] = $userId;
+            return JsonResponder::ok($response, $virtualResults->list($filters));
+        })->add(new AuthMiddleware($jwt));
+
+        $api->post('/virtual-results', function (Request $request, Response $response) use ($virtualResults, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            try {
+                return JsonResponder::ok(
+                    $response,
+                    $virtualResults->submit($body($request), (string) ($auth['sub'] ?? '')),
+                    'Virtual result submitted',
+                    201
+                );
+            } catch (RuntimeException $e) {
+                $messages = [
+                    'validation_error' => 'Sprawdz poprawność danych i spróbuj ponownie.',
+                    'virtual_event_required' => 'Wynik można zgłosić tylko dla wydarzenia wirtualnego.',
+                    'virtual_result_window_closed' => 'Wynik można zgłosić tylko w aktywnym oknie startowym.',
+                    'virtual_result_registration_required' => 'Nie znaleziono aktywnej rejestracji na ten dystans.',
+                    'virtual_result_duplicate' => 'Wynik dla tego dystansu został już zgłoszony.',
+                ];
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się zgłosić wyniku.', 422);
+            }
+        })->add(new AuthMiddleware($jwt, ['participant']));
+
+        $api->patch('/virtual-results/{id}/review', function (Request $request, Response $response, array $args) use ($events, $virtualResults, $body, $canManageEvent) {
+            $submission = $virtualResults->find((string) $args['id']);
+            if (!$submission) {
+                return JsonResponder::error($response, 'not_found', 'Submission not found', 404);
+            }
+            if (!$canManageEvent($events->find((string) $submission['eventId']), (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'You cannot manage this event', 403);
+            }
+
+            $payload = $body($request);
+            $auth = (array) $request->getAttribute('auth');
+            try {
+                return JsonResponder::ok($response, $virtualResults->review(
+                    (string) $args['id'],
+                    (string) ($payload['status'] ?? ''),
+                    (string) ($auth['sub'] ?? ''),
+                    isset($payload['reason']) ? (string) $payload['reason'] : null
+                ));
+            } catch (RuntimeException $e) {
+                return JsonResponder::error($response, $e->getMessage(), 'Nie udało się zweryfikować wyniku.', 422);
+            }
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
         $api->get('/results', function (Request $request, Response $response) use ($results, $query) {
             $page = $results->list($query($request));
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
         });
         $api->get('/events/{eventId}/results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->byEvent($args['eventId'], $request->getQueryParams()['distanceId'] ?? null)));
         $api->get('/users/{userId}/results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->byUser($args['userId'])));
-        $api->post('/results', fn (Request $request, Response $response) => JsonResponder::ok($response, $results->create($body($request)), 'Result created', 201))
+        $api->post('/results', function (Request $request, Response $response) use ($events, $results, $body, $canUploadResults) {
+            $payload = $body($request);
+            $event = $events->find((string) ($payload['eventId'] ?? ''));
+            if (!$canUploadResults($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
+            }
+            return JsonResponder::ok($response, $results->create($payload), 'Result created', 201);
+        })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->patch('/results/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->update($args['id'], $body($request))))
+        $api->patch('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $body, $canUploadResults) {
+            $result = $results->find((string) $args['id']);
+            if (!$result) {
+                return JsonResponder::error($response, 'not_found', 'Result not found', 404);
+            }
+            $event = $events->find((string) $result['eventId']);
+            if (!$canUploadResults($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'result_event_not_open', 'Results can be edited only for active or past events you manage.', 403);
+            }
+            return JsonResponder::ok($response, $results->update($args['id'], $body($request)));
+        })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->delete('/results/{id}', function (Request $request, Response $response, array $args) use ($results) {
+        $api->delete('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults) {
+            $result = $results->find((string) $args['id']);
+            if (!$result) {
+                return JsonResponder::error($response, 'not_found', 'Result not found', 404);
+            }
+            $event = $events->find((string) $result['eventId']);
+            if (!$canUploadResults($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'result_event_not_open', 'Results can be deleted only for active or past events you manage.', 403);
+            }
             $results->delete($args['id']);
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->get('/users/{userId}/personal-records', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->personalRecords($args['userId'])));
         $api->get('/events/{eventId}/team-results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->teamResults($args['eventId'])));
         $api->get('/events/{eventId}/result-documents', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->documents($args['eventId'])));
-        $api->post('/events/{eventId}/result-documents', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->createDocument($args['eventId'], $body($request)), 'Document uploaded', 201))
+        $api->post('/events/{eventId}/result-documents', function (Request $request, Response $response, array $args) use ($events, $results, $body, $canUploadResults) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canUploadResults($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
+            }
+            return JsonResponder::ok($response, $results->createDocument($args['eventId'], $body($request)), 'Document uploaded', 201);
+        })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        $api->post('/events/{eventId}/distances/{distanceId}/result-imports', function (Request $request, Response $response, array $args) use ($events, $resultImports, $uploads, $canUploadResults) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canUploadResults($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
+            }
+
+            $files = $request->getUploadedFiles();
+            $file = $files['file'] ?? null;
+            if (!$file instanceof \Psr\Http\Message\UploadedFileInterface) {
+                return JsonResponder::error($response, 'validation_error', 'Wybierz plik CSV, XLSX albo PDF.', 422);
+            }
+
+            $payload = is_array($request->getParsedBody()) ? $request->getParsedBody() : [];
+            $mode = (string) ($payload['mode'] ?? 'replace');
+            $auth = (array) $request->getAttribute('auth');
+
+            try {
+                $stored = $uploads->storeResultImport($file);
+                $batch = $resultImports->create(
+                    (string) $args['eventId'],
+                    (string) $args['distanceId'],
+                    $mode,
+                    $stored,
+                    (string) ($auth['sub'] ?? '')
+                );
+                return JsonResponder::ok($response, $batch, 'Import przygotowany', 201);
+            } catch (RuntimeException $e) {
+                $messages = [
+                    'file_too_large' => 'Plik jest za duzy. Maksymalny rozmiar to 5 MB.',
+                    'unsupported_file_type' => 'Nieobslugiwany format pliku. Wgraj CSV, XLSX albo PDF.',
+                    'empty_import_file' => 'Plik nie zawiera danych do importu.',
+                    'xlsx_not_supported' => 'Serwer PHP nie obsluguje odczytu XLSX. Wgraj CSV albo wlacz rozszerzenie ZipArchive.',
+                    'pdf_text_not_detected' => 'Nie udalo sie odczytac tekstu z PDF. To moze byc skan wymagajacy OCR.',
+                    'pdf_table_not_detected' => 'Odczytano tekst z PDF, ale nie wykryto wierszy wynikow. Wgraj CSV/XLSX albo popraw dane recznie po konwersji.',
+                    'validation_error' => 'Sprawdz poprawność danych i spróbuj ponownie.',
+                ];
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udalo sie przygotowac importu.', 422);
+            }
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        $api->get('/result-imports/{id}', function (Request $request, Response $response, array $args) use ($events, $resultImports, $canManageEvent) {
+            $batch = $resultImports->find((string) $args['id']);
+            if (!$batch) {
+                return JsonResponder::error($response, 'not_found', 'Import not found', 404);
+            }
+            if (!$canManageEvent($events->find((string) $batch['eventId']), (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'You cannot manage this event', 403);
+            }
+            return JsonResponder::ok($response, $batch);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        $api->patch('/result-imports/{id}/mapping', function (Request $request, Response $response, array $args) use ($events, $resultImports, $body, $canUploadResults) {
+            $batch = $resultImports->find((string) $args['id']);
+            if (!$batch) {
+                return JsonResponder::error($response, 'not_found', 'Import not found', 404);
+            }
+            if (!$canUploadResults($events->find((string) $batch['eventId']), (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
+            }
+            $payload = $body($request);
+            try {
+                return JsonResponder::ok($response, $resultImports->analyze((string) $args['id'], $payload['mapping'] ?? [], $payload['sheetName'] ?? null));
+            } catch (RuntimeException $e) {
+                return JsonResponder::error($response, $e->getMessage(), 'Nie udalo sie przeanalizowac importu.', 422);
+            }
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        $api->patch('/result-import-rows/{id}', function (Request $request, Response $response, array $args) use ($events, $resultImports, $body, $canUploadResults) {
+            try {
+                $existingBatch = $resultImports->batchForRow((string) $args['id']);
+                if (!$existingBatch) {
+                    return JsonResponder::error($response, 'not_found', 'Import row not found', 404);
+                }
+                if (!$canUploadResults($events->find((string) $existingBatch['eventId']), (array) $request->getAttribute('auth'))) {
+                    return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
+                }
+                $batch = $resultImports->updateRow((string) $args['id'], $body($request));
+                return JsonResponder::ok($response, $batch);
+            } catch (RuntimeException $e) {
+                $status = $e->getMessage() === 'not_found' ? 404 : 422;
+                return JsonResponder::error($response, $e->getMessage(), 'Nie udalo sie zaktualizowac wiersza importu.', $status);
+            }
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        $api->post('/result-imports/{id}/commit', function (Request $request, Response $response, array $args) use ($events, $resultImports, $canUploadResults) {
+            $batch = $resultImports->find((string) $args['id']);
+            if (!$batch) {
+                return JsonResponder::error($response, 'not_found', 'Import not found', 404);
+            }
+            if (!$canUploadResults($events->find((string) $batch['eventId']), (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
+            }
+            try {
+                return JsonResponder::ok($response, $resultImports->commit((string) $args['id']), 'Wyniki zapisane');
+            } catch (RuntimeException $e) {
+                $messages = [
+                    'result_import_unresolved_rows' => 'Rozwiaz wszystkie problematyczne wiersze przed zatwierdzeniem importu.',
+                    'validation_error' => 'Nie znaleziono wydarzenia albo dystansu dla importu.',
+                ];
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udalo sie zatwierdzic importu.', 422);
+            }
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
         $api->get('/series', function (Request $request, Response $response) use ($series, $query, $optionalAuth, $isStaffRole) {
             $filters = $query($request);
@@ -613,6 +837,23 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             ['id' => 'blik', 'name' => 'BLIK'],
             ['id' => 'bank', 'name' => 'Przelew bankowy'],
         ]));
+
+        $api->get('/insurance/settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->getSettings()));
+        $api->patch('/insurance/settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->updateSettings($body($request))))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+
+        $api->get('/shop/orders', fn (Request $request, Response $response) => JsonResponder::ok($response, $orders->list($query($request))))
+            ->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->get('/shop/orders/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $orders->find($args['id'])))
+            ->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->post('/shop/orders', fn (Request $request, Response $response) => JsonResponder::ok($response, $orders->create($body($request)), 'Order created', 201))
+            ->add(new AuthMiddleware($jwt, []));
+        $api->patch('/shop/orders/{id}/status', function (Request $request, Response $response, array $args) use ($orders, $body) {
+            $data = $body($request);
+            return JsonResponder::ok($response, $orders->updateStatus($args['id'], (string) ($data['status'] ?? ''), $data['trackingNumber'] ?? null));
+        })->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->patch('/shop/orders/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $orders->update($args['id'], $body($request))))
+            ->add(new AuthMiddleware($jwt, $staffRoles));
 
         $api->get('/shop/products', function (Request $request, Response $response) use ($shop, $query, $optionalAuth, $isStaffRole) {
             $filters = $query($request);
@@ -722,20 +963,22 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $files = $request->getUploadedFiles();
             $file = $files['file'] ?? null;
             if (!$file instanceof \Psr\Http\Message\UploadedFileInterface) {
-                return JsonResponder::error($response, 'validation_error', 'Image file is required', 422);
+                return JsonResponder::error($response, 'validation_error', 'Wybierz plik obrazu.', 422);
             }
             try {
                 $result = $uploads->storeImage($file, 'event-backgrounds');
             } catch (RuntimeException $e) {
                 $messages = [
-                    'file_too_large' => 'Uploaded image is too large',
-                    'unsupported_file_type' => 'Only JPG, PNG and WebP images are supported',
-                    'upload_dir_unavailable' => 'Upload directory is unavailable',
-                    'upload_failed' => 'File upload failed',
+                    'file_too_large' => 'Obraz jest za duży. Maksymalny rozmiar pliku to 5 MB.',
+                    'unsupported_file_type' => 'Nieobsługiwany format obrazu. Wgraj plik JPG, PNG albo WebP.',
+                    'invalid_image_dimensions' => 'Nie udało się odczytać wymiarów obrazu. Wybierz inny plik.',
+                    'image_dimensions_too_large' => 'Obraz ma zbyt dużą rozdzielczość. Zmniejsz go i spróbuj ponownie.',
+                    'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
+                    'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Upload failed', 422);
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
             }
-            return JsonResponder::ok($response, $result, 'Background uploaded', 201);
+            return JsonResponder::ok($response, $result, 'Tło wydarzenia zostało wgrane.', 201);
         })->add(new AuthMiddleware($jwt, $staffRoles));
         $api->post('/event-backgrounds', function (Request $request, Response $response) use ($backgrounds, $body) {
             $payload = $body($request);
@@ -772,5 +1015,341 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             ->add(new AuthMiddleware($jwt, ['admin']));
         $api->get('/admin/online-sessions', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->onlineSessions()))
             ->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->post('/admin/client-logs', function (Request $request, Response $response) use ($admin, $body) {
+            $data = $body($request);
+            $logs = is_array($data['logs'] ?? null) ? $data['logs'] : [];
+            foreach ($logs as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                $admin->insertActivityLog([
+                    'id' => $entry['id'] ?? null,
+                    'level' => $entry['level'] ?? 'info',
+                    'category' => $entry['category'] ?? 'system',
+                    'action' => $entry['action'] ?? 'client_log',
+                    'description' => $entry['description'] ?? '',
+                    'userId' => $entry['userId'] ?? null,
+                    'userRole' => $entry['userRole'] ?? null,
+                    'userName' => $entry['userName'] ?? null,
+                    'targetType' => $entry['targetType'] ?? null,
+                    'targetId' => $entry['targetId'] ?? null,
+                    'targetName' => $entry['targetName'] ?? null,
+                    'metadata' => $entry['metadata'] ?? null,
+                    'sessionId' => $entry['sessionId'] ?? null,
+                    'timestamp' => $entry['timestamp'] ?? null,
+                    'source' => 'client',
+                ]);
+            }
+            return JsonResponder::ok($response, ['received' => count($logs)]);
+        })->add(new AuthMiddleware($jwt, []));
+
+        $api->get('/users/{userId}/tickets', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $tickets->byUser($args['userId'])))
+            ->add(new AuthMiddleware($jwt, []));
+        $api->get('/users/{userId}/certificates', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $certificates->byUser($args['userId'])))
+            ->add(new AuthMiddleware($jwt, []));
+
+        // ── Dev seed endpoint (only available when APP_ENV=local) ──────────────────
+        $api->post('/dev/seed-event', function (Request $request, Response $response) use ($jwt, $users, $events, $registrations, $results, $body) {
+            if ((string) Env::get('APP_ENV', 'production') !== 'local') {
+                return JsonResponder::error($response, 'forbidden', 'Dev endpoint only available in local environment', 403);
+            }
+
+            // Decode JWT manually — skips the strict middleware so expired-but-otherwise-valid
+            // tokens from dev sessions still work. APP_ENV guard is the security boundary here.
+            $auth = [];
+            $header = $request->getHeaderLine('Authorization');
+            if (preg_match('/^Bearer\s+(.+)$/i', $header, $m)) {
+                try {
+                    $auth = $jwt->decode($m[1]);
+                } catch (\Throwable) {
+                    // allow; caller identity falls back to empty, organizer flow uses seeded account
+                }
+            }
+
+            $payload = $body($request);
+            $participantCount = max(1, min(500, (int) ($payload['participantCount'] ?? 20)));
+
+            // JWT identity; fall back to body-supplied callerId when token is expired/absent
+            $callerId = (string) ($auth['sub'] ?? $payload['callerId'] ?? '');
+            $callerRole = (string) ($auth['role'] ?? $payload['callerRole'] ?? '');
+
+            // ── 1. Resolve organizer ─────────────────────────────────────────────
+            $organizer = $callerRole === 'organizer' && $callerId !== '' ? $users->find($callerId) : null;
+            if ($organizer === null) {
+                // Staff: create a dedicated organizer account for this seed run
+                $orgEmail = 'seed.org.' . substr(bin2hex(random_bytes(4)), 0, 8) . '@devtool.pl';
+                $orgNames = ['Stowarzyszenie Biegaczy Aktywnych', 'Klub Sportowy Sprint', 'RunForFun', 'Sport Events Polska', 'Active Sport Foundation'];
+                $organizer = $users->create([
+                    'name' => $orgNames[array_rand($orgNames)],
+                    'email' => $orgEmail,
+                    'password' => 'demo123',
+                    'role' => 'organizer',
+                ]);
+            }
+
+            // ── 2. Generate event data ───────────────────────────────────────────
+            $cities = ['Warszawa', 'Kraków', 'Wrocław', 'Poznań', 'Gdańsk', 'Łódź', 'Katowice', 'Lublin', 'Rzeszów', 'Toruń'];
+            $locations = ['Park Miejski', 'Bulwary Wiślane', 'Stadion Miejski', 'Błonia', 'Las Miejski', 'Centrum Sportowe'];
+            $prefixes = ['Bieg', 'Maraton', 'Półmaraton', 'Grand Prix', 'Memoriał', 'Nocny Bieg', 'Cross', 'Ultramaraton'];
+            $themes = ['Lasu', 'Gór', 'Miasta', 'Wiosny', 'Lata', 'Mazur', 'Tatr', 'Śląska', 'Wybrzeża', 'Podlasia'];
+            $disciplines = ['running', 'cycling', 'triathlon', 'multisport'];
+
+            $discipline = (string) ($payload['discipline'] ?? $disciplines[array_rand($disciplines)]);
+            if (!in_array($discipline, $disciplines, true)) {
+                $discipline = $disciplines[array_rand($disciplines)];
+            }
+
+            $city = $cities[array_rand($cities)];
+            $eventName = $prefixes[array_rand($prefixes)] . ' ' . $themes[array_rand($themes)] . ' ' . date('Y');
+            $slug = strtolower(preg_replace('/[^a-z0-9]+/i', '-', iconv('UTF-8', 'ASCII//TRANSLIT', $eventName))) . '-' . substr(bin2hex(random_bytes(4)), 0, 6);
+
+            // Stay within the current calendar year so the frontend year filter shows the event
+            $yearStart = (int) strtotime(date('Y') . '-01-01');
+            $yesterday = (int) strtotime('-1 day');
+            $eventTs = random_int($yearStart, $yesterday);
+            $eventDate = date('Y-m-d', $eventTs);
+            $regDeadline = date('Y-m-d', $eventTs - 7 * 86400);
+
+            $distanceOptions = [
+                'running' => [['name' => '5 km', 'km' => 5], ['name' => '10 km', 'km' => 10], ['name' => 'Półmaraton', 'km' => 21.097], ['name' => 'Maraton', 'km' => 42.195]],
+                'cycling' => [['name' => '25 km', 'km' => 25], ['name' => '50 km', 'km' => 50], ['name' => '100 km', 'km' => 100]],
+                'triathlon' => [['name' => 'Sprint (750/20/5)', 'km' => null], ['name' => 'Olimpijski (1500/40/10)', 'km' => null]],
+                'multisport' => [['name' => 'Dystans A (krótki)', 'km' => null], ['name' => 'Dystans B (długi)', 'km' => null]],
+            ];
+            $pool = $distanceOptions[$discipline];
+            shuffle($pool);
+            $distCount = min(count($pool), random_int(1, 3));
+            $selectedDists = array_slice($pool, 0, $distCount);
+
+            $distances = [];
+            foreach ($selectedDists as $d) {
+                $price = random_int(3, 15) * 10;
+                $distId = bin2hex(random_bytes(8));
+                $distances[] = [
+                    'id' => $distId,
+                    'name' => $d['name'],
+                    'length' => $d['km'],
+                    'unit' => 'km',
+                    'categories' => ['Open'],
+                    'limit' => random_int(100, 500),
+                    'registeredCount' => 0,
+                    'price' => $price,
+                    'officePrice' => $price + 20,
+                ];
+            }
+
+            $isVirtual = isset($payload['isVirtual']) ? (bool) $payload['isVirtual'] : (random_int(0, 9) < 2);
+            $isPrivate = false;  // seed events are always public so they're discoverable
+
+            $eventData = [
+                'name' => $eventName,
+                'slug' => $slug,
+                'discipline' => $discipline,
+                'date' => $eventDate,
+                'startDate' => $eventDate,
+                'endDate' => $eventDate,
+                'location' => $locations[array_rand($locations)] . ', ' . $city,
+                'city' => $city,
+                'description' => $eventName . ' to jedno z najpopularniejszych wydarzeń sportowych w regionie. Serdecznie zapraszamy!',
+                'imageUrl' => '',
+                'organizerId' => $organizer['id'],
+                'organizerName' => $organizer['name'],
+                'registrationDeadline' => $regDeadline,
+                'distances' => $distances,
+                'isVirtual' => $isVirtual,
+                'isPrivate' => $isPrivate,
+                'featured' => random_int(0, 4) === 0,
+                'logisticsInfo' => [
+                    'parking' => ['status' => 'yes', 'infoHtml' => '<p>Bezpłatny parking przy obiekcie.</p>'],
+                    'raceOffice' => ['status' => 'yes', 'infoHtml' => '<p>Biuro zawodów czynne od 7:00.</p>'],
+                    'medicalPoint' => ['status' => 'yes', 'infoHtml' => '<p>Punkt medyczny przy starcie.</p>'],
+                    'toilets' => ['status' => 'yes', 'infoHtml' => '<p>Toalety przenośne na trasie.</p>'],
+                    'timeMeasurement' => ['status' => 'yes', 'infoHtml' => '<p>Profesjonalny pomiar czasu chipem.</p>'],
+                ],
+                'rulesHtml' => '<h3>Regulamin</h3><p>Udział dobrowolny. Obowiązkowy numer startowy przez cały czas biegu.</p>',
+                'paymentConfig' => ['type' => 'organizer_bank', 'bankAccountHolder' => $organizer['name'], 'transferTitle' => 'Wpisowe ' . $eventName],
+                'paymentMethods' => [
+                    ['id' => bin2hex(random_bytes(4)), 'name' => 'Przelew bankowy', 'enabled' => true],
+                ],
+            ];
+
+            // Use create() directly to bypass organizer credit check
+            $eventData['organizerId'] = $organizer['id'];
+            $eventData['organizerName'] = !empty($organizer['companyName']) ? $organizer['companyName'] : $organizer['name'];
+            $eventData['createdBy'] = $callerId;
+            $event = $events->create($eventData);
+            $eventId = $event['id'];
+
+            // ── 3. Set status to past — use update() which skips transition guards ─
+            $events->update($eventId, ['status' => 'past']);
+
+            // ── 4. Generate participants & registrations & results ────────────────
+            $firstNamesM = ['Andrzej', 'Bartosz', 'Dawid', 'Filip', 'Grzegorz', 'Jakub', 'Kamil', 'Łukasz', 'Marek', 'Paweł', 'Piotr', 'Rafał', 'Tomasz', 'Wojciech', 'Adam', 'Michał', 'Robert', 'Marcin', 'Artur', 'Mariusz', 'Krzysztof', 'Sebastian'];
+            $firstNamesF = ['Anna', 'Barbara', 'Dorota', 'Ewa', 'Joanna', 'Katarzyna', 'Małgorzata', 'Natalia', 'Agnieszka', 'Monika', 'Marta', 'Karolina', 'Magdalena', 'Aleksandra', 'Julia', 'Patrycja', 'Renata', 'Sandra'];
+            $lastNames = ['Kowalski', 'Nowak', 'Wiśniewski', 'Wójcik', 'Kowalczyk', 'Kamiński', 'Lewandowski', 'Zielińska', 'Szymański', 'Woźniak', 'Dąbrowski', 'Kozłowski', 'Jankowski', 'Mazur', 'Wojciechowski', 'Kwiatkowski', 'Krawczyk', 'Piotrowski'];
+            $domains = ['gmail.com', 'wp.pl', 'onet.pl', 'o2.pl', 'interia.pl'];
+
+            $createdParticipants = [];
+            $usedEmails = [];
+
+            for ($i = 0; $i < $participantCount; $i++) {
+                $gender = random_int(0, 9) < 4 ? 'K' : 'M';
+                $firstName = $gender === 'M' ? $firstNamesM[array_rand($firstNamesM)] : $firstNamesF[array_rand($firstNamesF)];
+                $lastName = $lastNames[array_rand($lastNames)];
+                if ($gender === 'K' && str_ends_with($lastName, 'ski')) {
+                    $lastName = substr($lastName, 0, -3) . 'ska';
+                }
+
+                $baseEmail = strtolower(
+                    preg_replace('/[^a-z0-9.]+/', '.', iconv('UTF-8', 'ASCII//TRANSLIT', "{$firstName}.{$lastName}"))
+                );
+                $email = $baseEmail . '@' . $domains[array_rand($domains)];
+                $attempt = 0;
+                while (in_array($email, $usedEmails, true) && $attempt < 5) {
+                    $email = $baseEmail . random_int(1, 99) . '@' . $domains[array_rand($domains)];
+                    $attempt++;
+                }
+                $usedEmails[] = $email;
+
+                $birthYear = random_int(1965, 2005);
+
+                // Find existing user or create new one
+                $existing = $users->findByEmail($email);
+                if ($existing) {
+                    $createdParticipants[] = [
+                        'id' => $existing['id'],
+                        'name' => $existing['name'],
+                        'gender' => $existing['gender'] ?? $gender,
+                        'birthYear' => $existing['birthYear'] ?? $birthYear,
+                        'email' => $email,
+                    ];
+                } else {
+                    $participant = $users->create([
+                        'name' => "{$firstName} {$lastName}",
+                        'email' => $email,
+                        'password' => 'demo123',
+                        'role' => 'participant',
+                        'gender' => $gender,
+                        'birthYear' => $birthYear,
+                        'phone' => '+48 ' . random_int(500, 799) . ' ' . random_int(100, 999) . ' ' . random_int(100, 999),
+                    ]);
+                    $createdParticipants[] = [
+                        'id' => $participant['id'],
+                        'name' => $participant['name'],
+                        'gender' => $gender,
+                        'birthYear' => $birthYear,
+                        'email' => $email,
+                    ];
+                }
+            }
+
+            // Distribute participants across distances
+            $distCount2 = count($distances);
+            $perDist = max(1, (int) floor(count($createdParticipants) / $distCount2));
+            $regCount = 0;
+            $resultCount = 0;
+            $currentYear = (int) date('Y');
+
+            foreach ($distances as $distIdx => $dist) {
+                $start = $distIdx * $perDist;
+                $end = $distIdx === $distCount2 - 1 ? count($createdParticipants) : $start + $perDist;
+                $distParticipants = array_slice($createdParticipants, $start, $end - $start);
+
+                // Estimate times (seconds) per distance
+                $pacePerKm = 320;
+                if (isset($dist['length']) && $dist['length'] > 0) {
+                    $basePaces = ['5 km' => 280, '10 km' => 320, 'Półmaraton' => 350, 'Maraton' => 380, '25 km' => 300, '50 km' => 330, '100 km' => 400];
+                    $pacePerKm = $basePaces[$dist['name']] ?? 320;
+                }
+                $baseSeconds = $pacePerKm * ($dist['length'] ?? 10);
+
+                $timings = [];
+                foreach ($distParticipants as $p) {
+                    $spread = (int) ($baseSeconds * 0.3);
+                    $seconds = max(60, $baseSeconds + random_int(-$spread, (int) ($spread * 2)));
+                    $r = random_int(0, 99);
+                    $status = $r < 8 ? 'dnf' : ($r < 10 ? 'dsq' : 'finished');
+                    $timings[] = ['p' => $p, 'seconds' => $seconds, 'status' => $status];
+                }
+                usort($timings, fn($a, $b) => $a['status'] === 'finished' && $b['status'] !== 'finished' ? -1 : ($a['status'] !== 'finished' && $b['status'] === 'finished' ? 1 : $a['seconds'] - $b['seconds']));
+
+                $pos = 1;
+                $catPositions = [];
+
+                foreach ($timings as $bibIdx => $t) {
+                    $p = $t['p'];
+                    $g = $p['gender'];
+                    $decade = (int) floor(($currentYear - (int) $p['birthYear']) / 10) * 10;
+                    $cat = "{$g}{$decade}";
+                    $catPositions[$cat] = ($catPositions[$cat] ?? 0) + 1;
+                    $bibNum = str_pad((string) ($bibIdx + 1), 3, '0', STR_PAD_LEFT);
+                    $isFinished = $t['status'] === 'finished';
+                    $totalSec = $t['seconds'];
+                    $h = (int) floor($totalSec / 3600);
+                    $m = (int) floor(($totalSec % 3600) / 60);
+                    $s = $totalSec % 60;
+                    $timeStr = $h > 0
+                        ? sprintf('%d:%02d:%02d', $h, $m, $s)
+                        : sprintf('%d:%02d', $m, $s);
+
+                    // Registration
+                    $reg = $registrations->create([
+                        'eventId' => $eventId,
+                        'eventName' => $event['name'],
+                        'userId' => $p['id'],
+                        'userName' => $p['name'],
+                        'userEmail' => $p['email'],
+                        'distanceId' => $dist['id'],
+                        'distanceName' => $dist['name'],
+                        'category' => $cat,
+                        'pricePaid' => $dist['price'],
+                    ]);
+                    $registrations->update($reg['id'], [
+                        'status' => 'confirmed',
+                        'bibNumber' => $bibNum,
+                        'pricePaid' => $dist['price'],
+                        'paymentDetails' => [
+                            'startFeePaid' => true,
+                            'startFeePaidAt' => $eventDate,
+                            'startFeeAmount' => $dist['price'],
+                            'insurancePaid' => false,
+                            'merchandisePayments' => [],
+                        ],
+                    ]);
+                    $regCount++;
+
+                    // Result
+                    $results->create([
+                        'eventId' => $eventId,
+                        'eventName' => $event['name'],
+                        'distanceId' => $dist['id'],
+                        'distanceName' => $dist['name'],
+                        'userId' => $p['id'],
+                        'userName' => $p['name'],
+                        'bibNumber' => $bibNum,
+                        'category' => $cat,
+                        'time' => $isFinished ? $timeStr : strtoupper($t['status']),
+                        'timeInSeconds' => $totalSec,
+                        'position' => $isFinished ? $pos++ : 9999,
+                        'categoryPosition' => $isFinished ? $catPositions[$cat] : 9999,
+                        'status' => $t['status'],
+                        'gender' => $g,
+                        'birthYear' => (int) $p['birthYear'],
+                    ]);
+                    $resultCount++;
+                }
+            }
+
+            $finalEvent = $events->find($eventId);
+
+            return JsonResponder::ok($response, [
+                'event' => $finalEvent,
+                'organizerEmail' => $organizer['email'] ?? null,
+                'participantsCreated' => count($createdParticipants),
+                'registrationsCreated' => $regCount,
+                'resultsCreated' => $resultCount,
+                'eventUrl' => '/events/' . ($finalEvent['slug'] ?? $slug),
+            ], 'Seed event created', 201);
+        });  // no middleware — APP_ENV=local is the security boundary
     });
 };

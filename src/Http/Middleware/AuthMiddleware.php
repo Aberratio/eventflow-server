@@ -26,18 +26,18 @@ final class AuthMiddleware implements MiddlewareInterface
     {
         $header = $request->getHeaderLine('Authorization');
         if (!preg_match('/^Bearer\s+(.+)$/i', $header, $matches)) {
-            return JsonResponder::error(new SlimResponse(), 'unauthorized', 'Missing bearer token', 401);
+            return JsonResponder::error(new SlimResponse(), 'unauthorized', 'Brak aktywnej sesji. Zaloguj się ponownie.', 401);
         }
 
         try {
             $claims = $this->jwt->decode($matches[1]);
         } catch (Throwable) {
-            return JsonResponder::error(new SlimResponse(), 'unauthorized', 'Invalid or expired token', 401);
+            return JsonResponder::error(new SlimResponse(), 'unauthorized', 'Twoja sesja wygasła. Zaloguj się ponownie.', 401);
         }
 
         $role = (string) ($claims['role'] ?? '');
         if ($this->roles !== [] && !$this->isAllowed($role)) {
-            return JsonResponder::error(new SlimResponse(), 'forbidden', 'Insufficient permissions', 403);
+            return JsonResponder::error(new SlimResponse(), 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
         }
 
         return $handler->handle($request->withAttribute('auth', $claims));

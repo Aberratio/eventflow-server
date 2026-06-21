@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS virtual_result_submissions (
+  id VARCHAR(36) PRIMARY KEY,
+  event_id VARCHAR(36) NOT NULL,
+  event_name VARCHAR(255) NOT NULL,
+  distance_id VARCHAR(36) NOT NULL,
+  distance_name VARCHAR(180) NOT NULL,
+  registration_id VARCHAR(36) NOT NULL,
+  user_id VARCHAR(36) NOT NULL,
+  user_name VARCHAR(180) NOT NULL,
+  user_email VARCHAR(255) NOT NULL,
+  submitted_time VARCHAR(32) NOT NULL,
+  submitted_time_in_seconds INT NOT NULL,
+  proof_url VARCHAR(512) NULL,
+  notes TEXT NULL,
+  submitted_at VARCHAR(64) NOT NULL,
+  status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  reviewed_at VARCHAR(64) NULL,
+  reviewed_by VARCHAR(36) NULL,
+  rejection_reason TEXT NULL,
+  INDEX idx_virtual_results_event (event_id, distance_id),
+  INDEX idx_virtual_results_user (user_id),
+  INDEX idx_virtual_results_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -75,6 +75,23 @@ final class AdminRepository extends Repository
         return $this->securitySettings();
     }
 
+    /** @param array<string, mixed> $data */
+    public function insertActivityLog(array $data): void
+    {
+        $this->insert('activity_logs', [
+            'id' => $data['id'] ?? $this->id(),
+            'user_id' => (string) ($data['userId'] ?? ''),
+            'action' => (string) ($data['action'] ?? 'client_log'),
+            'description' => (string) ($data['description'] ?? ''),
+            'target_type' => $data['targetType'] ?? null,
+            'target_id' => $data['targetId'] ?? null,
+            'target_name' => $data['targetName'] ?? null,
+            'ip_address' => null,
+            'user_agent' => null,
+            'timestamp' => $data['timestamp'] ?? date(DATE_ATOM),
+        ]);
+    }
+
     /** @return array<int, array<string, mixed>> */
     public function onlineSessions(): array
     {

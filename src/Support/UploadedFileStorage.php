@@ -9,6 +9,8 @@ use RuntimeException;
 
 final class UploadedFileStorage
 {
+    private const MAX_IMAGE_PIXELS = 40000000;
+
     /** @var array<string, string> */
     private const EXTENSIONS = [
         'image/jpeg' => 'jpg',
@@ -27,6 +29,17 @@ final class UploadedFileStorage
         'image/jpeg' => 'jpg',
         'image/png' => 'png',
         'image/webp' => 'webp',
+    ];
+
+    /** @var array<string, string> */
+    private const RESULT_IMPORT_EXTENSIONS = [
+        'text/csv' => 'csv',
+        'text/plain' => 'csv',
+        'application/csv' => 'csv',
+        'application/pdf' => 'pdf',
+        'application/vnd.ms-excel' => 'csv',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+        'application/octet-stream' => '',
     ];
 
     public function __construct(
@@ -50,8 +63,12 @@ final class UploadedFileStorage
             throw new RuntimeException('file_too_large');
         }
 
-        $mimeType = strtolower((string) $file->getClientMediaType());
-        if (!array_key_exists($mimeType, self::EXTENSIONS)) {
+        $clientMimeType = strtolower((string) $file->getClientMediaType());
+        if (
+            $clientMimeType !== ''
+            && $clientMimeType !== 'application/octet-stream'
+            && !array_key_exists($clientMimeType, self::EXTENSIONS)
+        ) {
             throw new RuntimeException('unsupported_file_type');
         }
 
@@ -62,14 +79,44 @@ final class UploadedFileStorage
             throw new RuntimeException('upload_dir_unavailable');
         }
 
-        $filename = bin2hex(random_bytes(16)) . '.' . self::EXTENSIONS[$mimeType];
-        $targetPath = $targetDir . DIRECTORY_SEPARATOR . $filename;
-        $file->moveTo($targetPath);
+        $basename = bin2hex(random_bytes(16));
+        $tempPath = $targetDir . DIRECTORY_SEPARATOR . $basename . '.upload';
+        $file->moveTo($tempPath);
 
-        $imageInfo = @getimagesize($targetPath);
+        $storedSize = filesize($tempPath) ?: $size;
+        if ($storedSize <= 0 || $storedSize > $this->maxBytes) {
+            @unlink($tempPath);
+            throw new RuntimeException('file_too_large');
+        }
+
+        $imageInfo = @getimagesize($tempPath);
         if ($imageInfo === false) {
-            @unlink($targetPath);
+            @unlink($tempPath);
             throw new RuntimeException('unsupported_file_type');
+        }
+
+        $mimeType = strtolower((string) ($imageInfo['mime'] ?? ''));
+        if (!array_key_exists($mimeType, self::EXTENSIONS)) {
+            @unlink($tempPath);
+            throw new RuntimeException('unsupported_file_type');
+        }
+
+        $width = (int) ($imageInfo[0] ?? 0);
+        $height = (int) ($imageInfo[1] ?? 0);
+        if ($width <= 0 || $height <= 0) {
+            @unlink($tempPath);
+            throw new RuntimeException('invalid_image_dimensions');
+        }
+        if ($width * $height > self::MAX_IMAGE_PIXELS) {
+            @unlink($tempPath);
+            throw new RuntimeException('image_dimensions_too_large');
+        }
+
+        $filename = $basename . '.' . self::EXTENSIONS[$mimeType];
+        $targetPath = $targetDir . DIRECTORY_SEPARATOR . $filename;
+        if (!rename($tempPath, $targetPath)) {
+            @unlink($tempPath);
+            throw new RuntimeException('upload_failed');
         }
 
         $relativePath = $folder . '/' . $filename;
@@ -78,8 +125,8 @@ final class UploadedFileStorage
         return [
             'url' => $basePath . '/' . str_replace('\\', '/', $relativePath),
             'path' => $relativePath,
-            'mimeType' => (string) ($imageInfo['mime'] ?? $mimeType),
-            'size' => filesize($targetPath) ?: $size,
+            'mimeType' => $mimeType,
+            'size' => filesize($targetPath) ?: $storedSize,
         ];
     }
 
@@ -114,6 +161,27 @@ final class UploadedFileStorage
         $targetPath = $targetDir . DIRECTORY_SEPARATOR . $filename;
         $file->moveTo($targetPath);
 
+        if (str_starts_with($mimeType, 'image/')) {
+            $imageInfo = @getimagesize($targetPath);
+            $realMimeType = strtolower((string) ($imageInfo['mime'] ?? ''));
+            $width = (int) ($imageInfo[0] ?? 0);
+            $height = (int) ($imageInfo[1] ?? 0);
+            if (
+                $imageInfo === false
+                || !array_key_exists($realMimeType, self::EXTENSIONS)
+                || $realMimeType !== $mimeType
+                || $width <= 0
+                || $height <= 0
+            ) {
+                @unlink($targetPath);
+                throw new RuntimeException('unsupported_file_type');
+            }
+            if ($width * $height > self::MAX_IMAGE_PIXELS) {
+                @unlink($targetPath);
+                throw new RuntimeException('image_dimensions_too_large');
+            }
+        }
+
         $relativePath = $folder . '/' . $filename;
         $basePath = '/' . trim($this->publicBasePath, '/');
         $originalName = (string) $file->getClientFilename();
@@ -122,6 +190,61 @@ final class UploadedFileStorage
             'url' => $basePath . '/' . str_replace('\\', '/', $relativePath),
             'path' => $relativePath,
             'mimeType' => $mimeType,
+            'size' => filesize($targetPath) ?: $size,
+            'originalName' => $originalName,
+        ];
+    }
+
+    /**
+     * @return array{url: string, path: string, absolutePath: string, mimeType: string, size: int, originalName: string}
+     */
+    public function storeResultImport(UploadedFileInterface $file, string $folder = 'result-imports'): array
+    {
+        if ($file->getError() !== UPLOAD_ERR_OK) {
+            throw new RuntimeException('upload_failed');
+        }
+
+        $size = $file->getSize() ?? 0;
+        if ($size <= 0 || $size > $this->maxBytes) {
+            throw new RuntimeException('file_too_large');
+        }
+
+        $originalName = (string) $file->getClientFilename();
+        $clientMimeType = strtolower((string) $file->getClientMediaType());
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        $allowedByExtension = in_array($extension, ['csv', 'xlsx', 'pdf'], true);
+        if (!$allowedByExtension && !array_key_exists($clientMimeType, self::RESULT_IMPORT_EXTENSIONS)) {
+            throw new RuntimeException('unsupported_file_type');
+        }
+
+        $ext = $extension === 'xlsx' ? 'xlsx' : ($extension === 'pdf' ? 'pdf' : 'csv');
+        if ($clientMimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+            $ext = 'xlsx';
+        } elseif ($clientMimeType === 'application/pdf') {
+            $ext = 'pdf';
+        }
+
+        $folder = trim(preg_replace('/[^a-z0-9_-]+/i', '-', $folder) ?? 'result-imports', '-');
+        $folder = $folder === '' ? 'result-imports' : $folder;
+        $targetDir = rtrim($this->storageDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $folder;
+        if (!is_dir($targetDir) && !mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
+            throw new RuntimeException('upload_dir_unavailable');
+        }
+
+        $filename = bin2hex(random_bytes(16)) . '.' . $ext;
+        $targetPath = $targetDir . DIRECTORY_SEPARATOR . $filename;
+        $file->moveTo($targetPath);
+
+        $relativePath = $folder . '/' . $filename;
+        $basePath = '/' . trim($this->publicBasePath, '/');
+
+        return [
+            'url' => $basePath . '/' . str_replace('\\', '/', $relativePath),
+            'path' => $relativePath,
+            'absolutePath' => $targetPath,
+            'mimeType' => $ext === 'xlsx'
+                ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                : ($ext === 'pdf' ? 'application/pdf' : 'text/csv'),
             'size' => filesize($targetPath) ?: $size,
             'originalName' => $originalName,
         ];

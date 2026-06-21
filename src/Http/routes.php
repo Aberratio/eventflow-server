@@ -23,6 +23,7 @@ use ZmierzymyCzas\Domain\Insurance\InsuranceRepository;
 use ZmierzymyCzas\Domain\Shop\OrderRepository;
 use ZmierzymyCzas\Domain\Shop\ShopRepository;
 use ZmierzymyCzas\Domain\Ticket\TicketRepository;
+use ZmierzymyCzas\Domain\Authorizations\AuthorizationRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
 use ZmierzymyCzas\Support\Env;
@@ -47,6 +48,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $orders = new OrderRepository($pdo);
     $tickets = new TicketRepository($pdo);
     $certificates = new CertificateRepository($pdo);
+    $authorizations = new AuthorizationRepository($pdo);
     $uploadDir = (string) Env::get('APP_UPLOAD_DIR', 'public/uploads');
     if (!preg_match('/^(?:[a-z]:[\/\\\\]|\/|\\\\\\\\)/i', $uploadDir)) {
         $uploadDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . $uploadDir;
@@ -548,9 +550,27 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
         $api->get('/users/{userId}/registrations', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->byUser($args['userId'])))
             ->add(new AuthMiddleware($jwt));
-        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $body) {
+        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $authorizations, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $callerId = (string) ($auth['sub'] ?? '');
+            $data = $body($request);
+
+            // Jeśli rejestrujemy kogoś innego — sprawdź upoważnienie
+            $targetUserId = (string) ($data['userId'] ?? '');
+            if ($targetUserId !== '' && $targetUserId !== $callerId) {
+                if (!$authorizations->isAuthorized($targetUserId, $callerId)) {
+                    return JsonResponder::error(
+                        $response,
+                        'not_authorized_to_register',
+                        'Nie masz upoważnienia do zapisania tego uczestnika.',
+                        403
+                    );
+                }
+                $data['registeredById'] = $callerId;
+            }
+
             try {
-                return JsonResponder::ok($response, $registrations->create($body($request)), 'Registration created', 201);
+                return JsonResponder::ok($response, $registrations->create($data), 'Registration created', 201);
             } catch (RuntimeException $e) {
                 $discountErrors = [
                     'discount_code_invalid' => 'Discount code is invalid.',
@@ -1351,5 +1371,68 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 'eventUrl' => '/events/' . ($finalEvent['slug'] ?? $slug),
             ], 'Seed event created', 201);
         });  // no middleware — APP_ENV=local is the security boundary
+
+        // --- Upoważnienia uczestników ---
+
+        // Pobierz: kto mnie upoważnił + komu ja udzieliłem
+        $api->get('/authorizations', function (Request $request, Response $response) use ($authorizations): Response {
+            $auth = (array) $request->getAttribute('auth');
+            $userId = (string) ($auth['sub'] ?? '');
+
+            return JsonResponder::ok($response, [
+                'grantedToMe' => $authorizations->listGrantedToMe($userId),
+                'grantedByMe' => $authorizations->listGrantedByMe($userId),
+            ]);
+        })->add(new AuthMiddleware($jwt));
+
+        // Dodaj upoważnienie (zalogowany uczestnik upoważnia kogoś innego)
+        $api->post('/authorizations', function (Request $request, Response $response) use ($authorizations, $users, $body): Response {
+            $auth = (array) $request->getAttribute('auth');
+            $grantorId = (string) ($auth['sub'] ?? '');
+
+            if ((string) ($auth['role'] ?? '') !== 'participant') {
+                return JsonResponder::error($response, 'forbidden', 'Upoważnienia mogą udzielać tylko uczestnicy.', 403);
+            }
+
+            $data = $body($request);
+            $granteeEmail = trim((string) ($data['email'] ?? ''));
+
+            if ($granteeEmail === '') {
+                return JsonResponder::error($response, 'validation_error', 'Podaj adres e-mail osoby upoważnionej.', 422);
+            }
+
+            $grantee = $users->findByEmail($granteeEmail);
+            if ($grantee === null) {
+                return JsonResponder::error($response, 'user_not_found', 'Nie znaleziono użytkownika z tym adresem e-mail.', 404);
+            }
+
+            $granteeId = (string) $grantee['id'];
+
+            if ($granteeId === $grantorId) {
+                return JsonResponder::error($response, 'validation_error', 'Nie możesz upoważnić samego siebie.', 422);
+            }
+
+            if ($authorizations->exists($grantorId, $granteeId)) {
+                return JsonResponder::error($response, 'already_authorized', 'Ta osoba jest już upoważniona.', 409);
+            }
+
+            $record = $authorizations->grant($grantorId, $granteeId);
+
+            return JsonResponder::ok($response, $record, 'Upoważnienie zostało udzielone.', 201);
+        })->add(new AuthMiddleware($jwt));
+
+        // Usuń upoważnienie (tylko grantor może cofnąć swoje upoważnienie)
+        $api->delete('/authorizations/{id}', function (Request $request, Response $response, array $args) use ($authorizations): Response {
+            $auth = (array) $request->getAttribute('auth');
+            $grantorId = (string) ($auth['sub'] ?? '');
+            $id = (string) ($args['id'] ?? '');
+
+            $deleted = $authorizations->revoke($id, $grantorId);
+            if (!$deleted) {
+                return JsonResponder::error($response, 'not_found', 'Upoważnienie nie istnieje lub nie masz uprawnień do jego usunięcia.', 404);
+            }
+
+            return JsonResponder::ok($response, null, 'Upoważnienie zostało cofnięte.');
+        })->add(new AuthMiddleware($jwt));
     });
 };

@@ -13,7 +13,8 @@ id, event_id AS eventId, event_name AS eventName, user_id AS userId, user_name A
 user_email AS userEmail, distance_id AS distanceId, distance_name AS distanceName, category,
 registered_at AS registeredAt, status, bib_number AS bibNumber, team_name AS teamName, team_id AS teamId,
 price_paid AS pricePaid, discount_code AS discountCode, discount_amount AS discountAmount,
-insurance_paid AS insurancePaid, removed_at AS removedAt
+insurance_paid AS insurancePaid, removed_at AS removedAt,
+registered_by_id AS registeredById
 SQL;
 
     private const COLUMNS_R = <<<'SQL'
@@ -21,7 +22,8 @@ r.id, r.event_id AS eventId, r.event_name AS eventName, r.user_id AS userId, r.u
 r.user_email AS userEmail, r.distance_id AS distanceId, r.distance_name AS distanceName, r.category,
 r.registered_at AS registeredAt, r.status, r.bib_number AS bibNumber, r.team_name AS teamName, r.team_id AS teamId,
 r.price_paid AS pricePaid, r.discount_code AS discountCode, r.discount_amount AS discountAmount,
-r.insurance_paid AS insurancePaid, r.removed_at AS removedAt
+r.insurance_paid AS insurancePaid, r.removed_at AS removedAt,
+r.registered_by_id AS registeredById
 SQL;
 
     /**
@@ -128,6 +130,7 @@ SQL;
                 'status' => $startFeePaid ? 'confirmed' : 'pending',
                 'team_name' => $data['teamName'] ?? null,
                 'team_id' => $data['teamId'] ?? null,
+                'registered_by_id' => $data['registeredById'] ?? null,
                 'discount_code' => $pricing['discountCode'],
                 'discount_amount' => $pricing['discountAmount'],
                 'price_paid' => $pricing['pricePaid'],

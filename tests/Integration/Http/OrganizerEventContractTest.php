@@ -86,7 +86,7 @@ final class OrganizerEventContractTest extends HttpTestCase
         self::assertTrue($payload['success']);
         self::assertSame($this->organizerA['id'], $payload['data']['organizerId']);
         // Organizer-created events start as draft
-        self::assertSame('draft', $payload['data']['status']);
+        self::assertSame('draft', $payload['data']['publicationStatus']);
     }
 
     public function testOrganizerCannotSetFeaturedFlag(): void
@@ -165,7 +165,7 @@ final class OrganizerEventContractTest extends HttpTestCase
         self::assertTrue($this->json($response)['success']);
     }
 
-    public function testModerationWorkflowViaHttpSubmitApprovePublish(): void
+    public function testModerationWorkflowViaHttpSubmitAndApprove(): void
     {
         // Organizer creates a draft event
         $createResp = $this->request(
@@ -185,9 +185,10 @@ final class OrganizerEventContractTest extends HttpTestCase
             $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
         );
         self::assertSame(200, $submitResp->getStatusCode());
-        self::assertSame('awaiting_approval', $this->json($submitResp)['data']['status']);
+        self::assertSame('submitted', $this->json($submitResp)['data']['publicationStatus']);
 
-        // Admin approves
+        // Admin approves — E1.1: this lands directly on `published`, there is no
+        // separate publish step any more.
         $approveResp = $this->request(
             'POST',
             '/api/v1/events/' . $eventId . '/approve',
@@ -195,17 +196,38 @@ final class OrganizerEventContractTest extends HttpTestCase
             $this->bearer($this->admin['id'], 'admin', $this->admin['email'])
         );
         self::assertSame(200, $approveResp->getStatusCode());
-        self::assertSame('approved', $this->json($approveResp)['data']['status']);
+        self::assertSame('published', $this->json($approveResp)['data']['publicationStatus']);
+    }
 
-        // Organizer publishes
-        $publishResp = $this->request(
+    public function testOwnerCanCancelPublishedEventButNotDraft(): void
+    {
+        $createResp = $this->request(
             'POST',
-            '/api/v1/events/' . $eventId . '/publish',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-cancel']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+
+        $cancelDraftResp = $this->request(
+            'POST',
+            '/api/v1/events/' . $eventId . '/cancel',
             [],
             $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
         );
-        self::assertSame(200, $publishResp->getStatusCode());
-        self::assertSame('active', $this->json($publishResp)['data']['status']);
+        self::assertSame(409, $cancelDraftResp->getStatusCode());
+
+        $this->request('POST', '/api/v1/events/' . $eventId . '/submit', [], $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email']));
+        $this->request('POST', '/api/v1/events/' . $eventId . '/approve', [], $this->bearer($this->admin['id'], 'admin', $this->admin['email']));
+
+        $cancelResp = $this->request(
+            'POST',
+            '/api/v1/events/' . $eventId . '/cancel',
+            [],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(200, $cancelResp->getStatusCode());
+        self::assertSame('cancelled', $this->json($cancelResp)['data']['publicationStatus']);
     }
 
     public function testAdminCanRejectEventWithReason(): void
@@ -234,7 +256,7 @@ final class OrganizerEventContractTest extends HttpTestCase
         $payload = $this->json($rejectResp);
 
         self::assertSame(200, $rejectResp->getStatusCode());
-        self::assertSame('draft', $payload['data']['status']);
+        self::assertSame('draft', $payload['data']['publicationStatus']);
         self::assertSame('Brakuje regulaminu', $payload['data']['rejectionReason']);
     }
 
@@ -266,9 +288,16 @@ final class OrganizerEventContractTest extends HttpTestCase
         self::assertSame('validation_error', $this->json($rejectResp)['error']['code']);
     }
 
+    /**
+     * E1.1 dropped the free-text `status` column entirely (see
+     * 031_e11_event_lifecycle.sql), so there is no ENUM to patch in place any more — the
+     * schema this test needs only exists once every migration has actually run. Calling
+     * the real Migrator (idempotent, no ledger — see its docblock) is the only thing that
+     * still makes sense here.
+     */
     private function ensureEventStatusSchema(): void
     {
-        $this->pdo->exec("ALTER TABLE events MODIFY status ENUM('draft','awaiting_approval','approved','active','past','archived','deleted') NOT NULL DEFAULT 'draft'");
+        \ZmierzymyCzas\Database\Migrator::applyAll($this->pdo);
     }
 
     private function eventPayload(array $overrides = []): array

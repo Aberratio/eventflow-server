@@ -149,14 +149,23 @@ final class FixtureFieldFiller
         return $this->resultsFor($event, $registrations);
     }
 
-    /** @param array<string, mixed> $event */
+    /**
+     * `$event` here is one of two shapes depending on the caller: raw pre-import JSON
+     * fixture data (key `status`, old vocabulary — active/past/archived/awaiting_approval)
+     * when called from fill(), or an already-hydrated EventRepository row (key
+     * `publicationStatus`, E1.1 vocabulary — published/finished/submitted) when called via
+     * resultsForRegistrations() from EventFixtureImporter::topUpFromDatabase(). Both are
+     * accepted so this doesn't silently misclassify hydrated events as "upcoming".
+     *
+     * @param array<string, mixed> $event
+     */
     private function groupOf(array $event): string
     {
-        $status = (string) ($event['status'] ?? 'active');
+        $status = (string) ($event['publicationStatus'] ?? $event['status'] ?? 'active');
 
         return match (true) {
-            in_array($status, ['past', 'archived'], true) => 'finished',
-            in_array($status, ['draft', 'awaiting_approval', 'approved'], true) => 'draft',
+            in_array($status, ['finished', 'past', 'archived'], true) => 'finished',
+            in_array($status, ['draft', 'submitted', 'approved', 'rejected', 'awaiting_approval'], true) => 'draft',
             default => 'upcoming',
         };
     }

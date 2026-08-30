@@ -223,9 +223,9 @@ function buildPastEvent(
     $sql = "";
 
     // Event
-    $sql .= "INSERT INTO events (id,name,slug,discipline,date,location,city,description,organizer_id,organizer_name,organizer_contact,status,registration_deadline,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
+    $sql .= "INSERT INTO events (id,name,slug,discipline,date,location,city,description,organizer_id,organizer_name,organizer_contact,publication_status,registration_deadline,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
     $sql .= sprintf(
-        "  %s,%s,'lesny-bieg-testowy-2025','running',%s,'Las Kabacki','Warszawa','Rekreacyjny bieg w lesie kabackim z trzema dystansami.',%s,%s,%s,'past',%s,'closed',0,0,0,%s,'<p>Regulamin.</p>',0,0,%s,%s,%s\n",
+        "  %s,%s,'lesny-bieg-testowy-2025','running',%s,'Las Kabacki','Warszawa','Rekreacyjny bieg w lesie kabackim z trzema dystansami.',%s,%s,%s,'finished',%s,'closed',0,0,0,%s,'<p>Regulamin.</p>',0,0,%s,%s,%s\n",
         sq($eventId), sq($eventName),
         sq($eventDate),
         sq($orgId), sq($orgName),
@@ -428,9 +428,9 @@ function buildCurrentEvent(): array
     $sql = "";
 
     // Event
-    $sql .= "INSERT INTO events (id,name,slug,discipline,date,location,city,description,organizer_id,organizer_name,organizer_contact,status,registration_deadline,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
+    $sql .= "INSERT INTO events (id,name,slug,discipline,date,location,city,description,organizer_id,organizer_name,organizer_contact,publication_status,registration_deadline,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
     $sql .= sprintf(
-        "  %s,%s,'tri-kids-mazury-2026','triathlon',%s,'Centrum Triathlonu Mikołajki','Mikolajki','Triathlon dla dzieci i mlodziezy nad jeziorem Sniardwy.',%s,%s,%s,'active',%s,'closed',1,0,0,%s,'<p>Regulamin zawodow mlodziezowych.</p>',0,0,%s,%s,%s\n",
+        "  %s,%s,'tri-kids-mazury-2026','triathlon',%s,'Centrum Triathlonu Mikołajki','Mikolajki','Triathlon dla dzieci i mlodziezy nad jeziorem Sniardwy.',%s,%s,%s,'published',%s,'closed',1,0,0,%s,'<p>Regulamin zawodow mlodziezowych.</p>',0,0,%s,%s,%s\n",
         sq($eventId), sq($eventName),
         sq($eventDate),
         sq($orgId), sq($orgName),
@@ -542,9 +542,9 @@ function buildUpcomingEvent(): string
     $orgId     = ORGANIZER_ID;
     $orgName   = ORGANIZER_NAME;
 
-    $sql = "INSERT INTO events (id,name,slug,discipline,date,location,city,description,organizer_id,organizer_name,organizer_contact,status,registration_deadline,registration_open_date,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
+    $sql = "INSERT INTO events (id,name,slug,discipline,date,location,city,description,organizer_id,organizer_name,organizer_contact,publication_status,registration_deadline,registration_open_date,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
     $sql .= sprintf(
-        "  %s,%s,'grand-prix-podlasia-2027','running',%s,'Stadion Miejski','Bialystok','Bieg uliczny przez Bialystok – trasa asfaltowa, płaski profil, limit czasu 4h.',%s,%s,%s,'active',%s,%s,'open',1,0,0,%s,'<p>Regulamin biegu.</p>',1,0,%s,%s,%s\n",
+        "  %s,%s,'grand-prix-podlasia-2027','running',%s,'Stadion Miejski','Bialystok','Bieg uliczny przez Bialystok – trasa asfaltowa, płaski profil, limit czasu 4h.',%s,%s,%s,'published',%s,%s,'open',1,0,0,%s,'<p>Regulamin biegu.</p>',1,0,%s,%s,%s\n",
         sq($eventId), sq($eventName),
         sq($eventDate),
         sq($orgId), sq($orgName),

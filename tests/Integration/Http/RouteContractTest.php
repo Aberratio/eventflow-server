@@ -54,6 +54,7 @@ final class RouteContractTest extends HttpTestCase
             'name' => 'PHPUnit Contract Private Event',
             'status' => 'active',
             'isPrivate' => true,
+            'accessCode' => 'phpunit-secret',
         ]));
     }
 
@@ -95,12 +96,26 @@ final class RouteContractTest extends HttpTestCase
 
     public function testPrivateEventSlugIsHiddenPubliclyButVisibleToStaffToken(): void
     {
+        // E1.1: a Published+Private event without the right access code is hidden from
+        // an anonymous caller entirely (not even reachable via the direct link).
         $publicResponse = $this->request('GET', '/api/v1/events/slug/' . $this->privateEvent['slug']);
         $publicPayload = $this->json($publicResponse);
 
         self::assertSame(404, $publicResponse->getStatusCode());
         self::assertFalse($publicPayload['success']);
         self::assertSame('not_found', $publicPayload['error']['code']);
+
+        // Wrong code: still hidden.
+        $wrongCodeResponse = $this->request('GET', '/api/v1/events/slug/' . $this->privateEvent['slug'] . '?accessCode=not-the-code');
+        self::assertSame(404, $wrongCodeResponse->getStatusCode());
+
+        // Correct code: the direct link now works for an anonymous caller, per the
+        // "accessible via direct link, optionally with an access code" spec.
+        $codeResponse = $this->request('GET', '/api/v1/events/slug/' . $this->privateEvent['slug'] . '?accessCode=phpunit-secret');
+        $codePayload = $this->json($codeResponse);
+        self::assertSame(200, $codeResponse->getStatusCode());
+        self::assertTrue($codePayload['success']);
+        self::assertSame($this->privateEvent['id'], $codePayload['data']['id']);
 
         $staffResponse = $this->request(
             'GET',
@@ -184,9 +199,16 @@ final class RouteContractTest extends HttpTestCase
         self::assertTrue($this->json($pages)['success']);
     }
 
+    /**
+     * E1.1 dropped the free-text `status` column entirely (see
+     * 031_e11_event_lifecycle.sql), so there is no ENUM to patch in place any more — the
+     * schema this test needs only exists once every migration has actually run. Calling
+     * the real Migrator (idempotent, no ledger — see its docblock) is the only thing that
+     * still makes sense here.
+     */
     private function ensureEventStatusWorkflowSchema(): void
     {
-        $this->pdo->exec("ALTER TABLE events MODIFY status ENUM('draft','awaiting_approval','approved','active','past','archived','deleted') NOT NULL DEFAULT 'draft'");
+        \ZmierzymyCzas\Database\Migrator::applyAll($this->pdo);
     }
 
     private function eventPayload(array $overrides = []): array

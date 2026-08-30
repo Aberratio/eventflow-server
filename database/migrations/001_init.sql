@@ -98,8 +98,24 @@ CREATE TABLE IF NOT EXISTS events (
   INDEX idx_events_series (series_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE events
-  MODIFY status ENUM('draft','awaiting_approval','approved','published','completed','cancelled','rejected','active','past','archived','deleted') NOT NULL DEFAULT 'draft';
+-- E1.1 (031_e11_event_lifecycle.sql) eventually drops `events.status` in favour of
+-- `publication_status`/`visibility`/`is_test`/`deleted_at`. Migrator replays every
+-- file on each run with no ledger (see Migrator.php docblock), so once that has
+-- happened once, this MODIFY (and every other `status`-touching statement below,
+-- down to the events section of this file) must become a no-op instead of failing.
+SET @events_status_still_present = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'events' AND column_name = 'status'
+);
+
+SET @modify_events_status_wide_sql = IF(
+  @events_status_still_present > 0,
+  'ALTER TABLE events MODIFY status ENUM(''draft'',''awaiting_approval'',''approved'',''published'',''completed'',''cancelled'',''rejected'',''active'',''past'',''archived'',''deleted'') NOT NULL DEFAULT ''draft''',
+  'DO 0'
+);
+PREPARE modify_events_status_wide_stmt FROM @modify_events_status_wide_sql;
+EXECUTE modify_events_status_wide_stmt;
+DEALLOCATE PREPARE modify_events_status_wide_stmt;
 
 ALTER TABLE events
   ADD COLUMN IF NOT EXISTS approved_at VARCHAR(64) NULL,
@@ -140,27 +156,64 @@ CREATE TABLE IF NOT EXISTS organizer_event_credit_usages (
 ALTER TABLE organizer_event_credit_usages
   ADD COLUMN IF NOT EXISTS event_credit_kind ENUM('standard','virtual','timing') NOT NULL DEFAULT 'standard' AFTER batch_id;
 
-UPDATE events
-SET status = CASE status
-  WHEN 'published' THEN 'active'
-  WHEN 'completed' THEN 'past'
-  WHEN 'cancelled' THEN 'archived'
-  WHEN 'active' THEN 'active'
-  WHEN 'past' THEN 'past'
-  WHEN 'archived' THEN 'archived'
-  WHEN 'deleted' THEN 'deleted'
-  ELSE 'draft'
-END;
+-- E1.1 (031_e11_event_lifecycle.sql) drops `events.status` entirely in favour of
+-- `publication_status` / `visibility` / `is_test` / `deleted_at`. This block predates
+-- that and is guarded the same way 028_e02_remove_tickets.sql guards its own
+-- reference to a table a later migration removes — Migrator has no ledger and
+-- replays every file on each run (see Migrator.php docblock), so after the first
+-- full pass this column is gone and the unconditional form below would fail.
+SET @events_status_still_present = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'events' AND column_name = 'status'
+);
 
-ALTER TABLE events
-  MODIFY status ENUM('draft','awaiting_approval','approved','active','past','archived','deleted') NOT NULL DEFAULT 'draft';
+SET @normalize_events_status_sql = IF(
+  @events_status_still_present > 0,
+  'UPDATE events
+   SET status = CASE status
+     WHEN ''published'' THEN ''active''
+     WHEN ''completed'' THEN ''past''
+     WHEN ''cancelled'' THEN ''archived''
+     WHEN ''active'' THEN ''active''
+     WHEN ''past'' THEN ''past''
+     WHEN ''archived'' THEN ''archived''
+     WHEN ''deleted'' THEN ''deleted''
+     ELSE ''draft''
+   END',
+  'DO 0'
+);
+PREPARE normalize_events_status_stmt FROM @normalize_events_status_sql;
+EXECUTE normalize_events_status_stmt;
+DEALLOCATE PREPARE normalize_events_status_stmt;
 
-UPDATE users u
-SET event_limit = GREATEST(
-  COALESCE((SELECT SUM(b.total_count) FROM organizer_event_credit_batches b WHERE b.organizer_id = u.id), 0),
-  COALESCE((SELECT COUNT(*) FROM events e WHERE e.organizer_id = u.id AND e.status <> 'deleted'), 0)
-)
-WHERE u.role = 'organizer';
+SET @modify_events_status_sql = IF(
+  @events_status_still_present > 0,
+  'ALTER TABLE events MODIFY status ENUM(''draft'',''awaiting_approval'',''approved'',''active'',''past'',''archived'',''deleted'') NOT NULL DEFAULT ''draft''',
+  'DO 0'
+);
+PREPARE modify_events_status_stmt FROM @modify_events_status_sql;
+EXECUTE modify_events_status_stmt;
+DEALLOCATE PREPARE modify_events_status_stmt;
+
+-- "Not soft-deleted" used to mean `status <> 'deleted'`; E1.1 moved that to its own
+-- `deleted_at` column (see 031_e11_event_lifecycle.sql). Same replay problem as
+-- above: pick whichever predicate matches the column that actually exists right now.
+SET @events_not_deleted_predicate = IF(
+  @events_status_still_present > 0,
+  'e.status <> ''deleted''',
+  'e.deleted_at IS NULL'
+);
+SET @sync_event_limit_sql = CONCAT(
+  'UPDATE users u
+   SET event_limit = GREATEST(
+     COALESCE((SELECT SUM(b.total_count) FROM organizer_event_credit_batches b WHERE b.organizer_id = u.id), 0),
+     COALESCE((SELECT COUNT(*) FROM events e WHERE e.organizer_id = u.id AND ', @events_not_deleted_predicate, '), 0)
+   )
+   WHERE u.role = ''organizer'''
+);
+PREPARE sync_event_limit_stmt FROM @sync_event_limit_sql;
+EXECUTE sync_event_limit_stmt;
+DEALLOCATE PREPARE sync_event_limit_stmt;
 
 CREATE TABLE IF NOT EXISTS series_events (
   series_id VARCHAR(36) NOT NULL,

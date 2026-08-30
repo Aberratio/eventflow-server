@@ -8,12 +8,17 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class AdminRepository extends Repository
 {
+    /** Retention window (E0.8): entries older than this are neither returned nor kept. */
+    private const RETENTION_MONTHS = 12;
+
     /** @param array<string, mixed> $filters @return array<int, array<string, mixed>> */
     public function activityLogs(array $filters = []): array
     {
-        $where = [];
-        $params = [];
-        foreach (['action' => 'action', 'userId' => 'user_id'] as $input => $column) {
+        $this->pruneExpiredActivityLogs();
+
+        $where = ['timestamp >= :retentionCutoff'];
+        $params = ['retentionCutoff' => $this->retentionCutoff()];
+        foreach (['action' => 'action', 'userId' => 'user_id', 'targetType' => 'target_type', 'targetId' => 'target_id'] as $input => $column) {
             if (!empty($filters[$input])) {
                 $where[] = "{$column} = :{$input}";
                 $params[$input] = $filters[$input];
@@ -27,10 +32,27 @@ final class AdminRepository extends Repository
             $where[] = 'timestamp <= :dateTo';
             $params['dateTo'] = $filters['dateTo'];
         }
-        $whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';
+        $whereSql = ' WHERE ' . implode(' AND ', $where);
         $stmt = $this->pdo->prepare("SELECT id, user_id AS userId, action, description, target_type AS targetType, target_id AS targetId, target_name AS targetName, ip_address AS ipAddress, user_agent AS userAgent, timestamp FROM activity_logs{$whereSql} ORDER BY timestamp DESC");
         $stmt->execute($params);
         return $stmt->fetchAll();
+    }
+
+    /**
+     * Retention: entries older than RETENTION_MONTHS are dropped lazily on read. No
+     * scheduled-job runner exists in this codebase yet (checked: no cron/queue pattern
+     * to hook into), so delete-on-read from the activityLogs() read path is the simplest
+     * correct approach here — there is deliberately no endpoint to delete a single entry.
+     */
+    private function pruneExpiredActivityLogs(): void
+    {
+        $stmt = $this->pdo->prepare('DELETE FROM activity_logs WHERE timestamp < :cutoff');
+        $stmt->execute(['cutoff' => $this->retentionCutoff()]);
+    }
+
+    private function retentionCutoff(): string
+    {
+        return (new \DateTimeImmutable('-' . self::RETENTION_MONTHS . ' months'))->format(DATE_ATOM);
     }
 
     public function securitySettings(): array
@@ -81,7 +103,7 @@ final class AdminRepository extends Repository
         $this->insert('activity_logs', [
             'id' => $data['id'] ?? $this->id(),
             'user_id' => (string) ($data['userId'] ?? ''),
-            'action' => (string) ($data['action'] ?? 'client_log'),
+            'action' => (string) ($data['action'] ?? 'server_action'),
             'description' => (string) ($data['description'] ?? ''),
             'target_type' => $data['targetType'] ?? null,
             'target_id' => $data['targetId'] ?? null,

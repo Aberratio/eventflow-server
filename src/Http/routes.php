@@ -567,7 +567,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             return JsonResponder::ok($response, $events->eventLimit($args['organizerId']));
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->patch('/organizers/{organizerId}/event-limit', function (Request $request, Response $response, array $args) use ($events, $users, $body) {
+        $api->patch('/organizers/{organizerId}/event-limit', function (Request $request, Response $response, array $args) use ($events, $users, $body, $logActivity) {
             $organizer = $users->find($args['organizerId']);
             if (!$organizer || $organizer['role'] !== 'organizer') {
                 return JsonResponder::error($response, 'invalid_organizer', 'Organizer is required', 422);
@@ -575,7 +575,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $payload = $body($request);
             $limit = max(0, (int) ($payload['limit'] ?? 0));
             try {
-                return JsonResponder::ok($response, $events->updateEventLimit($args['organizerId'], $limit), 'Event limit updated');
+                $updated = $events->updateEventLimit($args['organizerId'], $limit);
+                $auth = (array) $request->getAttribute('auth');
+                $logActivity($auth, 'organizer_event_limit_changed', 'Zmieniono limit wydarzeń organizatora na ' . $limit, 'user', (string) $args['organizerId'], (string) ($organizer['name'] ?? ''));
+                return JsonResponder::ok($response, $updated, 'Event limit updated');
             } catch (RuntimeException $e) {
                 if ($e->getMessage() === 'event_limit_below_usage') {
                     return JsonResponder::error($response, 'event_limit_below_usage', 'Event limit cannot be lower than organizer current event count', 409);
@@ -908,11 +911,27 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
         $api->get('/series/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->findBySlug($args['slug'])));
         $api->get('/series/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->find($args['id'])));
-        $api->post('/series', fn (Request $request, Response $response) => JsonResponder::ok($response, $series->create($body($request), (array) $request->getAttribute('auth')), 'Series created', 201))
+        $api->post('/series', function (Request $request, Response $response) use ($series, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $created = $series->create($body($request), $auth);
+            $logActivity($auth, 'series_created', 'Utworzono serię', 'series', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
+            return JsonResponder::ok($response, $created, 'Series created', 201);
+        })
             ->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->patch('/series/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->update($args['id'], $body($request))))
+        $api->patch('/series/{id}', function (Request $request, Response $response, array $args) use ($series, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $existing = $series->find((string) $args['id']);
+            $updated = $series->update($args['id'], $body($request));
+            $logActivity($auth, 'series_updated', 'Zaktualizowano serię', 'series', (string) $args['id'], (string) ($updated['name'] ?? $existing['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
+        })
             ->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->post('/series/{id}/archive', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->archive($args['id']), 'Series archived'))
+        $api->post('/series/{id}/archive', function (Request $request, Response $response, array $args) use ($series, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $archived = $series->archive($args['id']);
+            $logActivity($auth, 'series_archived', 'Zarchiwizowano serię', 'series', (string) $args['id'], (string) ($archived['name'] ?? ''));
+            return JsonResponder::ok($response, $archived, 'Series archived');
+        })
             ->add(new AuthMiddleware($jwt, $staffRoles));
 
         $api->get('/shop/categories', function (Request $request, Response $response) use ($shop, $optionalAuth, $isStaffRole) {
@@ -920,12 +939,31 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $includeArchived = !empty($filters['includeArchived']) && $isStaffRole((string) ($optionalAuth($request)['role'] ?? ''));
             return JsonResponder::ok($response, $shop->categories($includeArchived));
         });
-        $api->post('/shop/categories', fn (Request $request, Response $response) => JsonResponder::ok($response, $shop->createCategory($body($request)), 'Category created', 201))
+        $api->post('/shop/categories', function (Request $request, Response $response) use ($shop, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $created = $shop->createCategory($body($request));
+            $logActivity($auth, 'shop_category_created', 'Utworzono kategorię sklepu', 'shopCategory', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
+            return JsonResponder::ok($response, $created, 'Category created', 201);
+        })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->patch('/shop/categories/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->updateCategory($args['id'], $body($request))))
+        $api->patch('/shop/categories/{id}', function (Request $request, Response $response, array $args) use ($shop, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $updated = $shop->updateCategory($args['id'], $body($request));
+            $logActivity($auth, 'shop_category_updated', 'Zaktualizowano kategorię sklepu', 'shopCategory', (string) $args['id'], (string) ($updated['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
+        })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->delete('/shop/categories/{id}', function (Request $request, Response $response, array $args) use ($shop) {
+        $api->delete('/shop/categories/{id}', function (Request $request, Response $response, array $args) use ($shop, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $existing = null;
+            foreach ($shop->categories(true) as $category) {
+                if ($category['id'] === $args['id']) {
+                    $existing = $category;
+                    break;
+                }
+            }
             $shop->archiveCategory($args['id']);
+            $logActivity($auth, 'shop_category_deleted', 'Usunięto kategorię sklepu', 'shopCategory', (string) $args['id'], (string) ($existing['name'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $adminRoles));
 
@@ -947,19 +985,38 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         ]));
 
         $api->get('/insurance/settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->getSettings()));
-        $api->patch('/insurance/settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->updateSettings($body($request))))
+        $api->patch('/insurance/settings', function (Request $request, Response $response) use ($insurance, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $updated = $insurance->updateSettings($body($request));
+            $logActivity($auth, 'insurance_settings_updated', 'Zaktualizowano ustawienia NNW', 'insuranceSettings', null, null);
+            return JsonResponder::ok($response, $updated);
+        })
             ->add(new AuthMiddleware($jwt, $adminRoles));
 
         // Catalog of NNW variants (E0.3): admin defines variants, organizers pick which
         // are offered on their event. `/insurance/settings` above is kept as a thin
         // read/write on the first catalog row for backward compatibility.
         $api->get('/insurance/variants', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->list()));
-        $api->post('/insurance/variants', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->create($body($request))))
+        $api->post('/insurance/variants', function (Request $request, Response $response) use ($insurance, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $created = $insurance->create($body($request));
+            $logActivity($auth, 'insurance_variant_created', 'Utworzono wariant NNW', 'insuranceVariant', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
+            return JsonResponder::ok($response, $created);
+        })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->patch('/insurance/variants/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $insurance->update($args['id'], $body($request))))
+        $api->patch('/insurance/variants/{id}', function (Request $request, Response $response, array $args) use ($insurance, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $existing = $insurance->find((string) $args['id']);
+            $updated = $insurance->update($args['id'], $body($request));
+            $logActivity($auth, 'insurance_variant_updated', 'Zaktualizowano wariant NNW', 'insuranceVariant', (string) $args['id'], (string) ($updated['name'] ?? $existing['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
+        })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->delete('/insurance/variants/{id}', function (Request $request, Response $response, array $args) use ($insurance) {
+        $api->delete('/insurance/variants/{id}', function (Request $request, Response $response, array $args) use ($insurance, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $existing = $insurance->find((string) $args['id']);
             $insurance->delete($args['id']);
+            $logActivity($auth, 'insurance_variant_deleted', 'Usunięto wariant NNW', 'insuranceVariant', (string) $args['id'], (string) ($existing['name'] ?? ''));
             return JsonResponder::ok($response, ['deleted' => true]);
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));
@@ -996,12 +1053,26 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
         $api->get('/shop/products/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->findProductBySlug($args['slug'])));
         $api->get('/shop/products/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->findProduct($args['id'])));
-        $api->post('/shop/products', fn (Request $request, Response $response) => JsonResponder::ok($response, $shop->createProduct($body($request)), 'Product created', 201))
+        $api->post('/shop/products', function (Request $request, Response $response) use ($shop, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $created = $shop->createProduct($body($request));
+            $logActivity($auth, 'shop_product_created', 'Utworzono produkt', 'shopProduct', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
+            return JsonResponder::ok($response, $created, 'Product created', 201);
+        })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->patch('/shop/products/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->updateProduct($args['id'], $body($request))))
+        $api->patch('/shop/products/{id}', function (Request $request, Response $response, array $args) use ($shop, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $existing = $shop->findProduct((string) $args['id']);
+            $updated = $shop->updateProduct($args['id'], $body($request));
+            $logActivity($auth, 'shop_product_updated', 'Zaktualizowano produkt', 'shopProduct', (string) $args['id'], (string) ($updated['name'] ?? $existing['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
+        })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->delete('/shop/products/{id}', function (Request $request, Response $response, array $args) use ($shop) {
+        $api->delete('/shop/products/{id}', function (Request $request, Response $response, array $args) use ($shop, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $existing = $shop->findProduct((string) $args['id']);
             $shop->archiveProduct($args['id']);
+            $logActivity($auth, 'shop_product_deleted', 'Usunięto produkt', 'shopProduct', (string) $args['id'], (string) ($existing['name'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $adminRoles));
 
@@ -1020,9 +1091,20 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $auth = (array) $request->getAttribute('auth');
             return JsonResponder::ok($response, $challenges->create($body($request), (string) ($auth['sub'] ?? '')), 'Challenge created', 201);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->patch('/challenges/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->update($args['id'], $body($request))))
+        $api->patch('/challenges/{id}', function (Request $request, Response $response, array $args) use ($challenges, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $existing = $challenges->find((string) $args['id']);
+            $updated = $challenges->update($args['id'], $body($request));
+            $logActivity($auth, 'challenge_updated', 'Zaktualizowano wyzwanie', 'challenge', (string) $args['id'], (string) ($updated['name'] ?? $existing['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
+        })
             ->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->post('/challenges/{id}/archive', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->archive($args['id']), 'Challenge archived'))
+        $api->post('/challenges/{id}/archive', function (Request $request, Response $response, array $args) use ($challenges, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $archived = $challenges->archive($args['id']);
+            $logActivity($auth, 'challenge_archived', 'Zarchiwizowano wyzwanie', 'challenge', (string) $args['id'], (string) ($archived['name'] ?? ''));
+            return JsonResponder::ok($response, $archived, 'Challenge archived');
+        })
             ->add(new AuthMiddleware($jwt, $staffRoles));
         $api->get('/challenge-participations', fn (Request $request, Response $response) => JsonResponder::ok($response, $challenges->participations($request->getQueryParams()['challengeId'] ?? null, $request->getQueryParams()['userId'] ?? null)))
             ->add(new AuthMiddleware($jwt));
@@ -1036,39 +1118,61 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         })->add(new AuthMiddleware($jwt));
         $api->post('/challenge-entries', fn (Request $request, Response $response) => JsonResponder::ok($response, $challenges->submitEntry($body($request), (array) $request->getAttribute('auth')), 'Challenge entry submitted', 201))
             ->add(new AuthMiddleware($jwt));
-        $api->patch('/challenge-entries/{id}/review', function (Request $request, Response $response, array $args) use ($challenges, $body) {
+        $api->patch('/challenge-entries/{id}/review', function (Request $request, Response $response, array $args) use ($challenges, $body, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $payload = $body($request);
-            return JsonResponder::ok($response, $challenges->reviewEntry($args['id'], (string) ($payload['status'] ?? 'pending'), $payload['reason'] ?? null, (string) ($auth['sub'] ?? '')));
+            $status = (string) ($payload['status'] ?? 'pending');
+            $reviewed = $challenges->reviewEntry($args['id'], $status, $payload['reason'] ?? null, (string) ($auth['sub'] ?? ''));
+            $logActivity($auth, 'challenge_entry_reviewed', 'Zweryfikowano zgłoszenie wyzwania: ' . $status, 'challengeEntry', (string) $args['id'], (string) ($reviewed['userId'] ?? ''));
+            return JsonResponder::ok($response, $reviewed);
         })->add(new AuthMiddleware($jwt, $staffRoles));
 
         $api->get('/info-pages', fn (Request $request, Response $response) => JsonResponder::ok($response, $pages->list()));
         $api->get('/info-pages/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $pages->findBySlug($args['slug'])));
-        $api->post('/info-pages', fn (Request $request, Response $response) => JsonResponder::ok($response, $pages->create($body($request)), 'Page created', 201))
+        $api->post('/info-pages', function (Request $request, Response $response) use ($pages, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $created = $pages->create($body($request));
+            $logActivity($auth, 'info_page_created', 'Utworzono stronę informacyjną', 'infoPage', (string) ($created['id'] ?? ''), (string) ($created['title'] ?? $created['name'] ?? ''));
+            return JsonResponder::ok($response, $created, 'Page created', 201);
+        })
             ->add(new AuthMiddleware($jwt, ['admin']));
-        $api->patch('/info-pages/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $pages->update($args['id'], $body($request))))
+        $api->patch('/info-pages/{id}', function (Request $request, Response $response, array $args) use ($pages, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $existing = $pages->find((string) $args['id']);
+            $updated = $pages->update($args['id'], $body($request));
+            $logActivity($auth, 'info_page_updated', 'Zaktualizowano stronę informacyjną', 'infoPage', (string) $args['id'], (string) ($updated['title'] ?? $updated['name'] ?? $existing['title'] ?? $existing['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
+        })
             ->add(new AuthMiddleware($jwt, ['admin']));
-        $api->delete('/info-pages/{id}', function (Request $request, Response $response, array $args) use ($pages) {
+        $api->delete('/info-pages/{id}', function (Request $request, Response $response, array $args) use ($pages, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $existing = $pages->find((string) $args['id']);
             $pages->delete($args['id']);
+            $logActivity($auth, 'info_page_deleted', 'Usunięto stronę informacyjną', 'infoPage', (string) $args['id'], (string) ($existing['title'] ?? $existing['name'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, ['admin']));
-        $api->post('/info-pages/reorder', function (Request $request, Response $response) use ($pages, $body) {
+        $api->post('/info-pages/reorder', function (Request $request, Response $response) use ($pages, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
             $pages->reorder($body($request)['ids'] ?? []);
+            $logActivity($auth, 'info_pages_reordered', 'Zmieniono kolejność stron informacyjnych', 'infoPage', null, null);
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, ['admin']));
 
         $api->get('/partners', fn (Request $request, Response $response) => JsonResponder::ok($response, $partners->list()));
         $api->get('/partners/featured', fn (Request $request, Response $response) => JsonResponder::ok($response, $partners->featured()));
         $api->get('/partners/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $partners->find((string) $args['id'])));
-        $api->post('/partners', function (Request $request, Response $response) use ($partners, $body) {
+        $api->post('/partners', function (Request $request, Response $response) use ($partners, $body, $logActivity) {
             $payload = $body($request);
             if (trim((string) ($payload['name'] ?? '')) === '' || trim((string) ($payload['logoUrl'] ?? '')) === '') {
                 return JsonResponder::error($response, 'validation_error', 'Name and logo are required', 422);
             }
 
-            return JsonResponder::ok($response, $partners->create($payload), 'Partner created', 201);
+            $auth = (array) $request->getAttribute('auth');
+            $created = $partners->create($payload);
+            $logActivity($auth, 'partner_created', 'Utworzono partnera', 'partner', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
+            return JsonResponder::ok($response, $created, 'Partner created', 201);
         })->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->patch('/partners/{id}', function (Request $request, Response $response, array $args) use ($partners, $body) {
+        $api->patch('/partners/{id}', function (Request $request, Response $response, array $args) use ($partners, $body, $logActivity) {
             $payload = $body($request);
             if (array_key_exists('name', $payload) && trim((string) $payload['name']) === '') {
                 return JsonResponder::error($response, 'validation_error', 'Name is required', 422);
@@ -1077,10 +1181,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'validation_error', 'Logo is required', 422);
             }
 
-            return JsonResponder::ok($response, $partners->update((string) $args['id'], $payload));
+            $auth = (array) $request->getAttribute('auth');
+            $existing = $partners->find((string) $args['id']);
+            $updated = $partners->update((string) $args['id'], $payload);
+            $logActivity($auth, 'partner_updated', 'Zaktualizowano partnera', 'partner', (string) $args['id'], (string) ($updated['name'] ?? $existing['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
         })->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->delete('/partners/{id}', function (Request $request, Response $response, array $args) use ($partners) {
+        $api->delete('/partners/{id}', function (Request $request, Response $response, array $args) use ($partners, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $existing = $partners->find((string) $args['id']);
             $partners->delete((string) $args['id']);
+            $logActivity($auth, 'partner_deleted', 'Usunięto partnera', 'partner', (string) $args['id'], (string) ($existing['name'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $adminRoles));
 

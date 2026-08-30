@@ -385,8 +385,6 @@ final class EventRepositoryTest extends TestCase
                     'limit' => 250,
                     'registeredCount' => 0,
                     'price' => 80,
-                    'priceTierMode' => 'date',
-                    'participantCountType' => 'registered',
                     'priceTiers' => [],
                     'vipPrices' => [],
                     'routeMapUrl' => 'https://example.test/10k-map.png',

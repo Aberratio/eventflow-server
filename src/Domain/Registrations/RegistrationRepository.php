@@ -14,8 +14,7 @@ user_name AS userName,
 user_email AS userEmail, distance_id AS distanceId, distance_name AS distanceName, category,
 registered_at AS registeredAt, status, bib_number AS bibNumber, team_name AS teamName, team_id AS teamId,
 relay_members AS relayMembers,
-price_paid AS pricePaid, discount_code AS discountCode, discount_amount AS discountAmount,
-insurance_paid AS insurancePaid, removed_at AS removedAt, checked_in_at AS checkedInAt,
+discount_code AS discountCode, removed_at AS removedAt, checked_in_at AS checkedInAt,
 registered_by_id AS registeredById
 SQL;
 
@@ -25,8 +24,7 @@ r.user_name AS userName,
 r.user_email AS userEmail, r.distance_id AS distanceId, r.distance_name AS distanceName, r.category,
 r.registered_at AS registeredAt, r.status, r.bib_number AS bibNumber, r.team_name AS teamName, r.team_id AS teamId,
 r.relay_members AS relayMembers,
-r.price_paid AS pricePaid, r.discount_code AS discountCode, r.discount_amount AS discountAmount,
-r.insurance_paid AS insurancePaid, r.removed_at AS removedAt, r.checked_in_at AS checkedInAt,
+r.discount_code AS discountCode, r.removed_at AS removedAt, r.checked_in_at AS checkedInAt,
 r.registered_by_id AS registeredById
 SQL;
 
@@ -173,9 +171,8 @@ SQL;
                 'relay_members' => $this->encodeRelayMembers($data['relayMembers'] ?? []),
                 'registered_by_id' => $data['registeredById'] ?? null,
                 'discount_code' => $pricing['discountCode'],
-                'discount_amount' => $pricing['discountAmount'],
-                'price_paid' => $pricing['pricePaid'],
             ]);
+            $this->createSettlementItems($id, $pricing, date(DATE_ATOM));
             if ($pricing['discountId'] !== null) {
                 $this->markDiscountUsed($pricing['discountId'], $id, $data, $pricing);
             }
@@ -202,10 +199,7 @@ SQL;
             'teamName' => 'team_name',
             'teamId' => 'team_id',
             'relayMembers' => 'relay_members',
-            'pricePaid' => 'price_paid',
             'discountCode' => 'discount_code',
-            'discountAmount' => 'discount_amount',
-            'insurancePaid' => 'insurance_paid',
             'removedAt' => 'removed_at',
             'checkedInAt' => 'checked_in_at',
         ] as $input => $column) {
@@ -251,11 +245,11 @@ SQL;
 
     /**
      * @param array<string, mixed> $data
-     * @return array{eventName: string, distanceName: string, pricePaid: float, discountAmount: ?float, discountCode: ?string, discountId: ?string, usedBy: array<int, mixed>}
+     * @return array{eventName: string, distanceName: string, distancePrice: float, pricePaid: float, discountAmount: ?float, discountCode: ?string, discountId: ?string, usedBy: array<int, mixed>}
      */
     private function pricingForRegistration(array $data): array
     {
-        $stmt = $this->pdo->prepare('SELECT e.name AS eventName, d.id AS distanceId, d.name AS distanceName, d.price AS distancePrice, d.registered_count AS registeredCount, d.price_tier_mode AS priceTierMode, d.participant_count_type AS participantCountType, d.price_tiers AS priceTiers, d.start_type AS startType, d.relay_min_team_size AS relayMinTeamSize, d.relay_max_team_size AS relayMaxTeamSize, d.relay_team_completion_deadline AS relayTeamCompletionDeadline FROM events e INNER JOIN event_distances d ON d.event_id = e.id WHERE e.id = :eventId AND d.id = :distanceId');
+        $stmt = $this->pdo->prepare('SELECT e.name AS eventName, d.id AS distanceId, d.name AS distanceName, d.price AS distancePrice, d.registered_count AS registeredCount, d.price_tiers AS priceTiers, d.start_type AS startType, d.relay_min_team_size AS relayMinTeamSize, d.relay_max_team_size AS relayMaxTeamSize, d.relay_team_completion_deadline AS relayTeamCompletionDeadline FROM events e INNER JOIN event_distances d ON d.event_id = e.id WHERE e.id = :eventId AND d.id = :distanceId');
         $stmt->execute([
             'eventId' => $data['eventId'],
             'distanceId' => $data['distanceId'],
@@ -267,12 +261,13 @@ SQL;
 
         $this->assertRelayRegistrationRules($row, $data);
 
-        $distancePrice = $this->currentDistancePrice($row, (string) $data['eventId']);
+        $distancePrice = $this->currentDistancePrice($row);
         $discountCode = trim((string) ($data['discountCode'] ?? ''));
         if ($discountCode === '') {
             return [
                 'eventName' => (string) $row['eventName'],
                 'distanceName' => (string) $row['distanceName'],
+                'distancePrice' => $distancePrice,
                 'pricePaid' => $distancePrice,
                 'discountAmount' => null,
                 'discountCode' => null,
@@ -295,6 +290,7 @@ SQL;
         return [
             'eventName' => (string) $row['eventName'],
             'distanceName' => (string) $row['distanceName'],
+            'distancePrice' => $distancePrice,
             'pricePaid' => $this->roundMoney(max(0, $distancePrice - $discountAmount)),
             'discountAmount' => $discountAmount,
             'discountCode' => strtoupper($discountCode),
@@ -396,8 +392,19 @@ SQL;
         return is_array($decoded) ? array_values(array_filter($decoded, 'is_array')) : [];
     }
 
-    /** @param array<string, mixed> $distance */
-    private function currentDistancePrice(array $distance, string $eventId): float
+    /**
+     * A Próg (price tier) carries at most two independent, optional limits — an end
+     * date and a registration-count limit — and expires on whichever is hit first
+     * ("co nastąpi wcześniej"). There is no mode flag choosing between them: both can
+     * apply to the same tier at once. Tiers are evaluated in the order they were
+     * configured (their `price_tiers` array order); the first one that has not yet
+     * expired by either limit wins. The count compared against `participantLimit` is
+     * non-cancelled registrations (pending + confirmed) — the same population the
+     * distance's own `participant_limit` counts against.
+     *
+     * @param array<string, mixed> $distance
+     */
+    private function currentDistancePrice(array $distance): float
     {
         $basePrice = $this->roundMoney((float) $distance['distancePrice']);
         $tiers = $this->decodeTiers($distance['priceTiers'] ?? null);
@@ -405,27 +412,17 @@ SQL;
             return $basePrice;
         }
 
-        $mode = (string) ($distance['priceTierMode'] ?: 'date');
-        if ($mode === 'participants') {
-            $count = ((string) ($distance['participantCountType'] ?? 'registered')) === 'paid'
-                ? $this->paidRegistrationCount($eventId, (string) $distance['distanceId'])
-                : (int) ($distance['registeredCount'] ?? 0);
-
-            usort($tiers, static fn (array $a, array $b): int => ((int) ($a['participantLimit'] ?? 0)) <=> ((int) ($b['participantLimit'] ?? 0)));
-            foreach ($tiers as $tier) {
-                $limit = (int) ($tier['participantLimit'] ?? 0);
-                if ($limit > 0 && $count < $limit) {
-                    return $this->priceForTier($basePrice, $tier);
-                }
-            }
-            return $basePrice;
-        }
-
-        usort($tiers, static fn (array $a, array $b): int => strcmp((string) ($a['endDate'] ?? ''), (string) ($b['endDate'] ?? '')));
         $today = date('Y-m-d');
+        $registeredCount = (int) ($distance['registeredCount'] ?? 0);
+
         foreach ($tiers as $tier) {
             $endDate = (string) ($tier['endDate'] ?? '');
-            if ($endDate !== '' && substr($endDate, 0, 10) >= $today) {
+            $expiredByDate = $endDate !== '' && substr($endDate, 0, 10) < $today;
+
+            $limit = (int) ($tier['participantLimit'] ?? 0);
+            $expiredByCount = $limit > 0 && $registeredCount >= $limit;
+
+            if (!$expiredByDate && !$expiredByCount) {
                 return $this->priceForTier($basePrice, $tier);
             }
         }
@@ -456,17 +453,6 @@ SQL;
         }
 
         return $this->roundMoney(max(0, $basePrice * (1 - ($value / 100))));
-    }
-
-    private function paidRegistrationCount(string $eventId, string $distanceId): int
-    {
-        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM registrations r INNER JOIN registration_payment_details pd ON pd.registration_id = r.id WHERE r.event_id = :eventId AND r.distance_id = :distanceId AND r.status <> :removed AND pd.start_fee_paid = 1');
-        $stmt->execute([
-            'eventId' => $eventId,
-            'distanceId' => $distanceId,
-            'removed' => 'removed',
-        ]);
-        return (int) $stmt->fetchColumn();
     }
 
     /** @return array<string, mixed> */
@@ -536,7 +522,78 @@ SQL;
         $row['relayMembers'] = $this->decodeRelayMembers($row['relayMembers'] ?? null);
         $row['merchandiseOrders'] = $this->merchandise($row['id']);
         $row['paymentDetails'] = $this->paymentDetails($row['id']);
+
+        $settlement = $this->settlementItems($row['id']);
+        $row['settlementItems'] = $settlement;
+        $row['pricePaid'] = null;
+        $row['discountAmount'] = null;
+        $row['insurancePaid'] = null;
+        $hasStartFee = false;
+        $startFee = 0.0;
+        foreach ($settlement as $item) {
+            $amount = (float) $item['amount'];
+            if ($item['basis'] === 'distance_price') {
+                $hasStartFee = true;
+                $startFee += $amount;
+            } elseif ($item['basis'] === 'discount_code') {
+                $hasStartFee = true;
+                $startFee += $amount;
+                $row['discountAmount'] = abs($amount);
+            } elseif ($item['basis'] === 'insurance') {
+                $row['insurancePaid'] = $amount;
+            }
+        }
+        if ($hasStartFee) {
+            $row['pricePaid'] = $this->roundMoney($startFee);
+        }
+
         return $row;
+    }
+
+    /**
+     * Rozliczenie: the positioned, frozen line items belonging to this Zapis
+     * (name, basis, amount, freeze timestamp) — replaces the old flat
+     * `price_paid` / `discount_amount` / `insurance_paid` columns (E0.3).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function settlementItems(string $registrationId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT id, name, basis, amount, frozen_at AS frozenAt FROM registration_settlement_items WHERE registration_id = :id ORDER BY sort_order ASC, id ASC');
+        $stmt->execute(['id' => $registrationId]);
+        return array_map(
+            static fn (array $item): array => [...$item, 'amount' => (float) $item['amount']],
+            $stmt->fetchAll()
+        );
+    }
+
+    /**
+     * @param array{distancePrice: float, discountAmount: ?float, discountCode: ?string} $pricing
+     */
+    private function createSettlementItems(string $registrationId, array $pricing, string $frozenAt): void
+    {
+        $this->insert('registration_settlement_items', [
+            'id' => $this->id(),
+            'registration_id' => $registrationId,
+            'name' => 'Opłata startowa',
+            'basis' => 'distance_price',
+            'amount' => $pricing['distancePrice'],
+            'frozen_at' => $frozenAt,
+            'sort_order' => 0,
+        ]);
+
+        if ($pricing['discountAmount'] !== null && (float) $pricing['discountAmount'] !== 0.0) {
+            $label = 'Kod rabatowy' . ($pricing['discountCode'] ? ' ' . $pricing['discountCode'] : '');
+            $this->insert('registration_settlement_items', [
+                'id' => $this->id(),
+                'registration_id' => $registrationId,
+                'name' => $label,
+                'basis' => 'discount_code',
+                'amount' => -abs((float) $pricing['discountAmount']),
+                'frozen_at' => $frozenAt,
+                'sort_order' => 1,
+            ]);
+        }
     }
 
     /** @return array<int, array<string, mixed>> */

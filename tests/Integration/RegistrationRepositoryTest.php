@@ -237,6 +237,174 @@ final class RegistrationRepositoryTest extends TestCase
         ], $overrides);
     }
 
+    /**
+     * E0.3: a Próg (price tier) carries at most two independent, optional
+     * limits — endDate and participantLimit — and expires on whichever is
+     * hit first ("co nastąpi wcześniej"), with no XOR mode flag choosing
+     * between them. These cover RegistrationRepository::currentDistancePrice
+     * for: only end-date set, only participant-limit set, both set with the
+     * date hit first, both set with the count hit first, and neither set.
+     */
+    public function testTierWithOnlyEndDateAppliesWhileNotYetExpired(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-tier-date-active',
+            'distances' => [
+                [
+                    'price' => 80,
+                    'registeredCount' => 0,
+                    'priceTiers' => [
+                        ['endDate' => '2999-01-01', 'price' => 60],
+                    ],
+                ],
+            ],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        self::assertEquals(60.00, (float) $registration['pricePaid']);
+    }
+
+    public function testTierWithOnlyEndDateExpiresAfterDatePasses(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-tier-date-expired',
+            'distances' => [
+                [
+                    'price' => 80,
+                    'registeredCount' => 0,
+                    'priceTiers' => [
+                        ['endDate' => '2000-01-01', 'price' => 60],
+                    ],
+                ],
+            ],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        self::assertEquals(80.00, (float) $registration['pricePaid']);
+    }
+
+    public function testTierWithOnlyParticipantLimitAppliesUnderLimit(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-tier-count-active',
+            'distances' => [
+                [
+                    'price' => 80,
+                    'registeredCount' => 4,
+                    'priceTiers' => [
+                        ['participantLimit' => 5, 'price' => 60],
+                    ],
+                ],
+            ],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        self::assertEquals(60.00, (float) $registration['pricePaid']);
+    }
+
+    public function testTierWithOnlyParticipantLimitExpiresAtLimit(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-tier-count-expired',
+            'distances' => [
+                [
+                    'price' => 80,
+                    'registeredCount' => 5,
+                    'priceTiers' => [
+                        ['participantLimit' => 5, 'price' => 60],
+                    ],
+                ],
+            ],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        self::assertEquals(80.00, (float) $registration['pricePaid']);
+    }
+
+    public function testTierWithBothLimitsExpiresWhenDateIsHitFirst(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-both-datefirst',
+            'distances' => [
+                [
+                    'price' => 80,
+                    'registeredCount' => 1,
+                    'priceTiers' => [
+                        ['endDate' => '2000-01-01', 'participantLimit' => 5, 'price' => 60],
+                    ],
+                ],
+            ],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        self::assertEquals(80.00, (float) $registration['pricePaid']);
+    }
+
+    public function testTierWithBothLimitsExpiresWhenCountIsHitFirst(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-both-cntfirst',
+            'distances' => [
+                [
+                    'price' => 80,
+                    'registeredCount' => 5,
+                    'priceTiers' => [
+                        ['endDate' => '2999-01-01', 'participantLimit' => 5, 'price' => 60],
+                    ],
+                ],
+            ],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        self::assertEquals(80.00, (float) $registration['pricePaid']);
+    }
+
+    public function testTierWithBothLimitsAppliesWhenNeitherIsHit(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-tier-both-active',
+            'distances' => [
+                [
+                    'price' => 80,
+                    'registeredCount' => 1,
+                    'priceTiers' => [
+                        ['endDate' => '2999-01-01', 'participantLimit' => 5, 'price' => 60],
+                    ],
+                ],
+            ],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        self::assertEquals(60.00, (float) $registration['pricePaid']);
+    }
+
+    public function testTierWithNeitherLimitSetNeverExpires(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-tier-neither',
+            'distances' => [
+                [
+                    'price' => 80,
+                    'registeredCount' => 999,
+                    'priceTiers' => [
+                        ['price' => 60],
+                    ],
+                ],
+            ],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        self::assertEquals(60.00, (float) $registration['pricePaid']);
+    }
+
     /** @param array<string, mixed> $event */
     private function registrationPayload(array $event, string $code, string $userId = 'phpunit-user'): array
     {

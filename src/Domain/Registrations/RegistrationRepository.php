@@ -13,7 +13,6 @@ id, event_id AS eventId, event_name AS eventName, user_id AS userId, competitor_
 user_name AS userName,
 user_email AS userEmail, distance_id AS distanceId, distance_name AS distanceName, category,
 registered_at AS registeredAt, status, bib_number AS bibNumber, team_name AS teamName, team_id AS teamId,
-relay_members AS relayMembers,
 discount_code AS discountCode, removed_at AS removedAt, checked_in_at AS checkedInAt,
 registered_by_id AS registeredById
 SQL;
@@ -23,7 +22,6 @@ r.id, r.event_id AS eventId, r.event_name AS eventName, r.user_id AS userId, r.c
 r.user_name AS userName,
 r.user_email AS userEmail, r.distance_id AS distanceId, r.distance_name AS distanceName, r.category,
 r.registered_at AS registeredAt, r.status, r.bib_number AS bibNumber, r.team_name AS teamName, r.team_id AS teamId,
-r.relay_members AS relayMembers,
 r.discount_code AS discountCode, r.removed_at AS removedAt, r.checked_in_at AS checkedInAt,
 r.registered_by_id AS registeredById
 SQL;
@@ -168,7 +166,6 @@ SQL;
                 'status' => $startFeePaid ? 'confirmed' : 'pending',
                 'team_name' => $data['teamName'] ?? null,
                 'team_id' => $data['teamId'] ?? null,
-                'relay_members' => $this->encodeRelayMembers($data['relayMembers'] ?? []),
                 'registered_by_id' => $data['registeredById'] ?? null,
                 'discount_code' => $pricing['discountCode'],
             ]);
@@ -198,7 +195,6 @@ SQL;
             'bibNumber' => 'bib_number',
             'teamName' => 'team_name',
             'teamId' => 'team_id',
-            'relayMembers' => 'relay_members',
             'discountCode' => 'discount_code',
             'removedAt' => 'removed_at',
             'checkedInAt' => 'checked_in_at',
@@ -206,9 +202,6 @@ SQL;
             if (array_key_exists($input, $data)) {
                 $mapped[$column] = $data[$input];
             }
-        }
-        if (array_key_exists('relay_members', $mapped)) {
-            $mapped['relay_members'] = $this->encodeRelayMembers($data['relayMembers'] ?? []);
         }
         $this->updateById('registrations', $id, $mapped);
         if (array_key_exists('merchandiseOrders', $data)) {
@@ -249,7 +242,7 @@ SQL;
      */
     private function pricingForRegistration(array $data): array
     {
-        $stmt = $this->pdo->prepare('SELECT e.name AS eventName, d.id AS distanceId, d.name AS distanceName, d.price AS distancePrice, d.registered_count AS registeredCount, d.price_tiers AS priceTiers, d.start_type AS startType, d.relay_min_team_size AS relayMinTeamSize, d.relay_max_team_size AS relayMaxTeamSize, d.relay_team_completion_deadline AS relayTeamCompletionDeadline FROM events e INNER JOIN event_distances d ON d.event_id = e.id WHERE e.id = :eventId AND d.id = :distanceId');
+        $stmt = $this->pdo->prepare('SELECT e.name AS eventName, d.id AS distanceId, d.name AS distanceName, d.price AS distancePrice, d.registered_count AS registeredCount, d.price_tiers AS priceTiers FROM events e INNER JOIN event_distances d ON d.event_id = e.id WHERE e.id = :eventId AND d.id = :distanceId');
         $stmt->execute([
             'eventId' => $data['eventId'],
             'distanceId' => $data['distanceId'],
@@ -258,8 +251,6 @@ SQL;
         if (!$row) {
             throw new \RuntimeException('registration_distance_invalid');
         }
-
-        $this->assertRelayRegistrationRules($row, $data);
 
         $distancePrice = $this->currentDistancePrice($row);
         $discountCode = trim((string) ($data['discountCode'] ?? ''));
@@ -299,97 +290,6 @@ SQL;
                 ? (json_decode((string) $discount['used_by'], true) ?: [])
                 : [],
         ];
-    }
-
-    /** @param array<string, mixed> $distance */
-    private function assertRelayRegistrationRules(array $distance, array $data): void
-    {
-        if (($distance['startType'] ?? 'individual') !== 'relay') {
-            return;
-        }
-
-        $teamName = trim((string) ($data['teamName'] ?? ''));
-        if ($teamName === '') {
-            throw new \RuntimeException('registration_relay_team_required');
-        }
-
-        $submittedTeamSize = 1 + count($this->normalizeRelayMembers($data['relayMembers'] ?? []));
-        $maxTeamSize = $distance['relayMaxTeamSize'] !== null ? (int) $distance['relayMaxTeamSize'] : 0;
-        if ($maxTeamSize > 0 && $submittedTeamSize > $maxTeamSize) {
-            throw new \RuntimeException('registration_relay_team_full');
-        }
-
-        $stmt = $this->pdo->prepare("SELECT relay_members AS relayMembers FROM registrations WHERE event_id = :eventId AND distance_id = :distanceId AND team_name = :teamName AND status NOT IN ('removed', 'cancelled') FOR UPDATE");
-        $stmt->execute([
-            'eventId' => $data['eventId'],
-            'distanceId' => $data['distanceId'],
-            'teamName' => $teamName,
-        ]);
-        $existingTeamSize = 0;
-        foreach ($stmt->fetchAll() as $registration) {
-            $existingTeamSize += 1 + count($this->decodeRelayMembers($registration['relayMembers'] ?? null));
-        }
-        if ($maxTeamSize > 0 && $existingTeamSize + $submittedTeamSize > $maxTeamSize) {
-            throw new \RuntimeException('registration_relay_team_full');
-        }
-
-        $minTeamSize = $distance['relayMinTeamSize'] !== null ? (int) $distance['relayMinTeamSize'] : 0;
-        $deadline = (string) ($distance['relayTeamCompletionDeadline'] ?? '');
-        if (
-            $minTeamSize > 0 &&
-            $deadline !== '' &&
-            substr($deadline, 0, 10) < date('Y-m-d') &&
-            $existingTeamSize + $submittedTeamSize < $minTeamSize
-        ) {
-            throw new \RuntimeException('registration_relay_team_incomplete_deadline');
-        }
-    }
-
-    private function encodeRelayMembers(mixed $members): ?string
-    {
-        $normalized = $this->normalizeRelayMembers($members);
-        return $normalized === []
-            ? null
-            : json_encode($normalized, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    }
-
-    /** @return array<int, array{id: string, name: string, email?: string}> */
-    private function normalizeRelayMembers(mixed $members): array
-    {
-        if (!is_array($members)) {
-            return [];
-        }
-
-        $normalized = [];
-        foreach ($members as $member) {
-            if (!is_array($member)) {
-                continue;
-            }
-            $name = trim((string) ($member['name'] ?? ''));
-            $email = trim((string) ($member['email'] ?? ''));
-            if ($name === '') {
-                continue;
-            }
-            $item = [
-                'id' => (string) (($member['id'] ?? '') ?: $this->id()),
-                'name' => $name,
-            ];
-            if ($email !== '') {
-                $item['email'] = $email;
-            }
-            $normalized[] = $item;
-        }
-        return $normalized;
-    }
-
-    /** @return array<int, array<string, mixed>> */
-    private function decodeRelayMembers(mixed $raw): array
-    {
-        if (!is_string($raw) || trim($raw) === '') {
-            return [];
-        }
-        $decoded = json_decode($raw, true);
-        return is_array($decoded) ? array_values(array_filter($decoded, 'is_array')) : [];
     }
 
     /**
@@ -519,7 +419,6 @@ SQL;
     /** @param array<string, mixed> $row */
     private function hydrate(array $row): array
     {
-        $row['relayMembers'] = $this->decodeRelayMembers($row['relayMembers'] ?? null);
         $row['merchandiseOrders'] = $this->merchandise($row['id']);
         $row['paymentDetails'] = $this->paymentDetails($row['id']);
 

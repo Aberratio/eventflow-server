@@ -144,6 +144,49 @@ final class RegistrationRepositoryTest extends TestCase
         $this->registrations->create($this->registrationPayload($event, 'ONCE', 'user-two'));
     }
 
+    public function testTicketsByUserDerivesActiveStatusFromRegistrationBeforeCheckIn(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-ticket-active']));
+        $registration = $this->registrations->create($this->registrationPayload($event, '', 'phpunit-ticket-user'));
+
+        $tickets = $this->registrations->ticketsByUser('phpunit-ticket-user');
+
+        self::assertCount(1, $tickets);
+        $ticket = $tickets[0];
+        self::assertSame($registration['id'], $ticket['id']);
+        self::assertSame($registration['id'], $ticket['registrationId']);
+        self::assertSame('active', $ticket['status']);
+        self::assertNull($ticket['checkedInAt']);
+    }
+
+    public function testCheckInRecordsTimestampAndTicketBecomesUsed(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-ticket-used']));
+        $registration = $this->registrations->create($this->registrationPayload($event, '', 'phpunit-ticket-checkin-user'));
+
+        self::assertNull($registration['checkedInAt']);
+
+        $updated = $this->registrations->checkIn($registration['id']);
+
+        self::assertNotNull($updated['checkedInAt']);
+
+        $tickets = $this->registrations->ticketsByUser('phpunit-ticket-checkin-user');
+        self::assertSame('used', $tickets[0]['status']);
+        self::assertSame($updated['checkedInAt'], $tickets[0]['checkedInAt']);
+    }
+
+    public function testTicketForCancelledRegistrationIsCancelledEvenIfCheckedIn(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-ticket-cancel']));
+        $registration = $this->registrations->create($this->registrationPayload($event, '', 'phpunit-ticket-cancel-user'));
+        $this->registrations->checkIn($registration['id']);
+        $this->registrations->cancel($registration['id']);
+
+        $tickets = $this->registrations->ticketsByUser('phpunit-ticket-cancel-user');
+
+        self::assertSame('cancelled', $tickets[0]['status']);
+    }
+
     /** @param array<string, mixed> $overrides */
     private function payload(array $overrides = []): array
     {

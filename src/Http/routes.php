@@ -23,7 +23,6 @@ use ZmierzymyCzas\Domain\Certificate\CertificateRepository;
 use ZmierzymyCzas\Domain\Insurance\InsuranceRepository;
 use ZmierzymyCzas\Domain\Shop\OrderRepository;
 use ZmierzymyCzas\Domain\Shop\ShopRepository;
-use ZmierzymyCzas\Domain\Ticket\TicketRepository;
 use ZmierzymyCzas\Domain\Care\CareRepository;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
@@ -48,7 +47,6 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $backgrounds = new EventBackgroundRepository($pdo);
     $insurance = new InsuranceRepository($pdo);
     $orders = new OrderRepository($pdo);
-    $tickets = new TicketRepository($pdo);
     $certificates = new CertificateRepository($pdo);
     $competitors = new CompetitorRepository($pdo);
     $care = new CareRepository($pdo);
@@ -136,7 +134,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $tickets, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
@@ -1097,7 +1095,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, ['received' => count($logs)]);
         })->add(new AuthMiddleware($jwt, []));
 
-        $api->get('/users/{userId}/tickets', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $tickets->byUser($args['userId'])))
+        // Bilet is a view of Zapis, not a stored entity (E0.2) — derived from registrations.
+        $api->get('/users/{userId}/tickets', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->ticketsByUser($args['userId'])))
             ->add(new AuthMiddleware($jwt, []));
         $api->get('/users/{userId}/certificates', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $certificates->byUser($args['userId'])))
             ->add(new AuthMiddleware($jwt, []));

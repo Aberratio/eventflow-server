@@ -230,6 +230,104 @@ final class OrganizerEventContractTest extends HttpTestCase
         self::assertSame('cancelled', $this->json($cancelResp)['data']['publicationStatus']);
     }
 
+    public function testOwnerCanChangeVisibilityOfPublishedEventButNotDraft(): void
+    {
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-visibility']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+
+        // Only meaningful once Published — the underlying event is still draft here.
+        $visibilityDraftResp = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $eventId . '/visibility',
+            ['visibility' => 'private'],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(409, $visibilityDraftResp->getStatusCode());
+
+        $this->request('POST', '/api/v1/events/' . $eventId . '/submit', [], $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email']));
+        $this->request('POST', '/api/v1/events/' . $eventId . '/approve', [], $this->bearer($this->admin['id'], 'admin', $this->admin['email']));
+
+        $visibilityResp = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $eventId . '/visibility',
+            ['visibility' => 'private'],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(200, $visibilityResp->getStatusCode());
+        self::assertSame('private', $this->json($visibilityResp)['data']['visibility']);
+    }
+
+    public function testAdminCanChangeVisibilityOfPublishedEvent(): void
+    {
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-visibility-admin']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+        $this->request('POST', '/api/v1/events/' . $eventId . '/submit', [], $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email']));
+        $this->request('POST', '/api/v1/events/' . $eventId . '/approve', [], $this->bearer($this->admin['id'], 'admin', $this->admin['email']));
+
+        $visibilityResp = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $eventId . '/visibility',
+            ['visibility' => 'private'],
+            $this->bearer($this->admin['id'], 'admin', $this->admin['email'])
+        );
+        self::assertSame(200, $visibilityResp->getStatusCode());
+        self::assertSame('private', $this->json($visibilityResp)['data']['visibility']);
+    }
+
+    public function testOtherOrganizerCannotChangeVisibility(): void
+    {
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-visibility-other']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+        $this->request('POST', '/api/v1/events/' . $eventId . '/submit', [], $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email']));
+        $this->request('POST', '/api/v1/events/' . $eventId . '/approve', [], $this->bearer($this->admin['id'], 'admin', $this->admin['email']));
+
+        $visibilityResp = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $eventId . '/visibility',
+            ['visibility' => 'private'],
+            $this->bearer($this->organizerB['id'], 'organizer', $this->organizerB['email'])
+        );
+        self::assertSame(403, $visibilityResp->getStatusCode());
+        self::assertSame('forbidden', $this->json($visibilityResp)['error']['code']);
+    }
+
+    public function testChangeVisibilityWithInvalidValueReturns422(): void
+    {
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-visibility-invalid']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+        $this->request('POST', '/api/v1/events/' . $eventId . '/submit', [], $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email']));
+        $this->request('POST', '/api/v1/events/' . $eventId . '/approve', [], $this->bearer($this->admin['id'], 'admin', $this->admin['email']));
+
+        $visibilityResp = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $eventId . '/visibility',
+            ['visibility' => 'hidden'],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(422, $visibilityResp->getStatusCode());
+        self::assertSame('validation_error', $this->json($visibilityResp)['error']['code']);
+    }
+
     public function testAdminCanRejectEventWithReason(): void
     {
         $createResp = $this->request(

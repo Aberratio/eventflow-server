@@ -343,6 +343,41 @@ final class EventRepositoryTest extends TestCase
         self::assertNull($this->events->cancel((string) $published['id']));
     }
 
+    public function testVisibilityOnlyWorksFromPublished(): void
+    {
+        $draft = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-visibility-draft',
+            'name' => 'PHPUnit Visibility From Draft Forbidden',
+            'distances' => $this->minimalDistances($this->slugPrefix . '-visibility-draft'),
+        ]));
+        self::assertNull($this->events->setVisibility((string) $draft['id'], 'private'));
+
+        $published = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-visibility-published',
+            'name' => 'PHPUnit Visibility From Published',
+            'status' => 'active',
+            'distances' => $this->minimalDistances($this->slugPrefix . '-visibility-published'),
+        ]));
+
+        $private = $this->events->setVisibility((string) $published['id'], 'private');
+        self::assertNotNull($private);
+        self::assertSame('private', $private['visibility']);
+        self::assertTrue($private['isPrivate']);
+
+        // `visibility` and the underlying `is_private` column stay in sync in both
+        // directions.
+        $public = $this->events->setVisibility((string) $published['id'], 'public');
+        self::assertNotNull($public);
+        self::assertSame('public', $public['visibility']);
+        self::assertFalse($public['isPrivate']);
+
+        // Anything other than the literal 'private' normalizes to 'public' — mirrors the
+        // ternary in EventRepository::setVisibility().
+        $garbage = $this->events->setVisibility((string) $published['id'], 'not-a-real-value');
+        self::assertNotNull($garbage);
+        self::assertSame('public', $garbage['visibility']);
+    }
+
     public function testIsTestOnlySettableWhileDraftAndClearedIrreversiblyOnSubmit(): void
     {
         $created = $this->events->create($this->payload([

@@ -32,12 +32,17 @@ final class OrganizerEventContractTest extends HttpTestCase
             'email' => $this->prefix . '-orgA@example.test',
             'password' => 'demo1234',
             'role' => 'organizer',
+            // New organizers start with event_limit=0 (an admin grants slots after
+            // onboarding); these HTTP contract tests exercise real event creation,
+            // so the fixture needs slots of its own instead of relying on the default.
+            'eventLimit' => 5,
         ]);
         $this->organizerB = $this->users->create([
             'name' => 'Organizer B',
             'email' => $this->prefix . '-orgB@example.test',
             'password' => 'demo1234',
             'role' => 'organizer',
+            'eventLimit' => 5,
         ]);
         $this->admin = $this->users->create([
             'name' => 'Org Admin',

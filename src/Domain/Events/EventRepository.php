@@ -400,9 +400,15 @@ SQL;
         foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'registrationUntilEventStart', 'enableMerchandiseInRegistration'] as $bool) {
             $event[$bool] = (bool) ($event[$bool] ?? false);
         }
-        $event['distances'] = $this->withPaidCounts(
-            $event['id'],
-            $this->children('event_distances', 'event_id', $event['id'], self::DISTANCE_JSON)
+        $event['distances'] = array_map(
+            fn (array $distance): array => [
+                ...$distance,
+                'pricingVariants' => $this->children('event_distance_pricing_variants', 'distance_id', (string) $distance['id']),
+            ],
+            $this->withPaidCounts(
+                $event['id'],
+                $this->children('event_distances', 'event_id', $event['id'], self::DISTANCE_JSON)
+            )
         );
         $event['paymentMethods'] = $this->children('event_payment_methods', 'event_id', $event['id']);
         $event['merchandise'] = $this->children('event_merchandise', 'event_id', $event['id'], ['sizes', 'colors', 'images', 'distanceIds', 'documents']);
@@ -689,6 +695,11 @@ SQL;
             }
             $this->pdo->prepare("DELETE FROM {$meta['table']} WHERE event_id = :eventId")->execute(['eventId' => $eventId]);
             foreach (array_values($data[$input] ?? []) as $index => $item) {
+                $pricingVariants = null;
+                if ($meta['table'] === 'event_distances' && array_key_exists('pricingVariants', $item)) {
+                    $pricingVariants = $item['pricingVariants'];
+                    unset($item['pricingVariants']);
+                }
                 $row = $this->snakeizeKeys($item);
                 if ($meta['table'] === 'event_distances' && array_key_exists('limit', $row)) {
                     $row['participant_limit'] = $row['limit'];
@@ -704,7 +715,30 @@ SQL;
                     }
                 }
                 $this->insert($meta['table'], $row);
+                if ($pricingVariants !== null) {
+                    $this->replaceDistancePricingVariants((string) $row['id'], $pricingVariants);
+                }
             }
+        }
+    }
+
+    /**
+     * Wariant opłaty (E0.3): a pricing variant belonging to a Dystans — e.g. the
+     * office-only "zapis w biurze zawodów" price that used to be the special-cased
+     * `event_distances.office_price` column. Full replace, mirroring how the other
+     * event children are persisted.
+     *
+     * @param array<int, array<string, mixed>> $variants
+     */
+    private function replaceDistancePricingVariants(string $distanceId, array $variants): void
+    {
+        $this->pdo->prepare('DELETE FROM event_distance_pricing_variants WHERE distance_id = :distanceId')->execute(['distanceId' => $distanceId]);
+        foreach (array_values($variants) as $index => $variant) {
+            $row = $this->snakeizeKeys($variant);
+            $row['id'] = $row['id'] ?? $this->id();
+            $row['distance_id'] = $distanceId;
+            $row['sort_order'] = $index;
+            $this->insert('event_distance_pricing_variants', $row);
         }
     }
 

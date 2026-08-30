@@ -7,6 +7,7 @@ namespace ZmierzymyCzas\Database;
 use PDO;
 use RuntimeException;
 use ZmierzymyCzas\Domain\Events\EventRepository;
+use ZmierzymyCzas\Support\Uuid;
 
 /**
  * Loads the event fixtures from database/seeders/data/events.json into the database.
@@ -251,7 +252,7 @@ final class EventFixtureImporter
                AND (e.registration_status <> 'none' OR e.registration_status IS NULL)"
         )->fetchAll(PDO::FETCH_ASSOC);
 
-        $written = ['users' => 0, 'registrations' => 0, 'registration_payment_details' => 0, 'results' => 0];
+        $written = ['users' => 0, 'registrations' => 0, 'registration_settlement_items' => 0, 'registration_payment_details' => 0, 'results' => 0];
 
         foreach ($candidates as $row) {
             if ((int) $row['dists'] === 0) {
@@ -288,6 +289,7 @@ final class EventFixtureImporter
                 $written['users'] += $this->importUsers($filled['users'], []);
                 $counts = $this->importRegistrations($filled['registrations']);
                 $written['registrations'] += $counts['registrations'];
+                $written['registration_settlement_items'] += $counts['registration_settlement_items'];
                 $written['registration_payment_details'] += $counts['registration_payment_details'];
                 $startList = array_merge($startList, $filled['registrations']);
             }
@@ -402,12 +404,14 @@ final class EventFixtureImporter
     {
         $counts = [
             'registrations' => 0,
+            'registration_settlement_items' => 0,
             'registration_payment_details' => 0,
             'registration_merchandise_orders' => 0,
         ];
 
         foreach ($registrations as $registration) {
             $id = (string) $registration['id'];
+            $registeredAt = (string) ($registration['registeredAt'] ?? '');
 
             $this->insert('registrations', [
                 'id' => $id,
@@ -419,16 +423,14 @@ final class EventFixtureImporter
                 'distance_id' => (string) ($registration['distanceId'] ?? ''),
                 'distance_name' => (string) ($registration['distanceName'] ?? ''),
                 'category' => (string) ($registration['category'] ?? ''),
-                'registered_at' => (string) ($registration['registeredAt'] ?? ''),
+                'registered_at' => $registeredAt,
                 'status' => (string) ($registration['status'] ?? 'pending'),
                 'bib_number' => $registration['bibNumber'] ?? null,
                 'team_name' => $registration['teamName'] ?? null,
-                'price_paid' => $registration['pricePaid'] ?? null,
                 'discount_code' => $registration['discountCode'] ?? null,
-                'discount_amount' => $registration['discountAmount'] ?? null,
-                'insurance_paid' => $registration['insurancePaid'] ?? null,
             ]);
             $counts['registrations']++;
+            $counts['registration_settlement_items'] += $this->importSettlementItems($id, $registration, $registeredAt);
 
             $details = $registration['paymentDetails'] ?? null;
             if (is_array($details)) {
@@ -462,6 +464,65 @@ final class EventFixtureImporter
         }
 
         return $counts;
+    }
+
+    /**
+     * Fixtures still describe the old flat `pricePaid` / `discountAmount` /
+     * `insurancePaid` registration fields (E0.3 dropped the columns behind them).
+     * Translates them into Rozliczenie line items instead of writing dead columns.
+     * The gross start fee is reconstructed as pricePaid + discountAmount, mirroring
+     * RegistrationRepository::pricingForRegistration's `pricePaid = price - discount`.
+     *
+     * @param array<string, mixed> $registration
+     */
+    private function importSettlementItems(string $registrationId, array $registration, string $registeredAt): int
+    {
+        $count = 0;
+        $pricePaid = $registration['pricePaid'] ?? null;
+        $discountAmount = $registration['discountAmount'] ?? null;
+        $insurancePaid = $registration['insurancePaid'] ?? null;
+
+        if ($pricePaid !== null) {
+            $this->insert('registration_settlement_items', [
+                'id' => Uuid::v4(),
+                'registration_id' => $registrationId,
+                'name' => 'Opłata startowa',
+                'basis' => 'distance_price',
+                'amount' => round((float) $pricePaid + (float) ($discountAmount ?? 0), 2),
+                'frozen_at' => $registeredAt,
+                'sort_order' => 0,
+            ]);
+            $count++;
+
+            if ($discountAmount !== null && (float) $discountAmount !== 0.0) {
+                $code = (string) ($registration['discountCode'] ?? '');
+                $this->insert('registration_settlement_items', [
+                    'id' => Uuid::v4(),
+                    'registration_id' => $registrationId,
+                    'name' => 'Kod rabatowy' . ($code !== '' ? ' ' . $code : ''),
+                    'basis' => 'discount_code',
+                    'amount' => -abs((float) $discountAmount),
+                    'frozen_at' => $registeredAt,
+                    'sort_order' => 1,
+                ]);
+                $count++;
+            }
+        }
+
+        if ($insurancePaid !== null && is_numeric($insurancePaid)) {
+            $this->insert('registration_settlement_items', [
+                'id' => Uuid::v4(),
+                'registration_id' => $registrationId,
+                'name' => 'Ubezpieczenie NNW',
+                'basis' => 'insurance',
+                'amount' => (float) $insurancePaid,
+                'frozen_at' => $registeredAt,
+                'sort_order' => 2,
+            ]);
+            $count++;
+        }
+
+        return $count;
     }
 
     /** @param array<int, array<string, mixed>> $results */

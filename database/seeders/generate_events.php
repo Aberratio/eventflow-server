@@ -245,7 +245,7 @@ function buildPastEvent(
     $distanceRows = [];
     foreach ($distances as $d) {
         $distanceRows[] = sprintf(
-            "(%s,%s,%s,%.3f,'km',%s,%s,0,%s,'date','registered',%s,0)",
+            "(%s,%s,%s,%.3f,'km',%s,%s,0,%s,%s,0)",
             sq($d['id']), sq($eventId), sq($d['name']), $d['length'],
             js($d['categories']),
             $d['limit'],
@@ -254,13 +254,14 @@ function buildPastEvent(
             $d['sort']
         );
     }
-    $sql .= "INSERT INTO event_distances (id,event_id,name,length,unit,categories,participant_limit,registered_count,price,price_tier_mode,participant_count_type,price_tiers,sort_order) VALUES\n";
+    $sql .= "INSERT INTO event_distances (id,event_id,name,length,unit,categories,participant_limit,registered_count,price,price_tiers,sort_order) VALUES\n";
     $sql .= implode(",\n", $distanceRows) . ";\n\n";
 
     // Rejestracje i wyniki
     $registrationRows = [];
     $paymentRows      = [];
     $resultRows       = [];
+    $settlementRows   = [];
 
     // Zbieraj wyniki per dystans dla rankingu
     $resultsByDist = [0 => [], 1 => [], 2 => []];
@@ -278,14 +279,19 @@ function buildPastEvent(
         $timeS = generateRunTime($dist['length'], $dist['pace_mean'], $dist['pace_std']);
 
         $registrationRows[] = sprintf(
-            "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'confirmed',%s,%s)",
+            "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'confirmed',%s)",
             sq($regId), sq($eventId), sq($eventName),
             sq($p['id']), sq($p['name']), sq($p['email']),
             sq($dist['id']), sq($dist['name']),
             sq($cat),
             sq($regAt),
-            sq($bibNum),
-            $dist['price']
+            sq($bibNum)
+        );
+
+        // Rozliczenie (E0.3): "Oplata startowa" line item replaces registrations.price_paid.
+        $settlementRows[] = sprintf(
+            "(%s,%s,'Oplata startowa','distance_price',%.2f,%s,0)",
+            sq(uuid('settle-')), sq($regId), $dist['price'], sq($regAt)
         );
 
         $paidAt = date('Y-m-d\TH:i:s+02:00', strtotime($regAt) + rand(300, 3600));
@@ -332,8 +338,11 @@ function buildPastEvent(
         }
     }
 
-    $sql .= "INSERT INTO registrations (id,event_id,event_name,user_id,user_name,user_email,distance_id,distance_name,category,registered_at,status,bib_number,price_paid) VALUES\n";
+    $sql .= "INSERT INTO registrations (id,event_id,event_name,user_id,user_name,user_email,distance_id,distance_name,category,registered_at,status,bib_number) VALUES\n";
     $sql .= implode(",\n", $registrationRows) . ";\n\n";
+
+    $sql .= "INSERT INTO registration_settlement_items (id,registration_id,name,basis,amount,frozen_at,sort_order) VALUES\n";
+    $sql .= implode(",\n", $settlementRows) . ";\n\n";
 
     $sql .= "INSERT INTO registration_payment_details (registration_id,start_fee_paid,start_fee_paid_at,start_fee_amount,insurance_paid,merchandise_payments) VALUES\n";
     $sql .= implode(",\n", $paymentRows) . ";\n\n";
@@ -441,7 +450,7 @@ function buildCurrentEvent(): array
     $distRows = [];
     foreach ($distances as $dist) {
         $distRows[] = sprintf(
-            "(%s,%s,%s,%.3f,'km',%s,%s,0,%.2f,'date','registered',%s,%d)",
+            "(%s,%s,%s,%.3f,'km',%s,%s,0,%.2f,%s,%d)",
             sq($dist['id']), sq($eventId), sq($dist['name']), $dist['length'],
             js($dist['categories']),
             $dist['limit'],
@@ -450,11 +459,11 @@ function buildCurrentEvent(): array
             $dist['sort']
         );
     }
-    $sql .= "INSERT INTO event_distances (id,event_id,name,length,unit,categories,participant_limit,registered_count,price,price_tier_mode,participant_count_type,price_tiers,sort_order) VALUES\n";
+    $sql .= "INSERT INTO event_distances (id,event_id,name,length,unit,categories,participant_limit,registered_count,price,price_tiers,sort_order) VALUES\n";
     $sql .= implode(",\n", $distRows) . ";\n\n";
 
     // Rejestracje — część opłacona, część nie
-    $regRows = []; $payRows = [];
+    $regRows = []; $payRows = []; $settleRows = [];
     $kidsParticipants  = array_filter($participants, fn($p) => str_starts_with($p['id'], 'u-kids-'));
     $youthParticipants = array_filter($participants, fn($p) => str_starts_with($p['id'], 'u-youth-'));
 
@@ -473,15 +482,20 @@ function buildCurrentEvent(): array
             $status = $paid ? 'confirmed' : 'pending';
 
             $regRows[] = sprintf(
-                "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%.2f)",
+                "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 sq($regId), sq($eventId), sq($eventName),
                 sq($p['id']), sq($p['name']), sq($p['email']),
                 sq($batch['dist']['id']), sq($batch['dist']['name']),
                 sq($cat),
                 sq($regAt),
                 sq($status),
-                sq($bibNum),
-                $batch['dist']['price']
+                sq($bibNum)
+            );
+
+            // Rozliczenie (E0.3): replaces registrations.price_paid.
+            $settleRows[] = sprintf(
+                "(%s,%s,'Oplata startowa','distance_price',%.2f,%s,0)",
+                sq(uuid('settle-')), sq($regId), $batch['dist']['price'], sq($regAt)
             );
 
             if ($paid) {
@@ -499,8 +513,11 @@ function buildCurrentEvent(): array
         }
     }
 
-    $sql .= "INSERT INTO registrations (id,event_id,event_name,user_id,user_name,user_email,distance_id,distance_name,category,registered_at,status,bib_number,price_paid) VALUES\n";
+    $sql .= "INSERT INTO registrations (id,event_id,event_name,user_id,user_name,user_email,distance_id,distance_name,category,registered_at,status,bib_number) VALUES\n";
     $sql .= implode(",\n", $regRows) . ";\n\n";
+
+    $sql .= "INSERT INTO registration_settlement_items (id,registration_id,name,basis,amount,frozen_at,sort_order) VALUES\n";
+    $sql .= implode(",\n", $settleRows) . ";\n\n";
 
     $sql .= "INSERT INTO registration_payment_details (registration_id,start_fee_paid,start_fee_paid_at,start_fee_amount,insurance_paid,merchandise_payments) VALUES\n";
     $sql .= implode(",\n", $payRows) . ";\n\n";
@@ -558,7 +575,7 @@ function buildUpcomingEvent(): string
     $distRows = [];
     foreach ($distances as $d) {
         $distRows[] = sprintf(
-            "(%s,%s,%s,%.3f,'km',%s,%s,0,%.2f,'date','registered',%s,%d)",
+            "(%s,%s,%s,%.3f,'km',%s,%s,0,%.2f,%s,%d)",
             sq($d['id']), sq($eventId), sq($d['name']), $d['length'],
             js($d['categories']),
             $d['limit'],
@@ -567,7 +584,7 @@ function buildUpcomingEvent(): string
             $d['sort']
         );
     }
-    $sql .= "INSERT INTO event_distances (id,event_id,name,length,unit,categories,participant_limit,registered_count,price,price_tier_mode,participant_count_type,price_tiers,sort_order) VALUES\n";
+    $sql .= "INSERT INTO event_distances (id,event_id,name,length,unit,categories,participant_limit,registered_count,price,price_tiers,sort_order) VALUES\n";
     $sql .= implode(",\n", $distRows) . ";\n\n";
 
     // Kody zniżkowe

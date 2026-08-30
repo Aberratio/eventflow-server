@@ -1920,8 +1920,6 @@
           "limit": 1500,
           "registeredCount": 1234,
           "price": 350,
-          "priceTierMode": "participants",
-          "participantCountType": "registered",
           "priceTiers": [
             {
               "id": "pt1",
@@ -1983,8 +1981,6 @@
           "limit": 1000,
           "registeredCount": 876,
           "price": 250,
-          "priceTierMode": "participants",
-          "participantCountType": "registered",
           "priceTiers": [
             {
               "id": "pt1",

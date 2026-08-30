@@ -894,6 +894,20 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->patch('/insurance/settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->updateSettings($body($request))))
             ->add(new AuthMiddleware($jwt, $adminRoles));
 
+        // Catalog of NNW variants (E0.3): admin defines variants, organizers pick which
+        // are offered on their event. `/insurance/settings` above is kept as a thin
+        // read/write on the first catalog row for backward compatibility.
+        $api->get('/insurance/variants', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->list()));
+        $api->post('/insurance/variants', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->create($body($request))))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->patch('/insurance/variants/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $insurance->update($args['id'], $body($request))))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->delete('/insurance/variants/{id}', function (Request $request, Response $response, array $args) use ($insurance) {
+            $insurance->delete($args['id']);
+            return JsonResponder::ok($response, ['deleted' => true]);
+        })
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+
         $api->get('/shop/orders', fn (Request $request, Response $response) => JsonResponder::ok($response, $orders->list($query($request))))
             ->add(new AuthMiddleware($jwt, $staffRoles));
         $api->get('/shop/orders/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $orders->find($args['id'])))
@@ -1209,7 +1223,6 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                     'limit' => random_int(100, 500),
                     'registeredCount' => 0,
                     'price' => $price,
-                    'officePrice' => $price + 20,
                 ];
             }
 
@@ -1377,12 +1390,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                         'distanceId' => $dist['id'],
                         'distanceName' => $dist['name'],
                         'category' => $cat,
-                        'pricePaid' => $dist['price'],
                     ]);
                     $registrations->update($reg['id'], [
                         'status' => 'confirmed',
                         'bibNumber' => $bibNum,
-                        'pricePaid' => $dist['price'],
                         'paymentDetails' => [
                             'startFeePaid' => true,
                             'startFeePaidAt' => $eventDate,

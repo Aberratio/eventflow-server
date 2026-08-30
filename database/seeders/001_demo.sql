@@ -113,24 +113,24 @@ INSERT INTO challenge_entries (id, challenge_id, user_id, event_id, status, subm
 ('ce-jan-5dych-warsaw', 'ch-5-dych', 'u-participant', 'e-warsaw-10k', 'approved', '00:44:12', 1, NULL, '2026-06-14T14:00:00+02:00', '2026-06-14T14:00:00+02:00', 'system', NULL, 'result'),
 ('ce-jan-5dych-manual', 'ch-5-dych', 'u-participant', 'e-wroclaw-night', 'pending', '00:43:30', 10, 'https://wyniki.example.com/nocny-bieg-wroclaw/101', '2026-03-22T10:00:00+01:00', NULL, NULL, NULL, 'manual');
 
-INSERT INTO event_distances (id, event_id, name, length, unit, categories, participant_limit, registered_count, price, price_tier_mode, participant_count_type, price_tiers, sort_order)
+INSERT INTO event_distances (id, event_id, name, length, unit, categories, participant_limit, registered_count, price, price_tiers, sort_order)
 VALUES
-('d-10k', 'e-warsaw-10k', '10 km', 10.000, 'km', JSON_ARRAY('OPEN','M30','K30'), 500, 1, 89.00, 'date', 'registered', JSON_ARRAY(JSON_OBJECT('id','pt1','name','Early bird','discountType','fixed','discountValue',20,'endDate','2026-05-31')), 0);
+('d-10k', 'e-warsaw-10k', '10 km', 10.000, 'km', JSON_ARRAY('OPEN','M30','K30'), 500, 1, 89.00, JSON_ARRAY(JSON_OBJECT('id','pt1','name','Early bird','discountType','fixed','discountValue',20,'endDate','2026-05-31')), 0);
 
-INSERT INTO event_distances (id, event_id, name, length, unit, categories, age_categories, special_categories, participant_limit, registered_count, price, price_tier_mode, participant_count_type, price_tiers, vip_prices, route_map_url, route_elevation_profile, route_gpx_url, route_files, sort_order)
+INSERT INTO event_distances (id, event_id, name, length, unit, categories, age_categories, special_categories, participant_limit, registered_count, price, price_tiers, vip_prices, route_map_url, route_elevation_profile, route_gpx_url, route_files, sort_order)
 VALUES
-('d-lodz-15k', 'e-lodz-live', '15 km', 15.000, 'km', JSON_ARRAY('OPEN','M18','M30','M40','K18','K30','K40'), JSON_ARRAY('18-29','30-39','40+'), JSON_ARRAY('Najlepszy lodzianin'), 600, 238, 90.00, 'date', 'registered', JSON_ARRAY(JSON_OBJECT('id','pt-lodz-1','name','Cena regularna','discountType','percent','discountValue',0,'endDate','2026-04-20')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
-('d-lodz-7k', 'e-lodz-live', '7 km', 7.000, 'km', JSON_ARRAY('OPEN','M','K'), JSON_ARRAY('Open'), JSON_ARRAY(), 800, 462, 60.00, 'date', 'registered', JSON_ARRAY(JSON_OBJECT('id','pt-lodz-2','name','Cena regularna','discountType','percent','discountValue',0,'endDate','2026-04-20')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 1),
-('d-bike-90', 'e-krakow-bike', '90 km', 90.000, 'km', JSON_ARRAY('OPEN','M40','K40'), JSON_ARRAY('18-39','40+'), JSON_ARRAY('Druzyny'), 350, 121, 149.00, 'date', 'registered', JSON_ARRAY(JSON_OBJECT('id','pt-bike-1','name','Wczesna rezerwacja','discountType','fixed','discountValue',30,'endDate','2026-05-31')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
-('d-bike-45', 'e-krakow-bike', '45 km', 45.000, 'km', JSON_ARRAY('OPEN','M','K'), JSON_ARRAY('Open'), JSON_ARRAY(), 500, 247, 99.00, 'date', 'registered', JSON_ARRAY(JSON_OBJECT('id','pt-bike-2','name','Wczesna rezerwacja','discountType','fixed','discountValue',20,'endDate','2026-05-31')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 1),
-('d-tri-olimp', 'e-mazury-tri', 'Olimpijski', 51.500, 'km', JSON_ARRAY('OPEN','M30','M40','K30','K40'), JSON_ARRAY('18-29','30-39','40+'), JSON_ARRAY('Sztafety'), 700, 318, 320.00, 'date', 'registered', JSON_ARRAY(JSON_OBJECT('id','pt-tri-1','name','Early bird','discountType','fixed','discountValue',60,'endDate','2026-06-30')), JSON_ARRAY(JSON_OBJECT('id','vip-tri-1','name','Mistrzostwa klubowe','discountType','percent','discountValue',20)), NULL, NULL, NULL, JSON_ARRAY(), 0),
-('d-tri-sprint', 'e-mazury-tri', 'Sprint', 25.750, 'km', JSON_ARRAY('OPEN','M','K'), JSON_ARRAY('Open'), JSON_ARRAY('Debiut'), 900, 451, 220.00, 'date', 'registered', JSON_ARRAY(JSON_OBJECT('id','pt-tri-2','name','Early bird','discountType','fixed','discountValue',40,'endDate','2026-06-30')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 1),
-('d-gdynia-21k', 'e-gdynia-half', 'Polmaraton', 21.097, 'km', JSON_ARRAY('OPEN','M30','M40','M50','K30','K40','K50'), JSON_ARRAY('18-29','30-39','40-49','50+'), JSON_ARRAY(), 6000, 1234, 120.00, 'date', 'registered', JSON_ARRAY(JSON_OBJECT('id','pt-gdynia-1','name','Wczesna rezerwacja','discountType','percent','discountValue',25,'endDate','2026-08-31')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
-('d-gdynia-10k', 'e-gdynia-half', '10 km', 10.000, 'km', JSON_ARRAY('OPEN','M','K'), JSON_ARRAY('Open'), JSON_ARRAY(), 3000, 567, 75.00, 'date', 'registered', JSON_ARRAY(JSON_OBJECT('id','pt-gdynia-2','name','Wczesna rezerwacja','discountType','fixed','discountValue',15,'endDate','2026-08-31')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 1),
-('d-poznan-5k', 'e-poznan-five', '5 km', 5.000, 'km', JSON_ARRAY('OPEN','M','K'), JSON_ARRAY('Open'), JSON_ARRAY(), 1000, 642, 55.00, NULL, NULL, JSON_ARRAY(), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
-('d-wroclaw-10k', 'e-wroclaw-night', '10 km', 10.000, 'km', JSON_ARRAY('OPEN','M30','K30'), JSON_ARRAY('18-29','30-39','40+'), JSON_ARRAY('Najszybszy team'), 2000, 987, 85.00, NULL, NULL, JSON_ARRAY(), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
-('d-virtual-10k', 'e-virtual-spring', '10 km', 10.000, 'km', JSON_ARRAY('OPEN'), JSON_ARRAY('Open'), JSON_ARRAY(), 1000, 156, 45.00, 'date', 'registered', JSON_ARRAY(JSON_OBJECT('id','pt-virt-1','name','Cena startowa','discountType','percent','discountValue',0,'endDate','2026-05-20')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
-('d-virtual-21k', 'e-virtual-spring', 'Polmaraton', 21.097, 'km', JSON_ARRAY('OPEN'), JSON_ARRAY('Open'), JSON_ARRAY(), 500, 87, 65.00, 'date', 'registered', JSON_ARRAY(JSON_OBJECT('id','pt-virt-2','name','Cena startowa','discountType','percent','discountValue',0,'endDate','2026-05-20')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 1);
+('d-lodz-15k', 'e-lodz-live', '15 km', 15.000, 'km', JSON_ARRAY('OPEN','M18','M30','M40','K18','K30','K40'), JSON_ARRAY('18-29','30-39','40+'), JSON_ARRAY('Najlepszy lodzianin'), 600, 238, 90.00, JSON_ARRAY(JSON_OBJECT('id','pt-lodz-1','name','Cena regularna','discountType','percent','discountValue',0,'endDate','2026-04-20')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
+('d-lodz-7k', 'e-lodz-live', '7 km', 7.000, 'km', JSON_ARRAY('OPEN','M','K'), JSON_ARRAY('Open'), JSON_ARRAY(), 800, 462, 60.00, JSON_ARRAY(JSON_OBJECT('id','pt-lodz-2','name','Cena regularna','discountType','percent','discountValue',0,'endDate','2026-04-20')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 1),
+('d-bike-90', 'e-krakow-bike', '90 km', 90.000, 'km', JSON_ARRAY('OPEN','M40','K40'), JSON_ARRAY('18-39','40+'), JSON_ARRAY('Druzyny'), 350, 121, 149.00, JSON_ARRAY(JSON_OBJECT('id','pt-bike-1','name','Wczesna rezerwacja','discountType','fixed','discountValue',30,'endDate','2026-05-31')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
+('d-bike-45', 'e-krakow-bike', '45 km', 45.000, 'km', JSON_ARRAY('OPEN','M','K'), JSON_ARRAY('Open'), JSON_ARRAY(), 500, 247, 99.00, JSON_ARRAY(JSON_OBJECT('id','pt-bike-2','name','Wczesna rezerwacja','discountType','fixed','discountValue',20,'endDate','2026-05-31')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 1),
+('d-tri-olimp', 'e-mazury-tri', 'Olimpijski', 51.500, 'km', JSON_ARRAY('OPEN','M30','M40','K30','K40'), JSON_ARRAY('18-29','30-39','40+'), JSON_ARRAY('Sztafety'), 700, 318, 320.00, JSON_ARRAY(JSON_OBJECT('id','pt-tri-1','name','Early bird','discountType','fixed','discountValue',60,'endDate','2026-06-30')), JSON_ARRAY(JSON_OBJECT('id','vip-tri-1','name','Mistrzostwa klubowe','discountType','percent','discountValue',20)), NULL, NULL, NULL, JSON_ARRAY(), 0),
+('d-tri-sprint', 'e-mazury-tri', 'Sprint', 25.750, 'km', JSON_ARRAY('OPEN','M','K'), JSON_ARRAY('Open'), JSON_ARRAY('Debiut'), 900, 451, 220.00, JSON_ARRAY(JSON_OBJECT('id','pt-tri-2','name','Early bird','discountType','fixed','discountValue',40,'endDate','2026-06-30')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 1),
+('d-gdynia-21k', 'e-gdynia-half', 'Polmaraton', 21.097, 'km', JSON_ARRAY('OPEN','M30','M40','M50','K30','K40','K50'), JSON_ARRAY('18-29','30-39','40-49','50+'), JSON_ARRAY(), 6000, 1234, 120.00, JSON_ARRAY(JSON_OBJECT('id','pt-gdynia-1','name','Wczesna rezerwacja','discountType','percent','discountValue',25,'endDate','2026-08-31')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
+('d-gdynia-10k', 'e-gdynia-half', '10 km', 10.000, 'km', JSON_ARRAY('OPEN','M','K'), JSON_ARRAY('Open'), JSON_ARRAY(), 3000, 567, 75.00, JSON_ARRAY(JSON_OBJECT('id','pt-gdynia-2','name','Wczesna rezerwacja','discountType','fixed','discountValue',15,'endDate','2026-08-31')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 1),
+('d-poznan-5k', 'e-poznan-five', '5 km', 5.000, 'km', JSON_ARRAY('OPEN','M','K'), JSON_ARRAY('Open'), JSON_ARRAY(), 1000, 642, 55.00, JSON_ARRAY(), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
+('d-wroclaw-10k', 'e-wroclaw-night', '10 km', 10.000, 'km', JSON_ARRAY('OPEN','M30','K30'), JSON_ARRAY('18-29','30-39','40+'), JSON_ARRAY('Najszybszy team'), 2000, 987, 85.00, JSON_ARRAY(), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
+('d-virtual-10k', 'e-virtual-spring', '10 km', 10.000, 'km', JSON_ARRAY('OPEN'), JSON_ARRAY('Open'), JSON_ARRAY(), 1000, 156, 45.00, JSON_ARRAY(JSON_OBJECT('id','pt-virt-1','name','Cena startowa','discountType','percent','discountValue',0,'endDate','2026-05-20')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 0),
+('d-virtual-21k', 'e-virtual-spring', 'Polmaraton', 21.097, 'km', JSON_ARRAY('OPEN'), JSON_ARRAY('Open'), JSON_ARRAY(), 500, 87, 65.00, JSON_ARRAY(JSON_OBJECT('id','pt-virt-2','name','Cena startowa','discountType','percent','discountValue',0,'endDate','2026-05-20')), NULL, NULL, NULL, NULL, JSON_ARRAY(), 1);
 
 INSERT INTO event_payment_methods (id, event_id, name, enabled, sort_order) VALUES
 ('pm-bank', 'e-warsaw-10k', 'Przelew bankowy', 1, 0),
@@ -159,17 +159,29 @@ INSERT INTO event_gallery_albums (id, event_id, name, url, platform, photographe
 ('ga-wroclaw', 'e-wroclaw-night', 'Nocny Bieg Wroclaw - meta', 'https://photos.example.com/nocny-bieg-wroclaw-2026', 'google_photos', 'Night Run Studio', 0),
 ('ga-lodz', 'e-lodz-live', 'City Trail Lodz - backstage', 'https://instagram.com/city-trail-lodz-2026', 'instagram', 'RunPoland Media', 0);
 
-INSERT INTO registrations (id, event_id, event_name, user_id, user_name, user_email, distance_id, distance_name, category, registered_at, status, bib_number, price_paid)
+INSERT INTO registrations (id, event_id, event_name, user_id, user_name, user_email, distance_id, distance_name, category, registered_at, status, bib_number)
 VALUES
-('r-jan-10k', 'e-warsaw-10k', 'Warszawska Dycha 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-10k', '10 km', 'M30', '2026-05-02T10:00:00+02:00', 'confirmed', '101', 89.00),
-('r-anna-lodz', 'e-lodz-live', 'City Trail Lodz LIVE 2026', 'u-anna', 'Anna Zielinska', 'anna@example.com', 'd-lodz-7k', '7 km', 'K30', '2026-04-20T09:15:00+02:00', 'confirmed', '215', 60.00),
-('r-piotr-lodz', 'e-lodz-live', 'City Trail Lodz LIVE 2026', 'u-piotr', 'Piotr Wisniewski', 'piotr@example.com', 'd-lodz-15k', '15 km', 'M30', '2026-04-18T18:40:00+02:00', 'confirmed', '42', 90.00),
-('r-kasia-bike', 'e-krakow-bike', 'Krakowski Klasyk Rowerowy 2026', 'u-kasia', 'Katarzyna Wozniak', 'kasia@example.com', 'd-bike-45', '45 km', 'K30', '2026-05-01T11:20:00+02:00', 'confirmed', '305', 99.00),
-('r-jan-poznan', 'e-poznan-five', 'Poznanska Piatka 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-poznan-5k', '5 km', 'M30', '2026-04-01T10:00:00+02:00', 'confirmed', '18', 55.00),
-('r-anna-poznan', 'e-poznan-five', 'Poznanska Piatka 2026', 'u-anna', 'Anna Zielinska', 'anna@example.com', 'd-poznan-5k', '5 km', 'K30', '2026-04-01T10:05:00+02:00', 'confirmed', '19', 55.00),
-('r-piotr-wroclaw', 'e-wroclaw-night', 'Nocny Bieg Wroclaw 2026', 'u-piotr', 'Piotr Wisniewski', 'piotr@example.com', 'd-wroclaw-10k', '10 km', 'M30', '2026-03-10T14:00:00+01:00', 'confirmed', '77', 85.00),
-('r-kasia-wroclaw', 'e-wroclaw-night', 'Nocny Bieg Wroclaw 2026', 'u-kasia', 'Katarzyna Wozniak', 'kasia@example.com', 'd-wroclaw-10k', '10 km', 'K30', '2026-03-10T14:10:00+01:00', 'confirmed', '78', 85.00),
-('r-jan-virtual', 'e-virtual-spring', 'Wirtualny Maraton Wiosenny 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-virtual-10k', '10 km', 'OPEN', '2026-05-02T12:00:00+02:00', 'pending', NULL, 45.00);
+('r-jan-10k', 'e-warsaw-10k', 'Warszawska Dycha 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-10k', '10 km', 'M30', '2026-05-02T10:00:00+02:00', 'confirmed', '101'),
+('r-anna-lodz', 'e-lodz-live', 'City Trail Lodz LIVE 2026', 'u-anna', 'Anna Zielinska', 'anna@example.com', 'd-lodz-7k', '7 km', 'K30', '2026-04-20T09:15:00+02:00', 'confirmed', '215'),
+('r-piotr-lodz', 'e-lodz-live', 'City Trail Lodz LIVE 2026', 'u-piotr', 'Piotr Wisniewski', 'piotr@example.com', 'd-lodz-15k', '15 km', 'M30', '2026-04-18T18:40:00+02:00', 'confirmed', '42'),
+('r-kasia-bike', 'e-krakow-bike', 'Krakowski Klasyk Rowerowy 2026', 'u-kasia', 'Katarzyna Wozniak', 'kasia@example.com', 'd-bike-45', '45 km', 'K30', '2026-05-01T11:20:00+02:00', 'confirmed', '305'),
+('r-jan-poznan', 'e-poznan-five', 'Poznanska Piatka 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-poznan-5k', '5 km', 'M30', '2026-04-01T10:00:00+02:00', 'confirmed', '18'),
+('r-anna-poznan', 'e-poznan-five', 'Poznanska Piatka 2026', 'u-anna', 'Anna Zielinska', 'anna@example.com', 'd-poznan-5k', '5 km', 'K30', '2026-04-01T10:05:00+02:00', 'confirmed', '19'),
+('r-piotr-wroclaw', 'e-wroclaw-night', 'Nocny Bieg Wroclaw 2026', 'u-piotr', 'Piotr Wisniewski', 'piotr@example.com', 'd-wroclaw-10k', '10 km', 'M30', '2026-03-10T14:00:00+01:00', 'confirmed', '77'),
+('r-kasia-wroclaw', 'e-wroclaw-night', 'Nocny Bieg Wroclaw 2026', 'u-kasia', 'Katarzyna Wozniak', 'kasia@example.com', 'd-wroclaw-10k', '10 km', 'K30', '2026-03-10T14:10:00+01:00', 'confirmed', '78'),
+('r-jan-virtual', 'e-virtual-spring', 'Wirtualny Maraton Wiosenny 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-virtual-10k', '10 km', 'OPEN', '2026-05-02T12:00:00+02:00', 'pending', NULL);
+
+-- Rozliczenie (E0.3): "Oplata startowa" line item per Zapis, replacing registrations.price_paid.
+INSERT INTO registration_settlement_items (id, registration_id, name, basis, amount, frozen_at, sort_order) VALUES
+('rsi-jan-10k', 'r-jan-10k', 'Oplata startowa', 'distance_price', 89.00, '2026-05-02T10:00:00+02:00', 0),
+('rsi-anna-lodz', 'r-anna-lodz', 'Oplata startowa', 'distance_price', 60.00, '2026-04-20T09:15:00+02:00', 0),
+('rsi-piotr-lodz', 'r-piotr-lodz', 'Oplata startowa', 'distance_price', 90.00, '2026-04-18T18:40:00+02:00', 0),
+('rsi-kasia-bike', 'r-kasia-bike', 'Oplata startowa', 'distance_price', 99.00, '2026-05-01T11:20:00+02:00', 0),
+('rsi-jan-poznan', 'r-jan-poznan', 'Oplata startowa', 'distance_price', 55.00, '2026-04-01T10:00:00+02:00', 0),
+('rsi-anna-poznan', 'r-anna-poznan', 'Oplata startowa', 'distance_price', 55.00, '2026-04-01T10:05:00+02:00', 0),
+('rsi-piotr-wroclaw', 'r-piotr-wroclaw', 'Oplata startowa', 'distance_price', 85.00, '2026-03-10T14:00:00+01:00', 0),
+('rsi-kasia-wroclaw', 'r-kasia-wroclaw', 'Oplata startowa', 'distance_price', 85.00, '2026-03-10T14:10:00+01:00', 0),
+('rsi-jan-virtual', 'r-jan-virtual', 'Oplata startowa', 'distance_price', 45.00, '2026-05-02T12:00:00+02:00', 0);
 
 INSERT INTO registration_merchandise_orders (id, registration_id, merchandise_id, merchandise_name, size, color, color_hex, quantity, price) VALUES
 ('rmo-jan-shirt', 'r-jan-10k', 'm-shirt', 'Koszulka techniczna', 'M', 'Czarny', '#111111', 1, 59.00),

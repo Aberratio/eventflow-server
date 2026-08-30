@@ -602,9 +602,6 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                     'discount_code_used_up' => 'Discount code usage limit has been reached.',
                     'discount_code_distance_mismatch' => 'Discount code does not apply to the selected distance.',
                     'registration_distance_invalid' => 'Selected distance is invalid.',
-                    'registration_relay_team_required' => 'Relay distance requires a team name.',
-                    'registration_relay_team_full' => 'Relay team is already full.',
-                    'registration_relay_team_incomplete_deadline' => 'Relay team completion deadline has passed.',
                 ];
                 if (array_key_exists($e->getMessage(), $discountErrors)) {
                     return JsonResponder::error($response, $e->getMessage(), $discountErrors[$e->getMessage()], 422);

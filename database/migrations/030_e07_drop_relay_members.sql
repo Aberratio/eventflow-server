@@ -1,0 +1,11 @@
+-- E0.7: Porzucenie modelu „jeden Zapis z listą członków w JSON-ie" dla sztafet —
+-- odrzuconego już w ticket 06 (członek w JSON-ie nie ma własnego rekordu do
+-- odprawy w BZ, własnego rozmiaru koszulki, własnej kategorii wiekowej).
+--
+-- `registrations.relay_members` zniesiony w całości; docelowy model sztafety to
+-- N niezależnych Zapisów (jeden na członka drużyny) — do zaprojektowania od zera
+-- w Etapie 7 (drużyny i sztafety), nie tutaj. `event_distances.relay_min_team_size`
+-- / `relay_max_team_size` / `relay_team_completion_deadline` / `start_type`
+-- zostają — to konfiguracja rozmiaru drużyny na Dystansie, niezależna od tego, jak
+-- modelowane jest Zapisanie się na nią.
+ALTER TABLE registrations DROP COLUMN IF EXISTS relay_members;

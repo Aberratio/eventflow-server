@@ -15,7 +15,7 @@ user_email AS userEmail, distance_id AS distanceId, distance_name AS distanceNam
 registered_at AS registeredAt, status, bib_number AS bibNumber, team_name AS teamName, team_id AS teamId,
 relay_members AS relayMembers,
 price_paid AS pricePaid, discount_code AS discountCode, discount_amount AS discountAmount,
-insurance_paid AS insurancePaid, removed_at AS removedAt,
+insurance_paid AS insurancePaid, removed_at AS removedAt, checked_in_at AS checkedInAt,
 registered_by_id AS registeredById
 SQL;
 
@@ -26,7 +26,7 @@ r.user_email AS userEmail, r.distance_id AS distanceId, r.distance_name AS dista
 r.registered_at AS registeredAt, r.status, r.bib_number AS bibNumber, r.team_name AS teamName, r.team_id AS teamId,
 r.relay_members AS relayMembers,
 r.price_paid AS pricePaid, r.discount_code AS discountCode, r.discount_amount AS discountAmount,
-r.insurance_paid AS insurancePaid, r.removed_at AS removedAt,
+r.insurance_paid AS insurancePaid, r.removed_at AS removedAt, r.checked_in_at AS checkedInAt,
 r.registered_by_id AS registeredById
 SQL;
 
@@ -111,6 +111,41 @@ SQL;
         return $row ? $this->hydrate($row) : null;
     }
 
+    /**
+     * Bilet is not a stored entity (E0.2) — it is this Zapis, read as a ticket.
+     * There is a 1:1 relationship, so the Zapis id doubles as the ticket id.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function ticketsByUser(string $userId): array
+    {
+        return array_map(
+            fn (array $registration): array => $this->asTicket($registration),
+            $this->byUser($userId)
+        );
+    }
+
+    /** @param array<string, mixed> $registration */
+    private function asTicket(array $registration): array
+    {
+        $status = in_array($registration['status'], ['cancelled', 'removed'], true)
+            ? 'cancelled'
+            : ($registration['checkedInAt'] !== null ? 'used' : 'active');
+
+        return [
+            'id' => $registration['id'],
+            'registrationId' => $registration['id'],
+            'userId' => $registration['userId'],
+            'eventId' => $registration['eventId'],
+            'eventName' => $registration['eventName'],
+            'distanceName' => $registration['distanceName'],
+            'bibNumber' => $registration['bibNumber'],
+            'status' => $status,
+            'checkedInAt' => $registration['checkedInAt'],
+            'issuedAt' => $registration['registeredAt'],
+        ];
+    }
+
     /** @param array<string, mixed> $data */
     public function create(array $data): array
     {
@@ -172,6 +207,7 @@ SQL;
             'discountAmount' => 'discount_amount',
             'insurancePaid' => 'insurance_paid',
             'removedAt' => 'removed_at',
+            'checkedInAt' => 'checked_in_at',
         ] as $input => $column) {
             if (array_key_exists($input, $data)) {
                 $mapped[$column] = $data[$input];
@@ -194,6 +230,16 @@ SQL;
     public function cancel(string $id): ?array
     {
         return $this->update($id, ['status' => 'cancelled']);
+    }
+
+    /**
+     * Records Odprawa (check-in) against this Zapis. This is not the full Odprawa
+     * model (Biuro Zawodów, separate ticket) — just enough to not lose "czy i kiedy
+     * sprawdzono zapis" now that Bilet is a view of Zapis, not a separate entity.
+     */
+    public function checkIn(string $id): ?array
+    {
+        return $this->update($id, ['checkedInAt' => date(DATE_ATOM)]);
     }
 
     /** @param array<string, mixed> $paymentDetails */

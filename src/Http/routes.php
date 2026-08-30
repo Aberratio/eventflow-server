@@ -24,7 +24,8 @@ use ZmierzymyCzas\Domain\Insurance\InsuranceRepository;
 use ZmierzymyCzas\Domain\Shop\OrderRepository;
 use ZmierzymyCzas\Domain\Shop\ShopRepository;
 use ZmierzymyCzas\Domain\Ticket\TicketRepository;
-use ZmierzymyCzas\Domain\Authorizations\AuthorizationRepository;
+use ZmierzymyCzas\Domain\Care\CareRepository;
+use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
 use ZmierzymyCzas\Support\Env;
@@ -49,7 +50,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $orders = new OrderRepository($pdo);
     $tickets = new TicketRepository($pdo);
     $certificates = new CertificateRepository($pdo);
-    $authorizations = new AuthorizationRepository($pdo);
+    $competitors = new CompetitorRepository($pdo);
+    $care = new CareRepository($pdo);
     $uploadDir = (string) Env::get('APP_UPLOAD_DIR', 'public/uploads');
     if (!preg_match('/^(?:[a-z]:[\/\\\\]|\/|\\\\\\\\)/i', $uploadDir)) {
         $uploadDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . $uploadDir;
@@ -134,7 +136,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $authorizations, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $tickets, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $tickets, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
@@ -551,23 +553,44 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
         $api->get('/users/{userId}/registrations', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->byUser($args['userId'])))
             ->add(new AuthMiddleware($jwt));
-        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $authorizations, $body) {
+        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $competitors, $care, $body) {
             $auth = (array) $request->getAttribute('auth');
             $callerId = (string) ($auth['sub'] ?? '');
             $data = $body($request);
 
-            // Jeśli rejestrujemy kogoś innego — sprawdź upoważnienie
-            $targetUserId = (string) ($data['userId'] ?? '');
-            if ($targetUserId !== '' && $targetUserId !== $callerId) {
-                if (!$authorizations->isAuthorized($targetUserId, $callerId)) {
-                    return JsonResponder::error(
-                        $response,
-                        'not_authorized_to_register',
-                        'Nie masz upoważnienia do zapisania tego uczestnika.',
-                        403
-                    );
+            // Zawodnik (competitorId) jest źródłem tożsamości zapisu. Jeśli caller
+            // zapisuje kogoś innego niż siebie — musi mieć nad nim Opiekę.
+            $competitorId = (string) ($data['competitorId'] ?? '');
+            if ($competitorId === '') {
+                // Kompatybilność wsteczna: klient wysyłający tylko userId (siebie).
+                $targetUserId = (string) ($data['userId'] ?? '');
+                $selfCompetitor = $targetUserId !== '' ? $competitors->findByUserId($targetUserId) : null;
+                $competitorId = $selfCompetitor['id'] ?? '';
+            }
+
+            if ($competitorId !== '' && !$care->canRegister($callerId, $competitorId)) {
+                return JsonResponder::error(
+                    $response,
+                    'not_authorized_to_register',
+                    'Nie masz upoważnienia (Opieki) do zapisania tego zawodnika.',
+                    403
+                );
+            }
+
+            if ($competitorId !== '') {
+                $data['competitorId'] = $competitorId;
+                $competitor = $competitors->find($competitorId);
+                if ($competitor !== null) {
+                    // registrations.user_id jest NOT NULL i historycznie oznaczał "czyje to konto";
+                    // Zawodnik bez Konta (np. dziecko) nie ma tu czego wstawić, więc zapisujemy
+                    // Konto opiekuna. Prawdziwą tożsamością zapisu jest competitor_id (Z2).
+                    $data['userId'] = $competitor['userId'] ?? $callerId;
+                    $data['userName'] = $data['userName'] ?? trim($competitor['firstName'] . ' ' . $competitor['lastName']);
+                    $data['userEmail'] = $data['userEmail'] ?? ($competitor['email'] ?? '');
+                    if ((string) ($competitor['userId'] ?? '') !== $callerId) {
+                        $data['registeredById'] = $callerId;
+                    }
                 }
-                $data['registeredById'] = $callerId;
             }
 
             try {
@@ -1407,67 +1430,104 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             ], 'Seed event created', 201);
         });  // no middleware — APP_ENV plus, off local, a staff token is the boundary
 
-        // --- Upoważnienia uczestników ---
+        // --- Zawodnicy i Opieka (E0.1) ---
+        // Zawodnik: profil danych startowych, byt samodzielny — może istnieć bez Konta.
+        // Opieka: relacja N:M Konto <-> Zawodnik, uogólniająca dawne Authorizations (Konto -> Konto).
 
-        // Pobierz: kto mnie upoważnił + komu ja udzieliłem
-        $api->get('/authorizations', function (Request $request, Response $response) use ($authorizations): Response {
+        // Sprawdź potencjalne duplikaty po imieniu + nazwisku + dacie urodzenia (ostrzeżenie, nie blokada).
+        $api->get('/competitors/duplicates', function (Request $request, Response $response) use ($competitors, $query): Response {
+            $filters = $query($request);
+            $firstName = trim((string) ($filters['firstName'] ?? ''));
+            $lastName = trim((string) ($filters['lastName'] ?? ''));
+            if ($firstName === '' || $lastName === '') {
+                return JsonResponder::ok($response, []);
+            }
+            $birthDate = ($filters['birthDate'] ?? '') !== '' ? (string) $filters['birthDate'] : null;
+            return JsonResponder::ok($response, $competitors->findDuplicates($firstName, $lastName, $birthDate));
+        })->add(new AuthMiddleware($jwt));
+
+        // Pobierz: Zawodnicy pod moją opieką (myCompetitors) + Konta, które mają opiekę nade mną (caregivers).
+        $api->get('/care', function (Request $request, Response $response) use ($competitors, $care): Response {
             $auth = (array) $request->getAttribute('auth');
             $userId = (string) ($auth['sub'] ?? '');
+            $myProfile = $competitors->findByUserId($userId);
 
             return JsonResponder::ok($response, [
-                'grantedToMe' => $authorizations->listGrantedToMe($userId),
-                'grantedByMe' => $authorizations->listGrantedByMe($userId),
+                'myCompetitors' => $care->listMyCompetitors($userId),
+                'caregivers' => $myProfile !== null ? $care->listCaregivers((string) $myProfile['id']) : [],
             ]);
         })->add(new AuthMiddleware($jwt));
 
-        // Dodaj upoważnienie (zalogowany uczestnik upoważnia kogoś innego)
-        $api->post('/authorizations', function (Request $request, Response $response) use ($authorizations, $users, $body): Response {
+        // Udziel Opieki: albo nad istniejącym Kontem (po e-mailu, jak dawny "authorize"),
+        // albo nad nowo utworzonym samodzielnym Zawodnikiem (np. dzieckiem, bez Konta).
+        $api->post('/care', function (Request $request, Response $response) use ($competitors, $care, $users, $body): Response {
             $auth = (array) $request->getAttribute('auth');
-            $grantorId = (string) ($auth['sub'] ?? '');
+            $kontoId = (string) ($auth['sub'] ?? '');
 
             if ((string) ($auth['role'] ?? '') !== 'participant') {
-                return JsonResponder::error($response, 'forbidden', 'Upoważnienia mogą udzielać tylko uczestnicy.', 403);
+                return JsonResponder::error($response, 'forbidden', 'Opiekę mogą nadawać tylko uczestnicy.', 403);
             }
 
             $data = $body($request);
-            $granteeEmail = trim((string) ($data['email'] ?? ''));
+            $email = trim((string) ($data['email'] ?? ''));
 
-            if ($granteeEmail === '') {
-                return JsonResponder::error($response, 'validation_error', 'Podaj adres e-mail osoby upoważnionej.', 422);
+            if ($email !== '') {
+                // Upoważnij inne (istniejące) Konto do zapisywania mnie samego.
+                $grantee = $users->findByEmail($email);
+                if ($grantee === null) {
+                    return JsonResponder::error($response, 'user_not_found', 'Nie znaleziono użytkownika z tym adresem e-mail.', 404);
+                }
+                $granteeId = (string) $grantee['id'];
+                if ($granteeId === $kontoId) {
+                    return JsonResponder::error($response, 'validation_error', 'Nie możesz upoważnić samego siebie.', 422);
+                }
+
+                $myProfile = $competitors->ensureForUser((array) ($users->find($kontoId) ?? ['id' => $kontoId, 'name' => '']));
+                $zawodnikId = (string) $myProfile['id'];
+
+                if ($care->exists($granteeId, $zawodnikId)) {
+                    return JsonResponder::error($response, 'already_authorized', 'Ta osoba ma już nad Tobą opiekę.', 409);
+                }
+
+                $record = $care->grant($granteeId, $zawodnikId);
+                return JsonResponder::ok($response, $record, 'Opieka została nadana.', 201);
             }
 
-            $grantee = $users->findByEmail($granteeEmail);
-            if ($grantee === null) {
-                return JsonResponder::error($response, 'user_not_found', 'Nie znaleziono użytkownika z tym adresem e-mail.', 404);
+            // Nowy, samodzielny Zawodnik (np. dziecko) pod opieką zalogowanego Konta.
+            $firstName = trim((string) ($data['firstName'] ?? ''));
+            $lastName = trim((string) ($data['lastName'] ?? ''));
+            if ($firstName === '' || $lastName === '') {
+                return JsonResponder::error($response, 'validation_error', 'Podaj imię i nazwisko Zawodnika albo e-mail Konta do upoważnienia.', 422);
             }
 
-            $granteeId = (string) $grantee['id'];
+            $competitor = $competitors->create([
+                'firstName' => $firstName,
+                'lastName' => $lastName,
+                'birthDate' => $data['birthDate'] ?? null,
+                'gender' => $data['gender'] ?? null,
+                'email' => $data['email'] ?? null,
+                'phone' => $data['phone'] ?? null,
+                'club' => $data['club'] ?? null,
+            ]);
+            $record = $care->grant($kontoId, (string) $competitor['id']);
+            $record['competitor'] = $competitor;
+            $record['duplicateWarnings'] = $competitor['duplicateWarnings'] ?? [];
 
-            if ($granteeId === $grantorId) {
-                return JsonResponder::error($response, 'validation_error', 'Nie możesz upoważnić samego siebie.', 422);
-            }
-
-            if ($authorizations->exists($grantorId, $granteeId)) {
-                return JsonResponder::error($response, 'already_authorized', 'Ta osoba jest już upoważniona.', 409);
-            }
-
-            $record = $authorizations->grant($grantorId, $granteeId);
-
-            return JsonResponder::ok($response, $record, 'Upoważnienie zostało udzielone.', 201);
+            return JsonResponder::ok($response, $record, 'Zawodnik dodany, opieka nadana.', 201);
         })->add(new AuthMiddleware($jwt));
 
-        // Usuń upoważnienie (tylko grantor może cofnąć swoje upoważnienie)
-        $api->delete('/authorizations/{id}', function (Request $request, Response $response, array $args) use ($authorizations): Response {
+        // Cofnij Opiekę — może to zrobić opiekun albo sam Zawodnik (jeśli ma Konto).
+        $api->delete('/care/{id}', function (Request $request, Response $response, array $args) use ($care): Response {
             $auth = (array) $request->getAttribute('auth');
-            $grantorId = (string) ($auth['sub'] ?? '');
+            $userId = (string) ($auth['sub'] ?? '');
             $id = (string) ($args['id'] ?? '');
 
-            $deleted = $authorizations->revoke($id, $grantorId);
+            $deleted = $care->revoke($id, $userId);
             if (!$deleted) {
-                return JsonResponder::error($response, 'not_found', 'Upoważnienie nie istnieje lub nie masz uprawnień do jego usunięcia.', 404);
+                return JsonResponder::error($response, 'not_found', 'Opieka nie istnieje lub nie masz uprawnień do jej cofnięcia.', 404);
             }
 
-            return JsonResponder::ok($response, null, 'Upoważnienie zostało cofnięte.');
+            return JsonResponder::ok($response, null, 'Opieka została cofnięta.');
         })->add(new AuthMiddleware($jwt));
     });
 };

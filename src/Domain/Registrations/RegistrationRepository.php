@@ -9,7 +9,8 @@ use ZmierzymyCzas\Domain\Repository;
 final class RegistrationRepository extends Repository
 {
     private const COLUMNS = <<<'SQL'
-id, event_id AS eventId, event_name AS eventName, user_id AS userId, user_name AS userName,
+id, event_id AS eventId, event_name AS eventName, user_id AS userId, competitor_id AS competitorId,
+user_name AS userName,
 user_email AS userEmail, distance_id AS distanceId, distance_name AS distanceName, category,
 registered_at AS registeredAt, status, bib_number AS bibNumber, team_name AS teamName, team_id AS teamId,
 relay_members AS relayMembers,
@@ -19,7 +20,8 @@ registered_by_id AS registeredById
 SQL;
 
     private const COLUMNS_R = <<<'SQL'
-r.id, r.event_id AS eventId, r.event_name AS eventName, r.user_id AS userId, r.user_name AS userName,
+r.id, r.event_id AS eventId, r.event_name AS eventName, r.user_id AS userId, r.competitor_id AS competitorId,
+r.user_name AS userName,
 r.user_email AS userEmail, r.distance_id AS distanceId, r.distance_name AS distanceName, r.category,
 r.registered_at AS registeredAt, r.status, r.bib_number AS bibNumber, r.team_name AS teamName, r.team_id AS teamId,
 r.relay_members AS relayMembers,
@@ -123,6 +125,7 @@ SQL;
                 'event_id' => $data['eventId'],
                 'event_name' => $pricing['eventName'],
                 'user_id' => $data['userId'],
+                'competitor_id' => $data['competitorId'] ?? null,
                 'user_name' => $data['userName'],
                 'user_email' => $data['userEmail'],
                 'distance_id' => $data['distanceId'],

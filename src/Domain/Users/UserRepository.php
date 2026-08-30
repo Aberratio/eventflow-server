@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Users;
 
+use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Repository;
 
 final class UserRepository extends Repository
@@ -112,7 +113,14 @@ final class UserRepository extends Repository
             'event_limit' => $data['eventLimit'] ?? 0,
         ]);
 
-        return $this->find($id);
+        $created = $this->find($id);
+        if ($created !== null) {
+            // Każde Konto dostaje własny profil Zawodnika (E0.1) — Zawodnik jest bytem
+            // samodzielnym, ale Konto z rolą "participant" zwykle biega samo za siebie.
+            (new CompetitorRepository($this->pdo))->ensureForUser($created);
+        }
+
+        return $created;
     }
 
     /** @param array<string, mixed> $data */

@@ -3,30 +3,177 @@
 declare(strict_types=1);
 
 use ZmierzymyCzas\Database\Connection;
+use ZmierzymyCzas\Database\DemoData;
+use ZmierzymyCzas\Database\EventCoherence;
+use ZmierzymyCzas\Database\EventFixtureImporter;
+use ZmierzymyCzas\Database\Migrator;
+use ZmierzymyCzas\Database\SeedManifest;
+use ZmierzymyCzas\Database\SeriesLinker;
+use ZmierzymyCzas\Database\ShopFixtureImporter;
 use ZmierzymyCzas\Support\Env;
 
 require __DIR__ . '/../vendor/autoload.php';
 
+/**
+ * Demo data loader.
+ *
+ *   php bin/seed.php            refresh demo data (purge previous, re-apply seeders)
+ *   php bin/seed.php --purge    remove demo data, leave everything else untouched
+ *   php bin/seed.php --fresh    drop the schema, migrate, seed  (APP_ENV=local only)
+ *
+ * Never runs against production — deploys there apply migrations only.
+ */
+
 Env::load(__DIR__ . '/../.env');
 
+$env = (string) Env::get('APP_ENV', 'production');
+$args = array_slice($argv, 1);
+$fresh = in_array('--fresh', $args, true);
+$purgeOnly = in_array('--purge', $args, true);
+
+$unknown = array_values(array_diff($args, ['--fresh', '--purge']));
+if ($unknown !== []) {
+    fwrite(STDERR, 'Unknown option(s): ' . implode(', ', $unknown) . "\n");
+    fwrite(STDERR, "Usage: php bin/seed.php [--purge | --fresh]\n");
+    exit(1);
+}
+
+if ($fresh && $purgeOnly) {
+    fwrite(STDERR, "--fresh and --purge are mutually exclusive.\n");
+    exit(1);
+}
+
+// ── Guards ──────────────────────────────────────────────────────────────────────
+// The environment, not discipline, is what keeps demo data off production.
+if ($env === 'production') {
+    fwrite(STDERR, "Refusing to run: APP_ENV=production.\n");
+    fwrite(STDERR, "Production applies migrations only. To clean demo data there, use bin/prune-demo.php.\n");
+    exit(1);
+}
+
+if ($fresh && $env !== 'local') {
+    fwrite(STDERR, "Refusing to run --fresh: APP_ENV={$env}, expected local.\n");
+    fwrite(STDERR, "Dropping the schema is a local-only operation; use a plain seed run instead.\n");
+    exit(1);
+}
+
 $pdo = Connection::fromEnv();
+$database = (string) Env::get('DB_DATABASE', 'zmierzymy_czas');
+echo "Environment: {$env} | database: {$database}\n";
 
-$pdo->exec('SET FOREIGN_KEY_CHECKS=0');
-$tables = $pdo->query('SHOW FULL TABLES WHERE Table_type = "BASE TABLE"')->fetchAll(PDO::FETCH_NUM);
-foreach ($tables as $table) {
-    $tableName = str_replace('`', '``', (string) $table[0]);
-    $pdo->exec("DROP TABLE IF EXISTS `{$tableName}`");
-}
-$pdo->exec('SET FOREIGN_KEY_CHECKS=1');
-
-foreach ([
-    __DIR__ . '/../database/migrations/001_init.sql',
-    __DIR__ . '/../database/seeders/001_demo.sql',
-] as $file) {
-    $sql = (string) file_get_contents($file);
-    foreach (array_filter(array_map('trim', explode(';', $sql))) as $statement) {
-        $pdo->exec($statement);
+// ── Purge ───────────────────────────────────────────────────────────────────────
+if ($fresh) {
+    $dropped = Migrator::dropAllTables($pdo);
+    echo "Dropped {$dropped} table(s).\n";
+} else {
+    $tracked = SeedManifest::count($pdo);
+    $removed = SeedManifest::purge($pdo);
+    $legacy = DemoData::pruneLegacyAccounts($pdo);
+    foreach ($legacy as $table => $count) {
+        $removed[$table] = ($removed[$table] ?? 0) + $count;
     }
+
+    $total = array_sum($removed);
+    echo $tracked === 0 && $total === 0
+        ? "No previously seeded data to remove.\n"
+        : "Removed {$total} demo row(s) from " . count($removed) . " table(s).\n";
 }
 
-echo "Demo data seeded.\n";
+if ($purgeOnly) {
+    echo "Purge complete.\n";
+    exit(0);
+}
+
+// ── Schema ──────────────────────────────────────────────────────────────────────
+$applied = Migrator::applyAll($pdo);
+echo 'Schema up to date (' . count($applied) . " migration file(s)).\n";
+
+// ── Seeders ─────────────────────────────────────────────────────────────────────
+$seedersDir = __DIR__ . '/../database/seeders';
+$generatedDir = $seedersDir . '/.generated';
+
+if (!is_dir($generatedDir) && !mkdir($generatedDir, 0777, true) && !is_dir($generatedDir)) {
+    fwrite(STDERR, "Could not create {$generatedDir}.\n");
+    exit(1);
+}
+
+// The bulk fixtures are generated rather than committed: the generator is the single
+// place that has to keep up with schema changes.
+$generatedEvents = $generatedDir . '/002_test_events.sql';
+$generator = escapeshellarg($seedersDir . '/generate_events.php');
+$out = escapeshellarg('--out=' . $generatedEvents);
+exec(escapeshellarg(PHP_BINARY) . " {$generator} {$out} 2>&1", $generatorOutput, $generatorStatus);
+
+if ($generatorStatus !== 0) {
+    fwrite(STDERR, "generate_events.php failed:\n" . implode("\n", $generatorOutput) . "\n");
+    exit(1);
+}
+echo "Generated bulk fixtures: " . basename($generatedEvents) . "\n";
+
+$files = [
+    $seedersDir . '/001_demo.sql',
+    $generatedEvents,
+];
+
+$before = SeedManifest::snapshot($pdo);
+
+foreach ($files as $file) {
+    if (!is_file($file)) {
+        fwrite(STDERR, "Missing seeder: {$file}\n");
+        exit(1);
+    }
+
+    $statements = 0;
+    try {
+        foreach (Migrator::statements((string) file_get_contents($file)) as $statement) {
+            $pdo->exec($statement);
+            $statements++;
+        }
+    } catch (PDOException $e) {
+        // A database seeded before `seed_records` existed still holds those rows, but the
+        // manifest does not know about them, so the purge above could not remove them.
+        if ($e->getCode() === '23000') {
+            fwrite(STDERR, "\n" . basename($file) . " collided with rows already in the database:\n");
+            fwrite(STDERR, '  ' . $e->getMessage() . "\n\n");
+            fwrite(STDERR, "This database was seeded before demo rows were tracked, so the purge could not\n");
+            fwrite(STDERR, "find them. Run `php bin/seed.php --fresh` once (local), or delete the stale demo\n");
+            fwrite(STDERR, "rows by hand (staging). Runs after that are tracked and will not hit this.\n");
+            exit(1);
+        }
+
+        throw $e;
+    }
+    echo '  ' . basename($file) . ": {$statements} statement(s)\n";
+}
+
+// The event fixtures the frontend used to carry as TypeScript literals. They go in last
+// so they can merge with the accounts 001_demo.sql creates.
+foreach ((new EventFixtureImporter($pdo))->import() as $table => $rows) {
+    echo "  events.json -> {$table}: {$rows} row(s)\n";
+}
+
+// The seeders disagree about what day it is: two of them carry dates written months ago.
+// This reconciles status, registration state and results against each event's date.
+foreach (EventCoherence::apply($pdo) as $correction => $count) {
+    echo "  coherence: {$correction} = {$count}\n";
+}
+
+// Events from the SQL seeders never went through the fixture pass, so top them up too.
+foreach ((new EventFixtureImporter($pdo))->topUpFromDatabase() as $table => $rows) {
+    echo "  top-up -> {$table}: {$rows} row(s)\n";
+}
+
+foreach ((new ShopFixtureImporter($pdo))->import() as $table => $rows) {
+    echo "  shop.json -> {$table}: {$rows} row(s)\n";
+}
+
+// Which events exist is decided above, so series are filled out once they are all in.
+foreach (SeriesLinker::apply($pdo) as $table => $rows) {
+    echo "  series -> {$table}: {$rows} row(s)\n";
+}
+
+$after = SeedManifest::snapshot($pdo);
+$recorded = SeedManifest::recordDiff($pdo, $before, $after);
+
+echo "Seeded {$recorded} row(s), all tracked in `" . SeedManifest::TABLE . "` for later purge.\n";
+echo "Demo logins: jan@example.com / marek@timing.pl / admin@zmierzymyczas.pl (password: demo1234)\n";

@@ -48,6 +48,7 @@ jobs:
       - name: Configure test env
         run: |
           cat > .env <<'ENV'
+          APP_ENV=local
           DB_HOST=127.0.0.1
           DB_PORT=3306
           DB_DATABASE=zmierzymy_czas_test
@@ -56,6 +57,8 @@ jobs:
           JWT_SECRET=ci-test-secret
           APP_CORS_ORIGIN=*
           ENV
+      # APP_ENV=local above is required: bin/seed.php refuses to run against a
+      # database whose APP_ENV is production, which is the default when unset.
       - run: composer migrate
       - run: composer seed
       - run: composer test -- --testsuite Integration

@@ -28,7 +28,10 @@ banner_crop_area AS bannerCropArea, organizer_logo_url AS organizerLogoUrl,
 original_organizer_logo_url AS originalOrganizerLogoUrl,
 organizer_logo_shape AS organizerLogoShape,
 is_virtual AS isVirtual, event_credit_kind AS eventCreditKind, start_date AS startDate, end_date AS endDate, payment_config AS paymentConfig,
-rules_html AS rulesHtml, final_acceptance_html AS finalAcceptanceHtml,
+rules_html AS rulesHtml, organizers_html AS organizersHtml,
+insurance_option AS insuranceOption,
+enable_merchandise_in_registration AS enableMerchandiseInRegistration,
+final_acceptance_html AS finalAcceptanceHtml,
 require_final_acceptance AS requireFinalAcceptance, is_private AS isPrivate, access_code AS accessCode,
 registration_embed AS registrationEmbed, registration_form_config AS registrationFormConfig,
 display_options AS displayOptions, logistics_info AS logisticsInfo,
@@ -45,6 +48,7 @@ SQL;
         'displayOptions',
         'logisticsInfo',
         'organizerInfo',
+        'insuranceOption',
     ];
 
     private const DISTANCE_JSON = [
@@ -166,7 +170,17 @@ SQL;
     /** @param array<string, mixed> $data */
     public function create(array $data): array
     {
-        $id = $this->id();
+        return $this->createWithId($this->id(), $data);
+    }
+
+    /**
+     * Creates an event under a caller-supplied id. Only the database seeder uses this:
+     * fixtures have to keep their ids so registrations and results still line up.
+     *
+     * @param array<string, mixed> $data
+     */
+    public function createWithId(string $id, array $data): array
+    {
         $this->insert('events', $this->eventData($id, $data, true));
         $this->replaceChildren($id, $data);
         return $this->find($id);
@@ -383,7 +397,7 @@ SQL;
     private function hydrate(array $row): array
     {
         $event = $this->decode($row, self::EVENT_JSON);
-        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'registrationUntilEventStart'] as $bool) {
+        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'registrationUntilEventStart', 'enableMerchandiseInRegistration'] as $bool) {
             $event[$bool] = (bool) ($event[$bool] ?? false);
         }
         $event['distances'] = $this->withPaidCounts(
@@ -509,7 +523,10 @@ SQL;
             'startDate' => 'start_date',
             'endDate' => 'end_date',
             'paymentConfig' => 'payment_config',
+            'organizersHtml' => 'organizers_html',
             'rulesHtml' => 'rules_html',
+            'insuranceOption' => 'insurance_option',
+            'enableMerchandiseInRegistration' => 'enable_merchandise_in_registration',
             'finalAcceptanceHtml' => 'final_acceptance_html',
             'requireFinalAcceptance' => 'require_final_acceptance',
             'isPrivate' => 'is_private',
@@ -527,7 +544,7 @@ SQL;
                 $out[$column] = $input === 'status' ? $this->normalizeStatus((string) $value) : $value;
             }
         }
-        foreach (['organizer_contact', 'banner_crop_area', 'payment_config', 'registration_embed', 'registration_form_config', 'display_options', 'logistics_info', 'organizer_info'] as $jsonField) {
+        foreach (['organizer_contact', 'banner_crop_area', 'payment_config', 'registration_embed', 'registration_form_config', 'display_options', 'logistics_info', 'organizer_info', 'insurance_option'] as $jsonField) {
             if (array_key_exists($jsonField, $out) && $out[$jsonField] !== null && !is_string($out[$jsonField])) {
                 $out[$jsonField] = json_encode($out[$jsonField], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             }

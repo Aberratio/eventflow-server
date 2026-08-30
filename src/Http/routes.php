@@ -6,6 +6,7 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Slim\App;
 use Slim\Routing\RouteCollectorProxy;
+use ZmierzymyCzas\Database\SeedManifest;
 use ZmierzymyCzas\Domain\Admin\AdminRepository;
 use ZmierzymyCzas\Domain\Auth\JwtService;
 use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
@@ -133,7 +134,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($jwt, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $tickets, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $authorizations, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $tickets, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
@@ -580,6 +581,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                     'discount_code_used_up' => 'Discount code usage limit has been reached.',
                     'discount_code_distance_mismatch' => 'Discount code does not apply to the selected distance.',
                     'registration_distance_invalid' => 'Selected distance is invalid.',
+                    'registration_relay_team_required' => 'Relay distance requires a team name.',
+                    'registration_relay_team_full' => 'Relay team is already full.',
+                    'registration_relay_team_incomplete_deadline' => 'Relay team completion deadline has passed.',
                 ];
                 if (array_key_exists($e->getMessage(), $discountErrors)) {
                     return JsonResponder::error($response, $e->getMessage(), $discountErrors[$e->getMessage()], 422);
@@ -848,6 +852,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $adminRoles));
 
+        // TODO: move these two catalogues into the database. They are the last shop data
+        // still hard-coded, so a courier price or a new payment option needs a deploy, and
+        // neither the seeder nor the admin can touch them. Orders already store the chosen
+        // method as a JSON snapshot, so existing orders keep rendering whatever these
+        // return today — the migration only has to cover the pick list, not history.
+        // Needs: shop_delivery_methods + shop_payment_methods tables, a repository, seeder
+        // entries, and an admin screen. Left as-is until the payment work lands.
         $api->get('/shop/delivery-methods', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
             ['id' => 'courier', 'name' => 'Kurier', 'price' => 15.99, 'estimatedDays' => '1-2 dni'],
             ['id' => 'pickup', 'name' => 'Odbior osobisty', 'price' => 0, 'estimatedDays' => 'w dniu zawodow'],
@@ -1068,23 +1079,45 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->get('/users/{userId}/certificates', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $certificates->byUser($args['userId'])))
             ->add(new AuthMiddleware($jwt, []));
 
-        // ── Dev seed endpoint (only available when APP_ENV=local) ──────────────────
-        $api->post('/dev/seed-event', function (Request $request, Response $response) use ($jwt, $users, $events, $registrations, $results, $body) {
-            if ((string) Env::get('APP_ENV', 'production') !== 'local') {
-                return JsonResponder::error($response, 'forbidden', 'Dev endpoint only available in local environment', 403);
+        // ── Dev seed endpoint (local, and staging for signed-in staff) ─────────────
+        // Everything it creates is recorded in `seed_records`, so bin/prune-demo.php
+        // and a seed refresh remove it along with the file-based demo data.
+        $api->post('/dev/seed-event', function (Request $request, Response $response) use ($pdo, $jwt, $users, $events, $registrations, $results, $body) {
+            $env = (string) Env::get('APP_ENV', 'production');
+            if (!in_array($env, ['local', 'staging'], true)) {
+                return JsonResponder::error($response, 'forbidden', 'Dev endpoint is disabled in this environment', 403);
             }
 
-            // Decode JWT manually — skips the strict middleware so expired-but-otherwise-valid
-            // tokens from dev sessions still work. APP_ENV guard is the security boundary here.
+            // Decode JWT manually. On local this skips the strict middleware, so an
+            // expired-but-otherwise-valid token from a long dev session still works.
             $auth = [];
+            $tokenValid = false;
             $header = $request->getHeaderLine('Authorization');
             if (preg_match('/^Bearer\s+(.+)$/i', $header, $m)) {
                 try {
                     $auth = $jwt->decode($m[1]);
+                    $tokenValid = true;
                 } catch (\Throwable) {
                     // allow; caller identity falls back to empty, organizer flow uses seeded account
                 }
             }
+
+            // Staging is reachable from the internet, so APP_ENV is not a boundary there:
+            // require a live token from someone who could create these events anyway.
+            if ($env !== 'local') {
+                $callerRole = (string) ($auth['role'] ?? '');
+                $allowed = ['organizer', 'moderator', 'admin', 'superadmin'];
+                if (!$tokenValid || !in_array($callerRole, $allowed, true)) {
+                    return JsonResponder::error(
+                        $response,
+                        'forbidden',
+                        'Dev endpoint requires a signed-in organizer or staff account',
+                        403
+                    );
+                }
+            }
+
+            $manifestBefore = SeedManifest::snapshot($pdo);
 
             $payload = $body($request);
             $participantCount = max(1, min(500, (int) ($payload['participantCount'] ?? 20)));
@@ -1360,6 +1393,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 }
             }
 
+            SeedManifest::recordDiff($pdo, $manifestBefore, SeedManifest::snapshot($pdo));
+
             $finalEvent = $events->find($eventId);
 
             return JsonResponder::ok($response, [
@@ -1370,7 +1405,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 'resultsCreated' => $resultCount,
                 'eventUrl' => '/events/' . ($finalEvent['slug'] ?? $slug),
             ], 'Seed event created', 201);
-        });  // no middleware — APP_ENV=local is the security boundary
+        });  // no middleware — APP_ENV plus, off local, a staff token is the boundary
 
         // --- Upoważnienia uczestników ---
 

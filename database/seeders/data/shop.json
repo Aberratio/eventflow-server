@@ -1,0 +1,812 @@
+{
+  "products": [
+    {
+      "id": "prod1",
+      "name": "Koszulka techniczna Pro Run",
+      "slug": "koszulka-techniczna-pro-run",
+      "description": "Lekka koszulka z oddychającego materiału. Szybkoschnący poliester z technologią odprowadzania wilgoci. Idealna do treningów i zawodów biegowych.",
+      "price": 129,
+      "originalPrice": 169,
+      "category": "apparel",
+      "brand": "ZmierzymyCzas",
+      "sizes": [
+        "XS",
+        "S",
+        "M",
+        "L",
+        "XL",
+        "XXL"
+      ],
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Czarny",
+          "hex": "#000000"
+        },
+        {
+          "id": "c2",
+          "name": "Niebieski",
+          "hex": "#2563EB"
+        },
+        {
+          "id": "c3",
+          "name": "Zielony",
+          "hex": "#16A34A"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=400",
+      "images": [
+        "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=400",
+        "https://images.unsplash.com/photo-1618354691373-d851c5c3a990?w=400",
+        "https://images.unsplash.com/photo-1562157873-818bc0726f68?w=400"
+      ],
+      "inStock": true,
+      "stockCount": 45,
+      "rating": 4.7,
+      "reviewCount": 128,
+      "featured": true
+    },
+    {
+      "id": "prod2",
+      "name": "Buty do biegania UltraSpeed 3",
+      "slug": "buty-ultraspeed-3",
+      "description": "Profesjonalne buty do biegania z podeszwą Carbon Plate. Wyjątkowa amortyzacja i responsywność. Sprawdzone na maratonach i ultramaratonach.",
+      "price": 699,
+      "originalPrice": 899,
+      "category": "footwear",
+      "brand": "RunMaster",
+      "sizes": [
+        "38",
+        "39",
+        "40",
+        "41",
+        "42",
+        "43",
+        "44",
+        "45",
+        "46"
+      ],
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Neonowy",
+          "hex": "#FACC15"
+        },
+        {
+          "id": "c2",
+          "name": "Czarny",
+          "hex": "#000000"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400",
+      "images": [
+        "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400",
+        "https://images.unsplash.com/photo-1606107557195-0e29a4b5b4aa?w=400",
+        "https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a?w=400"
+      ],
+      "inStock": true,
+      "stockCount": 23,
+      "rating": 4.9,
+      "reviewCount": 256,
+      "featured": true
+    },
+    {
+      "id": "prod3",
+      "name": "Spodenki biegowe Aero Light",
+      "slug": "spodenki-aero-light",
+      "description": "Ultralekkie spodenki z wbudowanymi majtkami kompresyjnymi. Kieszeń na żel i telefon. Idealne na długie dystanse.",
+      "price": 149,
+      "category": "apparel",
+      "brand": "ZmierzymyCzas",
+      "sizes": [
+        "S",
+        "M",
+        "L",
+        "XL"
+      ],
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Czarny",
+          "hex": "#000000"
+        },
+        {
+          "id": "c2",
+          "name": "Granatowy",
+          "hex": "#1E3A5F"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1591195853828-11db59a44f6b?w=400",
+      "inStock": true,
+      "stockCount": 67,
+      "rating": 4.5,
+      "reviewCount": 89
+    },
+    {
+      "id": "prod4",
+      "name": "Zegarek sportowy GPS Pro",
+      "slug": "zegarek-gps-pro",
+      "description": "Zaawansowany zegarek z GPS, pulsometrem i analizą treningów. Śledzenie tempa, kadencji i dynamiki biegu. Wodoodporność 50m.",
+      "price": 1299,
+      "originalPrice": 1599,
+      "category": "electronics",
+      "brand": "TechRun",
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Czarny",
+          "hex": "#000000"
+        },
+        {
+          "id": "c2",
+          "name": "Srebrny",
+          "hex": "#C0C0C0"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=400",
+      "images": [
+        "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=400",
+        "https://images.unsplash.com/photo-1546868871-af0de0ae72be?w=400",
+        "https://images.unsplash.com/photo-1508685096489-7aacd43bd3b1?w=400"
+      ],
+      "inStock": true,
+      "stockCount": 15,
+      "rating": 4.8,
+      "reviewCount": 312,
+      "featured": true
+    },
+    {
+      "id": "prod5",
+      "name": "Czapka biegowa z daszkiem",
+      "slug": "czapka-biegowa-daszek",
+      "description": "Lekka czapka z daszkiem chroniącym przed słońcem. Materiał odprowadzający pot. Regulowany obwód.",
+      "price": 79,
+      "category": "accessories",
+      "brand": "ZmierzymyCzas",
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Biały",
+          "hex": "#FFFFFF"
+        },
+        {
+          "id": "c2",
+          "name": "Czarny",
+          "hex": "#000000"
+        },
+        {
+          "id": "c3",
+          "name": "Różowy",
+          "hex": "#EC4899"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1588850561407-ed78c282e89b?w=400",
+      "inStock": true,
+      "stockCount": 120,
+      "rating": 4.3,
+      "reviewCount": 67
+    },
+    {
+      "id": "prod6",
+      "name": "Żele energetyczne Power Pack (10 szt)",
+      "slug": "zele-energetyczne-power-pack",
+      "description": "Zestaw 10 żeli energetycznych o różnych smakach. Szybko przyswajalne węglowodany, elektrolity i kofeina. Idealne na długie treningi.",
+      "price": 89,
+      "category": "nutrition",
+      "brand": "EnergyBoost",
+      "imageUrl": "https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=400",
+      "inStock": true,
+      "stockCount": 200,
+      "rating": 4.4,
+      "reviewCount": 156
+    },
+    {
+      "id": "prod7",
+      "name": "Plecak biegowy Hydro 8L",
+      "slug": "plecak-biegowy-hydro-8l",
+      "description": "Plecak biegowy z bukłakiem 2L. Ergonomiczne szelki, kieszenie na żele i telefon. Idealny na treningi trailowe.",
+      "price": 349,
+      "category": "accessories",
+      "brand": "TrailMaster",
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Czarny",
+          "hex": "#000000"
+        },
+        {
+          "id": "c2",
+          "name": "Pomarańczowy",
+          "hex": "#F97316"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=400",
+      "inStock": true,
+      "stockCount": 28,
+      "rating": 4.6,
+      "reviewCount": 73
+    },
+    {
+      "id": "prod8",
+      "name": "Skarpetki kompresyjne (3 pary)",
+      "slug": "skarpetki-kompresyjne-3-pary",
+      "description": "Zestaw 3 par skarpetek kompresyjnych. Wsparcie łuku stopy, wentylowane strefy. Zmniejszają zmęczenie mięśni.",
+      "price": 119,
+      "category": "accessories",
+      "brand": "ZmierzymyCzas",
+      "sizes": [
+        "35-38",
+        "39-42",
+        "43-46"
+      ],
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Czarny",
+          "hex": "#000000"
+        },
+        {
+          "id": "c2",
+          "name": "Biały",
+          "hex": "#FFFFFF"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1586350977771-b3b0abd50c82?w=400",
+      "inStock": true,
+      "stockCount": 89,
+      "rating": 4.2,
+      "reviewCount": 45
+    },
+    {
+      "id": "prod9",
+      "name": "Słuchawki sportowe Bluetooth",
+      "slug": "sluchawki-sportowe-bluetooth",
+      "description": "Bezprzewodowe słuchawki douszne IP67. Stabilne mocowanie, 8h pracy na baterii. Idealne do biegania w każdych warunkach.",
+      "price": 299,
+      "originalPrice": 399,
+      "category": "electronics",
+      "brand": "TechRun",
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Czarny",
+          "hex": "#000000"
+        },
+        {
+          "id": "c2",
+          "name": "Biały",
+          "hex": "#FFFFFF"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=400",
+      "inStock": true,
+      "stockCount": 42,
+      "rating": 4.5,
+      "reviewCount": 189
+    },
+    {
+      "id": "prod10",
+      "name": "Legginsy termoaktywne Pro",
+      "slug": "legginsy-termoaktywne-pro",
+      "description": "Legginsy z termoaktywnego materiału na chłodniejsze dni. Kompresja wspierająca mięśnie, odblaski 360°.",
+      "price": 189,
+      "category": "apparel",
+      "brand": "ZmierzymyCzas",
+      "sizes": [
+        "XS",
+        "S",
+        "M",
+        "L",
+        "XL"
+      ],
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Czarny",
+          "hex": "#000000"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1506629082955-511b1aa562c8?w=400",
+      "inStock": true,
+      "stockCount": 34,
+      "rating": 4.7,
+      "reviewCount": 98
+    },
+    {
+      "id": "prod11",
+      "name": "Pas biegowy na telefon",
+      "slug": "pas-biegowy-telefon",
+      "description": "Elastyczny pas na telefon do 6.7\". Nie podskakuje podczas biegu. Dodatkowa kieszeń na klucze i żele.",
+      "price": 69,
+      "category": "accessories",
+      "brand": "ZmierzymyCzas",
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Czarny",
+          "hex": "#000000"
+        },
+        {
+          "id": "c2",
+          "name": "Różowy",
+          "hex": "#EC4899"
+        },
+        {
+          "id": "c3",
+          "name": "Zielony",
+          "hex": "#16A34A"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1434682881908-b43d0467b798?w=400",
+      "inStock": true,
+      "stockCount": 156,
+      "rating": 4.1,
+      "reviewCount": 234
+    },
+    {
+      "id": "prod12",
+      "name": "Napój izotoniczny (12 szt)",
+      "slug": "napoj-izotoniczny-12",
+      "description": "Zestaw 12 napojów izotonicznych o smaku cytrusowym. Elektrolity, witaminy B i C. Idealne uzupełnienie płynów.",
+      "price": 59,
+      "category": "nutrition",
+      "brand": "EnergyBoost",
+      "imageUrl": "https://images.unsplash.com/photo-1632818924360-68d4994cfdb2?w=400",
+      "inStock": true,
+      "stockCount": 78,
+      "rating": 4,
+      "reviewCount": 56
+    },
+    {
+      "id": "prod13",
+      "name": "Buty trailowe Mountain King",
+      "slug": "buty-trailowe-mountain-king",
+      "description": "Buty do biegów górskich z agresywnym bieżnikiem. Membrana wodoodporna, wzmocnione palce. Pewna przyczepność w każdym terenie.",
+      "price": 599,
+      "category": "footwear",
+      "brand": "TrailMaster",
+      "sizes": [
+        "39",
+        "40",
+        "41",
+        "42",
+        "43",
+        "44",
+        "45"
+      ],
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Szary/Pomarańczowy",
+          "hex": "#6B7280"
+        },
+        {
+          "id": "c2",
+          "name": "Czarny/Zielony",
+          "hex": "#000000"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1460353581641-37baddab0fa2?w=400",
+      "inStock": true,
+      "stockCount": 19,
+      "rating": 4.8,
+      "reviewCount": 87
+    },
+    {
+      "id": "prod14",
+      "name": "Opaska na głowę termoaktywna",
+      "slug": "opaska-glowa-termoaktywna",
+      "description": "Opaska chroniąca uszy przed zimnem. Materiał termoaktywny, odbijające elementy. Uniwersalny rozmiar.",
+      "price": 49,
+      "category": "accessories",
+      "brand": "ZmierzymyCzas",
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Czarny",
+          "hex": "#000000"
+        },
+        {
+          "id": "c2",
+          "name": "Szary",
+          "hex": "#6B7280"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1576566588028-4147f3842f27?w=400",
+      "inStock": true,
+      "stockCount": 98,
+      "rating": 4.3,
+      "reviewCount": 41
+    },
+    {
+      "id": "prod15",
+      "name": "Kurtka biegowa wodoodporna",
+      "slug": "kurtka-biegowa-wodoodporna",
+      "description": "Lekka kurtka z membraną wodoodporną 10000mm. Oddychająca, pakowalna do własnej kieszeni. Na deszczowe dni.",
+      "price": 399,
+      "originalPrice": 499,
+      "category": "apparel",
+      "brand": "TrailMaster",
+      "sizes": [
+        "S",
+        "M",
+        "L",
+        "XL"
+      ],
+      "colors": [
+        {
+          "id": "c1",
+          "name": "Neonowy żółty",
+          "hex": "#FACC15"
+        },
+        {
+          "id": "c2",
+          "name": "Czarny",
+          "hex": "#000000"
+        }
+      ],
+      "imageUrl": "https://images.unsplash.com/photo-1591047139829-d91aecb6caea?w=400",
+      "inStock": true,
+      "stockCount": 22,
+      "rating": 4.6,
+      "reviewCount": 63,
+      "featured": true
+    },
+    {
+      "id": "prod16",
+      "name": "Pulsometr na klatkę piersiową",
+      "slug": "pulsometr-klatka-piersiowa",
+      "description": "Precyzyjny pulsometr na pasku piersiowym. Łączność ANT+ i Bluetooth. Kompatybilny z większością zegarków i aplikacji.",
+      "price": 249,
+      "category": "electronics",
+      "brand": "TechRun",
+      "imageUrl": "https://images.unsplash.com/photo-1510017803434-a899398421b3?w=400",
+      "inStock": false,
+      "stockCount": 0,
+      "rating": 4.7,
+      "reviewCount": 124
+    }
+  ],
+  "deliveryMethods": [
+    {
+      "id": "dpd",
+      "name": "Kurier DPD",
+      "price": 14.99,
+      "estimatedDays": "1-2 dni robocze"
+    },
+    {
+      "id": "inpost-courier",
+      "name": "Kurier InPost",
+      "price": 12.99,
+      "estimatedDays": "2-3 dni robocze"
+    },
+    {
+      "id": "inpost-paczkomat",
+      "name": "Paczkomat InPost",
+      "price": 9.99,
+      "estimatedDays": "1-2 dni robocze"
+    },
+    {
+      "id": "pickup",
+      "name": "Odbiór osobisty",
+      "price": 0,
+      "estimatedDays": "Kraków, ul. Sportowa 15"
+    }
+  ],
+  "paymentMethods": [
+    {
+      "id": "card",
+      "name": "Karta płatnicza (Visa, Mastercard)",
+      "icon": "credit-card"
+    },
+    {
+      "id": "blik",
+      "name": "BLIK",
+      "icon": "smartphone"
+    },
+    {
+      "id": "transfer",
+      "name": "Przelew online (Przelewy24)",
+      "icon": "building"
+    },
+    {
+      "id": "cod",
+      "name": "Płatność przy odbiorze",
+      "icon": "banknote",
+      "surcharge": 5
+    }
+  ],
+  "orders": [
+    {
+      "id": "order1",
+      "orderNumber": "ORD-2026-A1B2C3",
+      "userId": "p1",
+      "items": [
+        {
+          "productId": "prod1",
+          "productName": "Koszulka techniczna Pro Run",
+          "quantity": 2,
+          "size": "L",
+          "color": "Niebieski",
+          "price": 129
+        },
+        {
+          "productId": "prod5",
+          "productName": "Czapka biegowa z daszkiem",
+          "quantity": 1,
+          "color": "Czarny",
+          "price": 79
+        }
+      ],
+      "deliveryMethod": {
+        "id": "inpost-paczkomat",
+        "name": "Paczkomat InPost",
+        "price": 9.99,
+        "estimatedDays": "1-2 dni robocze"
+      },
+      "paymentMethod": {
+        "id": "blik",
+        "name": "BLIK",
+        "icon": "smartphone"
+      },
+      "productTotal": 337,
+      "deliveryPrice": 9.99,
+      "paymentSurcharge": 0,
+      "totalPrice": 346.99,
+      "status": "delivered",
+      "createdAt": "2026-01-02T14:30:00Z",
+      "trackingNumber": "INP0012345678",
+      "shippingAddress": {
+        "fullName": "Jan Kowalski",
+        "street": "ul. Biegowa 15/3",
+        "city": "Warszawa",
+        "postalCode": "00-123",
+        "phone": "+48 600 100 200",
+        "paczkomatId": "WAW12A"
+      },
+      "customerNotes": "Proszę o zapakowanie jako prezent.",
+      "invoiceData": {
+        "companyName": "RunTech Sp. z o.o.",
+        "nip": "1234567890",
+        "street": "ul. Firmowa 8",
+        "city": "Warszawa",
+        "postalCode": "00-456"
+      },
+      "history": [
+        {
+          "id": "h1-1",
+          "orderId": "order1",
+          "timestamp": "2026-01-02T14:30:00Z",
+          "userId": "p1",
+          "userName": "Jan Kowalski",
+          "action": "created",
+          "description": "Zamówienie utworzone"
+        },
+        {
+          "id": "h1-2",
+          "orderId": "order1",
+          "timestamp": "2026-01-02T15:10:00Z",
+          "userId": "admin1",
+          "userName": "Admin Główny",
+          "action": "status_change",
+          "description": "Status zmieniony z Oczekujące na Opłacone",
+          "previousValue": "pending",
+          "newValue": "paid"
+        },
+        {
+          "id": "h1-3",
+          "orderId": "order1",
+          "timestamp": "2026-01-03T09:00:00Z",
+          "userId": "admin1",
+          "userName": "Admin Główny",
+          "action": "tracking_updated",
+          "description": "Dodano numer przesyłki: INP0012345678",
+          "newValue": "INP0012345678"
+        },
+        {
+          "id": "h1-4",
+          "orderId": "order1",
+          "timestamp": "2026-01-03T09:01:00Z",
+          "userId": "admin1",
+          "userName": "Admin Główny",
+          "action": "status_change",
+          "description": "Status zmieniony z Opłacone na Wysłane",
+          "previousValue": "paid",
+          "newValue": "shipped"
+        },
+        {
+          "id": "h1-5",
+          "orderId": "order1",
+          "timestamp": "2026-01-05T11:20:00Z",
+          "userId": "admin1",
+          "userName": "Admin Główny",
+          "action": "status_change",
+          "description": "Status zmieniony z Wysłane na Dostarczone",
+          "previousValue": "shipped",
+          "newValue": "delivered"
+        }
+      ]
+    },
+    {
+      "id": "order2",
+      "orderNumber": "ORD-2026-D4E5F6",
+      "userId": "p1",
+      "items": [
+        {
+          "productId": "prod2",
+          "productName": "Buty do biegania UltraSpeed 3",
+          "quantity": 1,
+          "size": "43",
+          "color": "Neonowy",
+          "price": 699
+        }
+      ],
+      "deliveryMethod": {
+        "id": "dpd",
+        "name": "Kurier DPD",
+        "price": 14.99,
+        "estimatedDays": "1-2 dni robocze"
+      },
+      "paymentMethod": {
+        "id": "card",
+        "name": "Karta płatnicza (Visa, Mastercard)",
+        "icon": "credit-card"
+      },
+      "productTotal": 699,
+      "deliveryPrice": 14.99,
+      "paymentSurcharge": 0,
+      "totalPrice": 713.99,
+      "status": "shipped",
+      "createdAt": "2026-01-08T09:15:00Z",
+      "trackingNumber": "DPD987654321",
+      "shippingAddress": {
+        "fullName": "Jan Kowalski",
+        "street": "ul. Biegowa 15/3",
+        "city": "Warszawa",
+        "postalCode": "00-123",
+        "phone": "+48 600 100 200"
+      },
+      "customerNotes": "Dzwonek nie działa, proszę dzwonić na telefon.",
+      "history": [
+        {
+          "id": "h2-1",
+          "orderId": "order2",
+          "timestamp": "2026-01-08T09:15:00Z",
+          "userId": "p1",
+          "userName": "Jan Kowalski",
+          "action": "created",
+          "description": "Zamówienie utworzone"
+        },
+        {
+          "id": "h2-2",
+          "orderId": "order2",
+          "timestamp": "2026-01-08T10:00:00Z",
+          "userId": "admin1",
+          "userName": "Admin Główny",
+          "action": "status_change",
+          "description": "Status zmieniony z Oczekujące na Opłacone",
+          "previousValue": "pending",
+          "newValue": "paid"
+        },
+        {
+          "id": "h2-3",
+          "orderId": "order2",
+          "timestamp": "2026-01-09T08:30:00Z",
+          "userId": "admin1",
+          "userName": "Admin Główny",
+          "action": "tracking_updated",
+          "description": "Dodano numer przesyłki: DPD987654321",
+          "newValue": "DPD987654321"
+        },
+        {
+          "id": "h2-4",
+          "orderId": "order2",
+          "timestamp": "2026-01-09T08:31:00Z",
+          "userId": "admin1",
+          "userName": "Admin Główny",
+          "action": "status_change",
+          "description": "Status zmieniony z Opłacone na Wysłane",
+          "previousValue": "paid",
+          "newValue": "shipped"
+        }
+      ]
+    },
+    {
+      "id": "order3",
+      "orderNumber": "ORD-2026-G7H8I9",
+      "userId": "p1",
+      "items": [
+        {
+          "productId": "prod6",
+          "productName": "Żele energetyczne Power Pack (10 szt)",
+          "quantity": 2,
+          "price": 89
+        },
+        {
+          "productId": "prod12",
+          "productName": "Napój izotoniczny (12 szt)",
+          "quantity": 1,
+          "price": 59
+        }
+      ],
+      "deliveryMethod": {
+        "id": "inpost-courier",
+        "name": "Kurier InPost",
+        "price": 12.99,
+        "estimatedDays": "2-3 dni robocze"
+      },
+      "paymentMethod": {
+        "id": "cod",
+        "name": "Płatność przy odbiorze",
+        "icon": "banknote",
+        "surcharge": 5
+      },
+      "productTotal": 237,
+      "deliveryPrice": 12.99,
+      "paymentSurcharge": 5,
+      "totalPrice": 254.99,
+      "status": "pending",
+      "createdAt": "2026-01-10T16:45:00Z",
+      "shippingAddress": {
+        "fullName": "Jan Kowalski",
+        "street": "ul. Sportowa 7",
+        "city": "Kraków",
+        "postalCode": "30-001",
+        "phone": "+48 600 100 200"
+      },
+      "invoiceData": {
+        "companyName": "FitLife Jan Kowalski",
+        "nip": "9876543210",
+        "street": "ul. Sportowa 7",
+        "city": "Kraków",
+        "postalCode": "30-001"
+      },
+      "history": [
+        {
+          "id": "h3-1",
+          "orderId": "order3",
+          "timestamp": "2026-01-10T16:45:00Z",
+          "userId": "p1",
+          "userName": "Jan Kowalski",
+          "action": "created",
+          "description": "Zamówienie utworzone"
+        }
+      ]
+    }
+  ],
+  "groupDiscountCodes": [
+    {
+      "id": "grp1",
+      "code": "DRUZYNA3",
+      "discountType": "percent",
+      "discountValue": 10,
+      "minParticipants": 3,
+      "validTo": "2026-12-31",
+      "maxUses": 100,
+      "usedCount": 15,
+      "active": true
+    },
+    {
+      "id": "grp2",
+      "code": "DRUZYNA5",
+      "discountType": "percent",
+      "discountValue": 15,
+      "minParticipants": 5,
+      "validTo": "2026-12-31",
+      "maxUses": 50,
+      "usedCount": 8,
+      "active": true
+    },
+    {
+      "id": "grp3",
+      "code": "TEAM10",
+      "discountType": "percent",
+      "discountValue": 20,
+      "minParticipants": 10,
+      "validTo": "2026-12-31",
+      "maxUses": 20,
+      "usedCount": 2,
+      "active": true
+    }
+  ]
+}

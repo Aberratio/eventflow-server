@@ -1,35 +1,55 @@
 {
-  "name": "zmierzymy-czas/server",
-  "description": "REST API for the Zmierzymy Czas frontend.",
-  "type": "project",
-  "license": "proprietary",
-  "require": {
-    "php": "^8.2",
-    "slim/slim": "^4.14",
-    "slim/psr7": "^1.7",
-    "firebase/php-jwt": "^6.10"
-  },
-  "require-dev": {
-    "phpunit/phpunit": "^10.5"
-  },
-  "autoload": {
-    "psr-4": {
-      "ZmierzymyCzas\\": "src/"
+    "name": "zmierzymy-czas/server",
+    "description": "REST API for the Zmierzymy Czas frontend.",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.2",
+        "slim/slim": "^4.14",
+        "slim/psr7": "^1.7",
+        "firebase/php-jwt": "^6.10"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "ZmierzymyCzas\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "ZmierzymyCzas\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "serve": [
+            "Composer\\Config::disableProcessTimeout",
+            "php -S localhost:8081 -t public router.php"
+        ],
+        "migrate": "php bin/migrate.php",
+        "seed": "php bin/seed.php",
+        "test": "phpunit",
+        "lint": [
+            "php -l public/index.php",
+            "php -l bin/migrate.php",
+            "php -l bin/seed.php",
+            "php -l bin/prune-demo.php",
+            "php -l src/Database/Migrator.php",
+            "php -l src/Database/SeedManifest.php",
+            "php -l src/Database/DemoData.php",
+            "php -l src/Database/EventFixtureImporter.php",
+            "php -l src/Database/FixtureCalendar.php",
+            "php -l src/Database/FixtureFieldFiller.php",
+            "php -l src/Database/EventCoherence.php",
+            "php -l src/Domain/Events/EventRepository.php",
+            "php -l src/Http/routes.php",
+            "php -l database/seeders/generate_events.php",
+            "php -l src/Database/ShopFixtureImporter.php",
+            "php -l src/Database/SeriesLinker.php"
+        ],
+        "seed:fresh": "php bin/seed.php --fresh",
+        "seed:purge": "php bin/seed.php --purge",
+        "prune-demo": "php bin/prune-demo.php --dry-run"
     }
-  },
-  "autoload-dev": {
-    "psr-4": {
-      "ZmierzymyCzas\\Tests\\": "tests/"
-    }
-  },
-  "scripts": {
-    "serve": [
-      "Composer\\Config::disableProcessTimeout",
-      "php -S localhost:8081 -t public router.php"
-    ],
-    "migrate": "php bin/migrate.php",
-    "seed": "php bin/seed.php",
-    "test": "phpunit",
-    "lint": "php -l public/index.php && php -l bin/migrate.php && php -l bin/seed.php"
-  }
 }

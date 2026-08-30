@@ -3,11 +3,15 @@
  * Generator danych testowych dla wydarzeń sportowych.
  *
  * Użycie:
- *   php generate_events.php                     # generuje 002_test_events.sql
+ * Zwykle wolane przez bin/seed.php, ktore zapisuje wynik do
+ * database/seeders/.generated/ i nie trzyma go w repo.
+ *
+ *   php generate_events.php                     # generuje .generated/002_test_events.sql
  *   php generate_events.php --out=custom.sql    # niestandardowy plik wyjściowy
+ *   php generate_events.php --seed=7            # inny zestaw losowych danych
  *   php generate_events.php --dry-run           # wypisuje SQL na stdout
  *
- * Hasło dla wszystkich wygenerowanych kont: demo123
+ * Hasło dla wszystkich wygenerowanych kont: demo1234
  * Organizer: test-organizer (test.organizer@zmierzymyczas.pl)
  */
 
@@ -19,13 +23,16 @@ declare(strict_types=1);
 
 const ORGANIZER_ID   = 'test-organizer';
 const ORGANIZER_NAME = 'Test Organizer';
-const PASSWORD_HASH  = '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi'; // demo123
+const PASSWORD_HASH  = '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK'; // demo1234, same hash as database/seeders/001_demo.sql
 
 const PAST_EVENT_ID      = 'e-test-bieg-lesny-2025';
 const CURRENT_EVENT_ID   = 'e-test-triathlon-2026';
 const UPCOMING_EVENT_ID  = 'e-test-maraton-2027';
 
 const PAST_EVENT_PARTICIPANT_COUNT = 120;
+
+/** Fixed RNG seed keeps generated fixtures reproducible; override with --seed=N. */
+const DEFAULT_RNG_SEED = 42;
 
 // ---------------------------------------------------------------------------
 // Dane pomocnicze
@@ -90,7 +97,10 @@ function generateRunTime(float $distanceKm, float $paceSecPerKm, float $stddevSe
 {
     $base = $distanceKm * $paceSecPerKm;
     // Box-Muller dla przybliżonego rozkładu normalnego
-    $u1 = lcg_value(); $u2 = lcg_value();
+    // lcg_value() has its own generator, seeded from the clock and immune to mt_srand,
+    // which made every regenerated fixture set produce different finish times.
+    $u1 = mt_rand(1, mt_getrandmax()) / (mt_getrandmax() + 1);
+    $u2 = mt_rand(1, mt_getrandmax()) / (mt_getrandmax() + 1);
     $noise = sqrt(-2 * log($u1)) * cos(2 * M_PI * $u2) * $stddevSec;
     return max(60, (int)round($base + $noise));
 }
@@ -607,17 +617,23 @@ function main(array $argv): void
 {
     global $MALE_FIRST_NAMES, $FEMALE_FIRST_NAMES, $LAST_NAMES, $CLUBS, $CITIES;
 
-    $outFile = __DIR__ . '/002_test_events.sql';
+    $outFile = __DIR__ . '/.generated/002_test_events.sql';
     $dryRun  = false;
+    $rngSeed = DEFAULT_RNG_SEED;
 
     foreach ($argv as $arg) {
         if (str_starts_with($arg, '--out=')) $outFile = substr($arg, 6);
+        if (str_starts_with($arg, '--seed=')) $rngSeed = (int) substr($arg, 7);
         if ($arg === '--dry-run') $dryRun = true;
     }
 
+    // Seeded RNG: the same seed yields byte-identical SQL, so a regenerated fixture set
+    // is comparable across machines and reruns instead of drifting every time.
+    mt_srand($rngSeed);
+
     $sql  = "-- Wygenerowano przez generate_events.php\n";
-    $sql .= "-- Hasło wszystkich kont: demo123\n";
-    $sql .= "-- Data generowania: " . date('Y-m-d H:i:s') . "\n\n";
+    $sql .= "-- Hasło wszystkich kont: demo1234\n";
+    $sql .= "-- Ziarno RNG: {$rngSeed} (--seed=N zmienia zestaw danych)\n\n";
 
     $sql .= "SET FOREIGN_KEY_CHECKS=0;\n\n";
 
@@ -670,6 +686,11 @@ function main(array $argv): void
     if ($dryRun) {
         echo $sql;
     } else {
+        $dir = dirname($outFile);
+        if (!is_dir($dir) && !mkdir($dir, 0777, true) && !is_dir($dir)) {
+            fwrite(STDERR, "Nie moge utworzyc katalogu: {$dir}\n");
+            exit(1);
+        }
         file_put_contents($outFile, $sql);
         echo "Wygenerowano: {$outFile}\n";
         echo "Uczestników przeszłego eventu: " . PAST_EVENT_PARTICIPANT_COUNT . "\n";

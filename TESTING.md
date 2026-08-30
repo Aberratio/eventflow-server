@@ -4,6 +4,8 @@
 
 - Unit PR gate: `composer lint && composer test -- --testsuite Unit`
 - Integration gate: run migrations and seed against a test database, then `composer test -- --testsuite Integration`
+- The test database's `.env` must set `APP_ENV=local`. `bin/seed.php` treats a missing
+  `APP_ENV` as production and refuses to seed, so the gate fails without it.
 
 ## Backend Layers
 

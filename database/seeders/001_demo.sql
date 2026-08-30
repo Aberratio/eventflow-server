@@ -1,36 +1,10 @@
-SET FOREIGN_KEY_CHECKS=0;
-TRUNCATE TABLE password_resets;
-TRUNCATE TABLE online_sessions;
-TRUNCATE TABLE security_settings;
-TRUNCATE TABLE activity_logs;
-TRUNCATE TABLE partners;
-TRUNCATE TABLE info_pages;
-TRUNCATE TABLE team_results;
-TRUNCATE TABLE results;
-TRUNCATE TABLE registration_payment_details;
-TRUNCATE TABLE registration_merchandise_orders;
-TRUNCATE TABLE registrations;
-TRUNCATE TABLE event_result_documents;
-TRUNCATE TABLE event_gallery_albums;
-TRUNCATE TABLE event_discount_codes;
-TRUNCATE TABLE event_merchandise;
-TRUNCATE TABLE event_payment_methods;
-TRUNCATE TABLE event_distances;
-TRUNCATE TABLE challenge_entries;
-TRUNCATE TABLE challenge_participations;
-TRUNCATE TABLE challenge_products;
-TRUNCATE TABLE challenge_events;
-TRUNCATE TABLE challenges;
-TRUNCATE TABLE series_products;
-TRUNCATE TABLE shop_products;
-TRUNCATE TABLE shop_categories;
-TRUNCATE TABLE series_events;
-TRUNCATE TABLE organizer_event_credit_usages;
-TRUNCATE TABLE organizer_event_credit_batches;
-TRUNCATE TABLE events;
-TRUNCATE TABLE series;
-TRUNCATE TABLE users;
-SET FOREIGN_KEY_CHECKS=1;
+-- Demo data: fixed accounts and a small hand-written catalogue of events.
+--
+-- This file used to start by TRUNCATE-ing 32 tables, which made it unusable anywhere
+-- but a throwaway local database. Cleanup is now the seed runner's job: it purges the
+-- rows recorded in `seed_records` before re-applying the seeders, so this file only
+-- ever inserts. See bin/seed.php.
+
 
 INSERT INTO users (id, name, email, password_hash, role, phone, birth_year, gender, club, company_name, status, event_limit) VALUES
 ('u-participant', 'Jan Kowalski', 'jan@example.com', '$2y$10$m6sRohb7PEr9eIwzEm5g0OeOprsHvENzHtHQbBoVkGSjh62gm7oYK', 'participant', '500100200', 1990, 'M', 'Biegacze Warszawy', NULL, 'active', 0),

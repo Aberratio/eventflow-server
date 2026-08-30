@@ -4,3 +4,4 @@
 /public/uploads/
 /.phpunit.cache/
 /.phpunit.result.cache
+/database/seeders/.generated/

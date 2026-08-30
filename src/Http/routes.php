@@ -117,6 +117,20 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $nextRole = array_key_exists('role', $payload) ? (string) $payload['role'] : '';
         return in_array($existingRole, ['admin', 'superadmin'], true) || in_array($nextRole, ['admin', 'superadmin'], true);
     };
+    // Server-authored activity log (E0.8): actor identity always comes from the verified
+    // JWT (`$auth`), never from the request body, so an entry can't be forged as someone
+    // else. `targetName` is a deliberate snapshot of the target's name at the time of the
+    // action, not a foreign-key lookup — keep it that way.
+    $logActivity = static function (array $auth, string $action, string $description, ?string $targetType = null, ?string $targetId = null, ?string $targetName = null) use ($admin): void {
+        $admin->insertActivityLog([
+            'userId' => (string) ($auth['sub'] ?? ''),
+            'action' => $action,
+            'description' => $description,
+            'targetType' => $targetType,
+            'targetId' => $targetId,
+            'targetName' => $targetName,
+        ]);
+    };
 
     $publicUploadBase = '/' . trim((string) Env::get('APP_UPLOAD_PUBLIC_BASE', '/uploads'), '/');
     if (!str_starts_with($publicUploadBase, '/api/v1/')) {
@@ -134,7 +148,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
@@ -289,44 +303,55 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
         })->add(new AuthMiddleware($jwt, $staffRoles));
         $api->get('/users/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $users->find($args['id'])));
-        $api->post('/users', function (Request $request, Response $response) use ($users, $body, $isSuperAdmin) {
+        $api->post('/users', function (Request $request, Response $response) use ($users, $body, $isSuperAdmin, $logActivity) {
             $payload = $body($request);
             if (in_array((string) ($payload['role'] ?? ''), ['admin', 'superadmin'], true) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can create admin accounts', 403);
             }
-            return JsonResponder::ok($response, $users->create($payload), 'User created', 201);
+            $created = $users->create($payload);
+            $logActivity((array) $request->getAttribute('auth'), 'user_created', 'Utworzono konto użytkownika', 'user', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
+            return JsonResponder::ok($response, $created, 'User created', 201);
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->patch('/users/{id}', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount) {
+        $api->patch('/users/{id}', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount, $logActivity) {
             $payload = $body($request);
             unset($payload['eventLimit']);
             $existing = $users->find($args['id']);
             if ($touchesAdminAccount($existing, $payload) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can modify admin accounts', 403);
             }
-            return JsonResponder::ok($response, $users->update($args['id'], $payload));
+            $updated = $users->update($args['id'], $payload);
+            $logActivity((array) $request->getAttribute('auth'), 'user_updated', 'Zaktualizowano konto użytkownika', 'user', (string) $args['id'], (string) ($updated['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt));
-        $api->delete('/users/{id}', function (Request $request, Response $response, array $args) use ($users, $isSuperAdmin, $touchesAdminAccount) {
-            if ($touchesAdminAccount($users->find($args['id']), []) && !$isSuperAdmin($request)) {
+        $api->delete('/users/{id}', function (Request $request, Response $response, array $args) use ($users, $isSuperAdmin, $touchesAdminAccount, $logActivity) {
+            $existing = $users->find($args['id']);
+            if ($touchesAdminAccount($existing, []) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can delete admin accounts', 403);
             }
             $users->delete($args['id']);
+            $logActivity((array) $request->getAttribute('auth'), 'user_deleted', 'Usunięto konto użytkownika', 'user', (string) $args['id'], (string) ($existing['name'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->patch('/users/{id}/role', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount) {
+        $api->patch('/users/{id}/role', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount, $logActivity) {
             $payload = ['role' => $body($request)['role'] ?? null];
             if ($touchesAdminAccount($users->find($args['id']), $payload) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can modify admin roles', 403);
             }
-            return JsonResponder::ok($response, $users->update($args['id'], $payload));
+            $updated = $users->update($args['id'], $payload);
+            $logActivity((array) $request->getAttribute('auth'), 'user_role_changed', 'Zmieniono rolę użytkownika na ' . (string) ($payload['role'] ?? ''), 'user', (string) $args['id'], (string) ($updated['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->patch('/users/{id}/status', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount) {
+        $api->patch('/users/{id}/status', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount, $logActivity) {
             if ($touchesAdminAccount($users->find($args['id']), []) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can change admin status', 403);
             }
-            return JsonResponder::ok($response, $users->update($args['id'], ['status' => $body($request)['status'] ?? null]));
+            $status = $body($request)['status'] ?? null;
+            $updated = $users->update($args['id'], ['status' => $status]);
+            $logActivity((array) $request->getAttribute('auth'), 'user_status_changed', 'Zmieniono status użytkownika na ' . (string) $status, 'user', (string) $args['id'], (string) ($updated['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt, $staffRoles));
         $api->get('/participants', function (Request $request, Response $response) use ($users) {
@@ -369,7 +394,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             return JsonResponder::ok($response, $event);
         });
-        $api->post('/events', function (Request $request, Response $response) use ($events, $users, $body, $isStaffRole) {
+        $api->post('/events', function (Request $request, Response $response) use ($events, $users, $body, $isStaffRole, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $payload = $body($request);
             $role = (string) ($auth['role'] ?? '');
@@ -385,7 +410,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             try {
-                return JsonResponder::ok($response, $events->createForOrganizer($payload, $organizer, (string) ($auth['sub'] ?? '')), 'Event created', 201);
+                $created = $events->createForOrganizer($payload, $organizer, (string) ($auth['sub'] ?? ''));
+                $logActivity($auth, 'event_created', 'Utworzono wydarzenie', 'event', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
+                return JsonResponder::ok($response, $created, 'Event created', 201);
             } catch (RuntimeException $e) {
                 if ($e->getMessage() === 'event_limit_exceeded') {
                     return JsonResponder::error($response, 'event_limit_exceeded', 'Organizer has no available event slots', 409);
@@ -393,7 +420,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 throw $e;
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->patch('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $users, $body, $canManageEvent, $isStaffRole) {
+        $api->patch('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $users, $body, $canManageEvent, $isStaffRole, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             if (!$canManageEvent($event, $auth)) {
@@ -429,9 +456,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             } elseif (!$isStaffRole($role)) {
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
-            return JsonResponder::ok($response, $events->update($args['id'], $payload));
+            $updated = $events->update($args['id'], $payload);
+            $logActivity($auth, 'event_updated', 'Zaktualizowano wydarzenie', 'event', (string) $args['id'], (string) ($updated['name'] ?? $event['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->delete('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $isStaffRole) {
+        $api->delete('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $isStaffRole, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             if (!$canManageEvent($event, $auth)) {
@@ -442,9 +471,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'event_delete_forbidden', 'Only upcoming events without registrations can be deleted. Archive past events instead.', 409);
             }
             $events->delete($args['id']);
+            $logActivity($auth, 'event_deleted', 'Usunięto wydarzenie', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->patch('/events/{id}/status', function (Request $request, Response $response, array $args) use ($events, $body, $canManageEvent, $isStaffRole) {
+        $api->patch('/events/{id}/status', function (Request $request, Response $response, array $args) use ($events, $body, $canManageEvent, $isStaffRole, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             if (!$canManageEvent($event, $auth)) {
@@ -456,7 +486,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'forbidden', 'Organizer cannot manually change event status', 403);
             }
             try {
-                $event = $events->updateStatus($args['id'], $status, $body($request)['reason'] ?? null);
+                $updatedEvent = $events->updateStatus($args['id'], $status, $body($request)['reason'] ?? null);
             } catch (RuntimeException $e) {
                 if ($e->getMessage() === 'event_archive_before_start') {
                     return JsonResponder::error($response, 'event_archive_before_start', 'Only events that already ended can be archived', 409);
@@ -466,30 +496,47 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 }
                 throw $e;
             }
-            return $event ? JsonResponder::ok($response, $event) : JsonResponder::error($response, 'not_found', 'Event not found', 404);
+            if (!$updatedEvent) {
+                return JsonResponder::error($response, 'not_found', 'Event not found', 404);
+            }
+            $logActivity($auth, 'event_status_changed', 'Zmieniono status wydarzenia na ' . $status, 'event', (string) $args['id'], (string) ($updatedEvent['name'] ?? ''));
+            return JsonResponder::ok($response, $updatedEvent);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->post('/events/{id}/submit', function (Request $request, Response $response, array $args) use ($events, $canManageEvent) {
+        $api->post('/events/{id}/submit', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             if (!$canManageEvent($events->find($args['id']), $auth)) {
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             $event = $events->submit($args['id']);
-            return $event ? JsonResponder::ok($response, $event) : JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be submitted in its current status', 409);
+            if (!$event) {
+                return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be submitted in its current status', 409);
+            }
+            $logActivity($auth, 'event_submitted', 'Przesłano wydarzenie do moderacji', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
+            return JsonResponder::ok($response, $event);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->post('/events/{id}/approve', function (Request $request, Response $response, array $args) use ($events) {
+        $api->post('/events/{id}/approve', function (Request $request, Response $response, array $args) use ($events, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->approve($args['id'], (string) ($auth['sub'] ?? ''));
-            return $event ? JsonResponder::ok($response, $event) : JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be approved in its current status', 409);
+            if (!$event) {
+                return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be approved in its current status', 409);
+            }
+            $logActivity($auth, 'event_approved', 'Zatwierdzono wydarzenie', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
+            return JsonResponder::ok($response, $event);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->post('/events/{id}/reject', function (Request $request, Response $response, array $args) use ($events, $body) {
+        $api->post('/events/{id}/reject', function (Request $request, Response $response, array $args) use ($events, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
             $reason = trim((string) ($body($request)['reason'] ?? ''));
             if ($reason === '') {
                 return JsonResponder::error($response, 'validation_error', 'Rejection reason is required', 422);
             }
             $event = $events->reject($args['id'], $reason);
-            return $event ? JsonResponder::ok($response, $event) : JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be rejected in its current status', 409);
+            if (!$event) {
+                return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be rejected in its current status', 409);
+            }
+            $logActivity($auth, 'event_rejected', 'Odrzucono wydarzenie: ' . $reason, 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
+            return JsonResponder::ok($response, $event);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->post('/events/{id}/publish', function (Request $request, Response $response, array $args) use ($events, $publisherRoles) {
+        $api->post('/events/{id}/publish', function (Request $request, Response $response, array $args) use ($events, $publisherRoles, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             $role = (string) ($auth['role'] ?? '');
@@ -498,7 +545,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             $published = $events->publish($args['id'], (string) ($auth['sub'] ?? ''));
-            return $published ? JsonResponder::ok($response, $published) : JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be published in its current status', 409);
+            if (!$published) {
+                return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be published in its current status', 409);
+            }
+            $logActivity($auth, 'event_published', 'Opublikowano wydarzenie', 'event', (string) $args['id'], (string) ($published['name'] ?? ''));
+            return JsonResponder::ok($response, $published);
         })->add(new AuthMiddleware($jwt, ['organizer', 'admin', 'superadmin']));
         $api->get('/organizers/{organizerId}/events', function (Request $request, Response $response, array $args) use ($events, $isStaffRole) {
             $auth = (array) $request->getAttribute('auth');
@@ -689,37 +740,45 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
         $api->get('/events/{eventId}/results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->byEvent($args['eventId'], $request->getQueryParams()['distanceId'] ?? null)));
         $api->get('/users/{userId}/results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->byUser($args['userId'])));
-        $api->post('/results', function (Request $request, Response $response) use ($events, $results, $body, $canUploadResults) {
+        $api->post('/results', function (Request $request, Response $response) use ($events, $results, $body, $canUploadResults, $logActivity) {
             $payload = $body($request);
             $event = $events->find((string) ($payload['eventId'] ?? ''));
-            if (!$canUploadResults($event, (array) $request->getAttribute('auth'))) {
+            $auth = (array) $request->getAttribute('auth');
+            if (!$canUploadResults($event, $auth)) {
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
             }
-            return JsonResponder::ok($response, $results->create($payload), 'Result created', 201);
+            $created = $results->create($payload);
+            $logActivity($auth, 'result_created', 'Dodano wynik', 'result', (string) ($created['id'] ?? ''), (string) ($created['userName'] ?? ''));
+            return JsonResponder::ok($response, $created, 'Result created', 201);
         })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->patch('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $body, $canUploadResults) {
+        $api->patch('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $body, $canUploadResults, $logActivity) {
             $result = $results->find((string) $args['id']);
             if (!$result) {
                 return JsonResponder::error($response, 'not_found', 'Result not found', 404);
             }
             $event = $events->find((string) $result['eventId']);
-            if (!$canUploadResults($event, (array) $request->getAttribute('auth'))) {
+            $auth = (array) $request->getAttribute('auth');
+            if (!$canUploadResults($event, $auth)) {
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be edited only for active or past events you manage.', 403);
             }
-            return JsonResponder::ok($response, $results->update($args['id'], $body($request)));
+            $updated = $results->update($args['id'], $body($request));
+            $logActivity($auth, 'result_updated', 'Zaktualizowano wynik', 'result', (string) $args['id'], (string) ($updated['userName'] ?? $result['userName'] ?? ''));
+            return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->delete('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults) {
+        $api->delete('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults, $logActivity) {
             $result = $results->find((string) $args['id']);
             if (!$result) {
                 return JsonResponder::error($response, 'not_found', 'Result not found', 404);
             }
             $event = $events->find((string) $result['eventId']);
-            if (!$canUploadResults($event, (array) $request->getAttribute('auth'))) {
+            $auth = (array) $request->getAttribute('auth');
+            if (!$canUploadResults($event, $auth)) {
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be deleted only for active or past events you manage.', 403);
             }
             $results->delete($args['id']);
+            $logActivity($auth, 'result_deleted', 'Usunięto wynik', 'result', (string) $args['id'], (string) ($result['userName'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->get('/users/{userId}/personal-records', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->personalRecords($args['userId'])));
@@ -911,11 +970,18 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             ->add(new AuthMiddleware($jwt, $staffRoles));
         $api->post('/shop/orders', fn (Request $request, Response $response) => JsonResponder::ok($response, $orders->create($body($request)), 'Order created', 201))
             ->add(new AuthMiddleware($jwt, []));
-        $api->patch('/shop/orders/{id}/status', function (Request $request, Response $response, array $args) use ($orders, $body) {
+        $api->patch('/shop/orders/{id}/status', function (Request $request, Response $response, array $args) use ($orders, $body, $logActivity) {
             $data = $body($request);
-            return JsonResponder::ok($response, $orders->updateStatus($args['id'], (string) ($data['status'] ?? ''), $data['trackingNumber'] ?? null));
+            $status = (string) ($data['status'] ?? '');
+            $updated = $orders->updateStatus($args['id'], $status, $data['trackingNumber'] ?? null);
+            $logActivity((array) $request->getAttribute('auth'), 'order_status_changed', 'Zmieniono status zamówienia na ' . $status, 'order', (string) $args['id'], (string) ($updated['id'] ?? $args['id']));
+            return JsonResponder::ok($response, $updated);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->patch('/shop/orders/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $orders->update($args['id'], $body($request))))
+        $api->patch('/shop/orders/{id}', function (Request $request, Response $response, array $args) use ($orders, $body, $logActivity) {
+            $updated = $orders->update($args['id'], $body($request));
+            $logActivity((array) $request->getAttribute('auth'), 'order_updated', 'Zaktualizowano zamówienie', 'order', (string) $args['id'], (string) ($updated['id'] ?? $args['id']));
+            return JsonResponder::ok($response, $updated);
+        })
             ->add(new AuthMiddleware($jwt, $staffRoles));
 
         $api->get('/shop/products', function (Request $request, Response $response) use ($shop, $query, $optionalAuth, $isStaffRole) {
@@ -1043,21 +1109,25 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             return JsonResponder::ok($response, $result, 'Tło wydarzenia zostało wgrane.', 201);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->post('/event-backgrounds', function (Request $request, Response $response) use ($backgrounds, $body) {
+        $api->post('/event-backgrounds', function (Request $request, Response $response) use ($backgrounds, $body, $logActivity) {
             $payload = $body($request);
             if (trim((string) ($payload['name'] ?? '')) === '' || trim((string) ($payload['imageUrl'] ?? '')) === '') {
                 return JsonResponder::error($response, 'validation_error', 'Name and imageUrl are required', 422);
             }
-            return JsonResponder::ok($response, $backgrounds->create($payload), 'Background created', 201);
+            $created = $backgrounds->create($payload);
+            $logActivity((array) $request->getAttribute('auth'), 'event_background_created', 'Utworzono tło wydarzenia', 'eventBackground', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
+            return JsonResponder::ok($response, $created, 'Background created', 201);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->patch('/event-backgrounds/{id}', function (Request $request, Response $response, array $args) use ($backgrounds, $body) {
+        $api->patch('/event-backgrounds/{id}', function (Request $request, Response $response, array $args) use ($backgrounds, $body, $logActivity) {
             $bg = $backgrounds->find($args['id']);
             if (!$bg) {
                 return JsonResponder::error($response, 'not_found', 'Background not found', 404);
             }
-            return JsonResponder::ok($response, $backgrounds->update($args['id'], $body($request)));
+            $updated = $backgrounds->update($args['id'], $body($request));
+            $logActivity((array) $request->getAttribute('auth'), 'event_background_updated', 'Zaktualizowano tło wydarzenia', 'eventBackground', (string) $args['id'], (string) ($updated['name'] ?? $bg['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->delete('/event-backgrounds/{id}', function (Request $request, Response $response, array $args) use ($backgrounds) {
+        $api->delete('/event-backgrounds/{id}', function (Request $request, Response $response, array $args) use ($backgrounds, $logActivity) {
             $bg = $backgrounds->find($args['id']);
             if (!$bg) {
                 return JsonResponder::error($response, 'not_found', 'Background not found', 404);
@@ -1067,44 +1137,37 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'background_in_use', 'Background is used by one or more events', 409);
             }
             $backgrounds->delete($args['id']);
+            $logActivity((array) $request->getAttribute('auth'), 'event_background_deleted', 'Usunięto tło wydarzenia', 'eventBackground', (string) $args['id'], (string) ($bg['name'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $staffRoles));
 
+        // E0.8: global list is admin/superadmin only (moderator lost blanket global read —
+        // deliberate narrowing, not an oversight). Organizers get a scoped slice of the
+        // same log via GET /events/{id}/activity-logs below, authorized through the
+        // existing single-owner $canManageEvent check.
         $api->get('/admin/activity-logs', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->activityLogs($query($request))))
-            ->add(new AuthMiddleware($jwt, $staffRoles));
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->get('/events/{id}/activity-logs', function (Request $request, Response $response, array $args) use ($events, $admin, $canManageEvent, $query) {
+            $auth = (array) $request->getAttribute('auth');
+            $event = $events->find($args['id']);
+            if (!$canManageEvent($event, $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $filters = $query($request);
+            $filters['targetType'] = 'event';
+            $filters['targetId'] = $args['id'];
+            return JsonResponder::ok($response, $admin->activityLogs($filters));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->get('/admin/security-settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->securitySettings()))
             ->add(new AuthMiddleware($jwt, ['admin']));
-        $api->patch('/admin/security-settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->updateSecuritySettings($body($request))))
+        $api->patch('/admin/security-settings', function (Request $request, Response $response) use ($admin, $body, $logActivity) {
+            $updated = $admin->updateSecuritySettings($body($request));
+            $logActivity((array) $request->getAttribute('auth'), 'security_settings_updated', 'Zaktualizowano ustawienia bezpieczeństwa', 'securitySettings', null, null);
+            return JsonResponder::ok($response, $updated);
+        })
             ->add(new AuthMiddleware($jwt, ['admin']));
         $api->get('/admin/online-sessions', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->onlineSessions()))
             ->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->post('/admin/client-logs', function (Request $request, Response $response) use ($admin, $body) {
-            $data = $body($request);
-            $logs = is_array($data['logs'] ?? null) ? $data['logs'] : [];
-            foreach ($logs as $entry) {
-                if (!is_array($entry)) {
-                    continue;
-                }
-                $admin->insertActivityLog([
-                    'id' => $entry['id'] ?? null,
-                    'level' => $entry['level'] ?? 'info',
-                    'category' => $entry['category'] ?? 'system',
-                    'action' => $entry['action'] ?? 'client_log',
-                    'description' => $entry['description'] ?? '',
-                    'userId' => $entry['userId'] ?? null,
-                    'userRole' => $entry['userRole'] ?? null,
-                    'userName' => $entry['userName'] ?? null,
-                    'targetType' => $entry['targetType'] ?? null,
-                    'targetId' => $entry['targetId'] ?? null,
-                    'targetName' => $entry['targetName'] ?? null,
-                    'metadata' => $entry['metadata'] ?? null,
-                    'sessionId' => $entry['sessionId'] ?? null,
-                    'timestamp' => $entry['timestamp'] ?? null,
-                    'source' => 'client',
-                ]);
-            }
-            return JsonResponder::ok($response, ['received' => count($logs)]);
-        })->add(new AuthMiddleware($jwt, []));
 
         // Bilet is a view of Zapis, not a stored entity (E0.2) — derived from registrations.
         $api->get('/users/{userId}/tickets', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->ticketsByUser($args['userId'])))

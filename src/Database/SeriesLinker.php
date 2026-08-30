@@ -43,7 +43,7 @@ final class SeriesLinker
         $available = $pdo->query(
             "SELECT id, discipline, date FROM events
              WHERE is_private = 0
-               AND status IN ('active', 'past', 'archived')
+               AND publication_status IN ('published', 'finished', 'cancelled')
                AND series_id IS NULL
                AND id NOT IN (SELECT event_id FROM series_events)
              ORDER BY date ASC"

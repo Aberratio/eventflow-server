@@ -217,9 +217,16 @@ final class RegistrationContractTest extends HttpTestCase
         $this->pdo->prepare('DELETE FROM registrations WHERE event_id = :id')->execute(['id' => $eventId]);
     }
 
+    /**
+     * E1.1 dropped the free-text `status` column entirely (see
+     * 031_e11_event_lifecycle.sql), so there is no ENUM to patch in place any more — the
+     * schema this test needs only exists once every migration has actually run. Calling
+     * the real Migrator (idempotent, no ledger — see its docblock) is the only thing that
+     * still makes sense here.
+     */
     private function ensureEventStatusSchema(): void
     {
-        $this->pdo->exec("ALTER TABLE events MODIFY status ENUM('draft','awaiting_approval','approved','active','past','archived','deleted') NOT NULL DEFAULT 'draft'");
+        \ZmierzymyCzas\Database\Migrator::applyAll($this->pdo);
     }
 
     private function eventPayload(array $overrides = []): array

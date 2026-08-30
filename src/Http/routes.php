@@ -66,7 +66,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $staffRoles = ['admin', 'superadmin', 'moderator'];
     $eventManagerRoles = ['organizer', 'admin', 'superadmin', 'moderator'];
     $publisherRoles = ['admin', 'superadmin'];
-    $publicEventStatuses = ['active', 'past', 'archived'];
+    $publicEventStatuses = ['published', 'finished'];
     $isSuperAdmin = static fn (Request $request): bool => ((string) (((array) $request->getAttribute('auth'))['role'] ?? '')) === 'superadmin';
     $isStaffRole = static fn (string $role): bool => in_array($role, ['admin', 'superadmin', 'moderator'], true);
     $optionalAuth = static function (Request $request) use ($jwt): array {
@@ -80,37 +80,75 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return [];
         }
     };
-    $canViewEvent = static function (?array $event, array $auth) use ($publicEventStatuses, $isStaffRole): bool {
+    // E1.1 permission matrix. This codebase has no Event Team membership model yet (see
+    // E0.8's commit note: activity-log org-scoping was deliberately kept single-owner,
+    // "bez modelu zespołu — poza zakresem tego ticketu") — "Event Team" in the spec is
+    // therefore the event's single owning organizer account until that model exists.
+    // "Organizer (outside Team)" is any other organizer account.
+    $canViewEvent = static function (?array $event, array $auth, ?string $accessCode = null) use ($isStaffRole): bool {
         if (!$event) {
             return false;
         }
-        if (
-            in_array((string) $event['status'], $publicEventStatuses, true)
-            && empty($event['isPrivate'])
-        ) {
+        $role = (string) ($auth['role'] ?? '');
+        $userId = (string) ($auth['sub'] ?? '');
+        $isOwner = $role === 'organizer' && $userId !== '' && $event['organizerId'] === $userId;
+
+        if (($event['deletedAt'] ?? null) !== null) {
+            return $role === 'superadmin';
+        }
+
+        $status = (string) ($event['publicationStatus'] ?? '');
+        if (in_array($status, ['published', 'finished', 'cancelled'], true)) {
+            if ($isOwner || $isStaffRole($role)) {
+                return true;
+            }
+            if (empty($event['isPrivate'])) {
+                return true; // public — visible to everyone, including guests
+            }
+            // Private: only via direct link (this event's id/slug), gated by the access
+            // code when the organizer set one. "Organizer (outside Team)" gets no access
+            // here at all, per the matrix — only guests/participants get the link route.
+            if ($role === 'organizer') {
+                return false;
+            }
+            $requiredCode = (string) ($event['accessCode'] ?? '');
+            return $requiredCode === '' || $accessCode === $requiredCode;
+        }
+
+        // Draft / Submitted: never public. Draft is Event Team (owner) only, plus
+        // admin/superadmin read-only oversight — moderator gets none on Draft per the
+        // matrix. Submitted additionally opens up to the moderator for approve/reject.
+        if ($isOwner) {
             return true;
         }
-        $role = (string) ($auth['role'] ?? '');
-        $userId = (string) ($auth['sub'] ?? '');
-        if (($event['status'] ?? '') === 'deleted' && $role !== 'superadmin') {
-            return false;
+        if ($status === 'submitted') {
+            return $isStaffRole($role);
         }
-        return $isStaffRole($role) || ($role === 'organizer' && $userId !== '' && $event['organizerId'] === $userId);
+        return in_array($role, ['admin', 'superadmin'], true);
     };
-    $canManageEvent = static function (?array $event, array $auth) use ($isStaffRole): bool {
+    $canManageEvent = static function (?array $event, array $auth): bool {
         if (!$event) {
             return false;
         }
         $role = (string) ($auth['role'] ?? '');
         $userId = (string) ($auth['sub'] ?? '');
-        if (($event['status'] ?? '') === 'deleted' && $role !== 'superadmin') {
+        if (($event['deletedAt'] ?? null) !== null && $role !== 'superadmin') {
             return false;
         }
-        return $isStaffRole($role) || ($role === 'organizer' && $userId !== '' && $event['organizerId'] === $userId);
+        if ($role === 'organizer') {
+            return $userId !== '' && $event['organizerId'] === $userId;
+        }
+        if (!in_array($role, ['admin', 'superadmin', 'moderator'], true)) {
+            return false;
+        }
+        // Staff can edit once an event has cleared moderation (Published/Finished/
+        // Cancelled). Draft is Event Team only and Submitted is view + approve/reject —
+        // neither is a general staff edit, per the permission matrix.
+        return in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished', 'cancelled'], true);
     };
     $canUploadResults = static function (?array $event, array $auth) use ($canManageEvent): bool {
         return $canManageEvent($event, $auth)
-            && in_array((string) ($event['status'] ?? ''), ['active', 'past'], true);
+            && in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished'], true);
     };
     $touchesAdminAccount = static function (?array $existing, array $payload): bool {
         $existingRole = (string) ($existing['role'] ?? '');
@@ -382,14 +420,16 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->get('/events/live', fn (Request $request, Response $response) => JsonResponder::ok($response, $events->live()));
         $api->get('/events/slug/{slug}', function (Request $request, Response $response, array $args) use ($events, $optionalAuth, $canViewEvent) {
             $event = $events->findBySlug($args['slug']);
-            if (!$canViewEvent($event, $optionalAuth($request))) {
+            $accessCode = $request->getQueryParams()['accessCode'] ?? null;
+            if (!$canViewEvent($event, $optionalAuth($request), $accessCode !== null ? (string) $accessCode : null)) {
                 return JsonResponder::error($response, 'not_found', 'Event not found', 404);
             }
             return JsonResponder::ok($response, $event);
         });
         $api->get('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $optionalAuth, $canViewEvent) {
             $event = $events->find($args['id']);
-            if (!$canViewEvent($event, $optionalAuth($request))) {
+            $accessCode = $request->getQueryParams()['accessCode'] ?? null;
+            if (!$canViewEvent($event, $optionalAuth($request), $accessCode !== null ? (string) $accessCode : null)) {
                 return JsonResponder::error($response, 'not_found', 'Event not found', 404);
             }
             return JsonResponder::ok($response, $event);
@@ -428,16 +468,24 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             $payload = $body($request);
             $role = (string) ($auth['role'] ?? '');
+            // The publication workflow axis and is_test only ever move through their own
+            // dedicated endpoints (submit/approve/reject/cancel/visibility/is-test) — a
+            // generic edit can never bypass moderation or the state machine by smuggling
+            // these in the body (E1.1).
+            unset($payload['status'], $payload['publicationStatus'], $payload['isTest']);
             if ($role === 'organizer') {
-                unset($payload['organizerId'], $payload['organizerName'], $payload['status'], $payload['featured']);
-                if (in_array((string) ($event['status'] ?? ''), ['awaiting_approval', 'approved'], true)) {
-                    $payload['status'] = 'draft';
+                unset($payload['organizerId'], $payload['organizerName'], $payload['featured']);
+                if ((string) ($event['publicationStatus'] ?? '') === 'submitted') {
+                    // Editing a submission-in-review invalidates that pending review — the
+                    // organizer has to resubmit the edited version. Published events are
+                    // exempt (E1.1: moderation is a one-time gate, not continuous control).
+                    $payload['publicationStatus'] = 'draft';
                     $payload['submittedAt'] = null;
                     $payload['approvedAt'] = null;
                     $payload['approvedBy'] = null;
                 }
             } elseif (array_key_exists('organizerId', $payload) && ($payload['organizerId'] ?? '') !== ($event['organizerId'] ?? '')) {
-                if (($event['status'] ?? '') === 'active') {
+                if (in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished'], true)) {
                     return JsonResponder::error($response, 'published_organizer_locked', 'Published events cannot be transferred to another organizer', 409);
                 }
                 $organizer = $users->find((string) $payload['organizerId']);
@@ -468,40 +516,18 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             $role = (string) ($auth['role'] ?? '');
             if (!$event || !$events->canDeleteBeforeRegistrationOpened($event)) {
-                return JsonResponder::error($response, 'event_delete_forbidden', 'Only upcoming events without registrations can be deleted. Archive past events instead.', 409);
+                return JsonResponder::error($response, 'event_delete_forbidden', 'Only upcoming events without registrations can be deleted.', 409);
             }
             $events->delete($args['id']);
             $logActivity($auth, 'event_deleted', 'Usunięto wydarzenie', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->patch('/events/{id}/status', function (Request $request, Response $response, array $args) use ($events, $body, $canManageEvent, $isStaffRole, $logActivity) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find($args['id']);
-            if (!$canManageEvent($event, $auth)) {
-                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
-            }
-            $role = (string) ($auth['role'] ?? '');
-            $status = (string) ($body($request)['status'] ?? 'draft');
-            if (!$isStaffRole($role) && $status !== 'archived') {
-                return JsonResponder::error($response, 'forbidden', 'Organizer cannot manually change event status', 403);
-            }
-            try {
-                $updatedEvent = $events->updateStatus($args['id'], $status, $body($request)['reason'] ?? null);
-            } catch (RuntimeException $e) {
-                if ($e->getMessage() === 'event_archive_before_start') {
-                    return JsonResponder::error($response, 'event_archive_before_start', 'Only events that already ended can be archived', 409);
-                }
-                if ($e->getMessage() === 'invalid_status_transition') {
-                    return JsonResponder::error($response, 'invalid_status_transition', 'Use submit, approve, reject and publish actions for moderation workflow', 409);
-                }
-                throw $e;
-            }
-            if (!$updatedEvent) {
-                return JsonResponder::error($response, 'not_found', 'Event not found', 404);
-            }
-            $logActivity($auth, 'event_status_changed', 'Zmieniono status wydarzenia na ' . $status, 'event', (string) $args['id'], (string) ($updatedEvent['name'] ?? ''));
-            return JsonResponder::ok($response, $updatedEvent);
-        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        // E1.1: the old free-form PATCH /events/{id}/status (draft/past/archived) is gone.
+        // `past`/`archived` are now the automatic lazy Published→Finished check
+        // (EventRepository::lazilyFinishPastEvents(), run on every read); every remaining
+        // transition has its own endpoint below, each enforcing the E1.1 permission
+        // matrix. EventRepository::updateStatus() is kept only as a repository-level
+        // guard against writing publication_status directly — always rejects.
         $api->post('/events/{id}/submit', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             if (!$canManageEvent($events->find($args['id']), $auth)) {
@@ -516,11 +542,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->post('/events/{id}/approve', function (Request $request, Response $response, array $args) use ($events, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
+            // Approve is a one-step Submitted -> Published (E1.1) — there is no separate
+            // "approved" resting state to publish from afterwards.
             $event = $events->approve($args['id'], (string) ($auth['sub'] ?? ''));
             if (!$event) {
                 return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be approved in its current status', 409);
             }
-            $logActivity($auth, 'event_approved', 'Zatwierdzono wydarzenie', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
+            $logActivity($auth, 'event_approved', 'Zatwierdzono i opublikowano wydarzenie', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
             return JsonResponder::ok($response, $event);
         })->add(new AuthMiddleware($jwt, $staffRoles));
         $api->post('/events/{id}/reject', function (Request $request, Response $response, array $args) use ($events, $body, $logActivity) {
@@ -536,21 +564,60 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $logActivity($auth, 'event_rejected', 'Odrzucono wydarzenie: ' . $reason, 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
             return JsonResponder::ok($response, $event);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->post('/events/{id}/publish', function (Request $request, Response $response, array $args) use ($events, $publisherRoles, $logActivity) {
+        // Published -> Cancelled. Manual, terminal, Owner or admin only per the matrix
+        // (deliberately narrower than $eventManagerRoles — no moderator, no Event Team
+        // other than the owner). Bulk refunds are ticket 13, out of scope here.
+        $api->post('/events/{id}/cancel', function (Request $request, Response $response, array $args) use ($events, $adminRoles, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             $role = (string) ($auth['role'] ?? '');
             $isOwner = $role === 'organizer' && ($event['organizerId'] ?? '') === ($auth['sub'] ?? '');
-            if (!$isOwner && !in_array($role, $publisherRoles, true)) {
+            if (!$isOwner && !in_array($role, $adminRoles, true)) {
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
-            $published = $events->publish($args['id'], (string) ($auth['sub'] ?? ''));
-            if (!$published) {
-                return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be published in its current status', 409);
+            $cancelled = $events->cancel($args['id']);
+            if (!$cancelled) {
+                return JsonResponder::error($response, 'invalid_status_transition', 'Only a published event can be cancelled', 409);
             }
-            $logActivity($auth, 'event_published', 'Opublikowano wydarzenie', 'event', (string) $args['id'], (string) ($published['name'] ?? ''));
-            return JsonResponder::ok($response, $published);
+            $logActivity($auth, 'event_cancelled', 'Odwołano wydarzenie', 'event', (string) $args['id'], (string) ($cancelled['name'] ?? ''));
+            return JsonResponder::ok($response, $cancelled);
         })->add(new AuthMiddleware($jwt, ['organizer', 'admin', 'superadmin']));
+        // Visibility toggle (public/private), only valid once Published — organizer/team,
+        // moderator or admin, per the matrix.
+        $api->patch('/events/{id}/visibility', function (Request $request, Response $response, array $args) use ($events, $body, $canManageEvent, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $event = $events->find($args['id']);
+            if (!$canManageEvent($event, $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $visibility = (string) ($body($request)['visibility'] ?? '');
+            if (!in_array($visibility, ['public', 'private'], true)) {
+                return JsonResponder::error($response, 'validation_error', 'visibility must be "public" or "private"', 422);
+            }
+            $updated = $events->setVisibility($args['id'], $visibility);
+            if (!$updated) {
+                return JsonResponder::error($response, 'invalid_status_transition', 'Visibility can only be changed on a published event', 409);
+            }
+            $logActivity($auth, 'event_visibility_changed', 'Zmieniono widoczność wydarzenia na ' . $visibility, 'event', (string) $args['id'], (string) ($updated['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        // is_test only settable while Draft, organizer/team only per the matrix (staff
+        // roles pass the middleware but canManageEvent still gates a Draft event to its
+        // owner, since staff never manage Draft — see canManageEvent above).
+        $api->patch('/events/{id}/is-test', function (Request $request, Response $response, array $args) use ($events, $body, $canManageEvent, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $event = $events->find($args['id']);
+            if (!$canManageEvent($event, $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $isTest = !empty($body($request)['isTest']);
+            $updated = $events->setIsTest($args['id'], $isTest);
+            if (!$updated) {
+                return JsonResponder::error($response, 'invalid_status_transition', 'is_test can only be changed while the event is a draft', 409);
+            }
+            $logActivity($auth, 'event_test_mode_changed', $isTest ? 'Włączono tryb testowy wydarzenia' : 'Wyłączono tryb testowy wydarzenia', 'event', (string) $args['id'], (string) ($updated['name'] ?? ''));
+            return JsonResponder::ok($response, $updated);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->get('/organizers/{organizerId}/events', function (Request $request, Response $response, array $args) use ($events, $isStaffRole) {
             $auth = (array) $request->getAttribute('auth');
             $role = (string) ($auth['role'] ?? '');

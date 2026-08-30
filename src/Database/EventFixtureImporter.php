@@ -248,7 +248,7 @@ final class EventFixtureImporter
                     (SELECT COUNT(*) FROM results s WHERE s.event_id = e.id) AS res,
                     (SELECT COUNT(*) FROM event_distances d WHERE d.event_id = e.id) AS dists
              FROM events e
-             WHERE e.status IN ('active', 'past', 'archived')
+             WHERE e.publication_status IN ('published', 'finished', 'cancelled')
                AND (e.registration_status <> 'none' OR e.registration_status IS NULL)"
         )->fetchAll(PDO::FETCH_ASSOC);
 
@@ -263,7 +263,7 @@ final class EventFixtureImporter
                 continue;
             }
 
-            $finished = in_array((string) $event['status'], ['past', 'archived'], true);
+            $finished = (string) $event['publicationStatus'] === 'finished';
             $needsEntrants = (int) $row['regs'] < 5;
             // A finished event needs a result for every entrant, not merely some results.
             $needsResults = $finished && (int) $row['res'] < (int) $row['regs'];

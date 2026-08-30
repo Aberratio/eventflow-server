@@ -21,8 +21,8 @@ use PDO;
  */
 final class EventCoherence
 {
-    /** Statuses that describe a published, publicly listed event. */
-    private const PUBLISHED = ['active', 'past', 'archived'];
+    /** publication_status values that describe a published, publicly listed event (E1.1). */
+    private const PUBLISHED = ['published', 'finished', 'cancelled'];
 
     /**
      * @return array<string, int> what was corrected, by kind
@@ -31,18 +31,21 @@ final class EventCoherence
     {
         $fixed = [];
 
-        // An event whose day has passed is finished, whatever the seeder said.
+        // An event whose day has passed is finished, whatever the seeder said. Same rule
+        // as EventRepository::lazilyFinishPastEvents() (E1.1), just applied eagerly here
+        // over the whole seeded table instead of lazily on read.
         $fixed['marked_finished'] = self::run(
             $pdo,
-            "UPDATE events SET status = 'past', registration_status = 'closed'
-             WHERE status = 'active' AND date < CURDATE()"
+            "UPDATE events SET publication_status = 'finished', registration_status = 'closed'
+             WHERE publication_status = 'published' AND date < CURDATE()"
         );
 
-        // And one still ahead of us has not finished yet.
+        // And one still ahead of us has not finished yet. `cancelled` is excluded — it's
+        // terminal and manual (E1.1), a seeder saying `date > CURDATE()` doesn't undo it.
         $fixed['marked_upcoming'] = self::run(
             $pdo,
-            "UPDATE events SET status = 'active'
-             WHERE status IN ('past', 'archived') AND date > CURDATE()"
+            "UPDATE events SET publication_status = 'published'
+             WHERE publication_status = 'finished' AND date > CURDATE()"
         );
 
         // Registration cannot still be open once the race has been run.
@@ -75,7 +78,7 @@ final class EventCoherence
         $fixed['live_today'] = self::run(
             $pdo,
             "UPDATE events SET is_live = 1
-             WHERE date = CURDATE() AND status IN ('active', 'past')"
+             WHERE date = CURDATE() AND publication_status IN ('published', 'finished')"
         );
 
         // Nobody can have entered an event that has not opened for entries.
@@ -106,7 +109,7 @@ final class EventCoherence
         $stmt = $pdo->query(
             "SELECT e.id, e.slug FROM events e
              WHERE e.date < CURDATE()
-               AND e.status IN ('" . implode("','", self::PUBLISHED) . "')
+               AND e.publication_status IN ('" . implode("','", self::PUBLISHED) . "')
                AND NOT EXISTS (SELECT 1 FROM event_gallery_albums g WHERE g.event_id = e.id)"
         );
 

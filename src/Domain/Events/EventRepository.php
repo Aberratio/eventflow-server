@@ -9,13 +9,25 @@ use ZmierzymyCzas\Domain\Repository;
 final class EventRepository extends Repository
 {
     private const CREDIT_KINDS = ['standard', 'virtual', 'timing'];
-    private const EVENT_STATUSES = ['draft', 'awaiting_approval', 'approved', 'active', 'past', 'archived', 'deleted'];
+
+    /**
+     * The workflow axis (E1.1). `approved` and `rejected` are legal ENUM values on the
+     * column (schema future-proofing, per spec) but the application never actually rests
+     * a row there: approve() lands directly on `published`, reject() lands directly on
+     * `draft` (with rejection_reason kept for the UI). `cancelled` is terminal and manual.
+     * Soft-delete used to be folded into this same field (`status = 'deleted'`) — E1.1
+     * splits that out to its own `deleted_at` column, since "is this row gone" is not part
+     * of the publication workflow.
+     */
+    private const PUBLICATION_STATUSES = ['draft', 'submitted', 'approved', 'published', 'finished', 'rejected', 'cancelled'];
 
     private const EVENT_COLUMNS = <<<'SQL'
 id, name, slug, discipline, date, location, location_maps_url AS locationMapsUrl, city, description, image_url AS imageUrl,
 original_image_url AS originalImageUrl,
 series_id AS seriesId, organizer_id AS organizerId, organizer_name AS organizerName,
-organizer_contact AS organizerContact, status, rejection_reason AS rejectionReason,
+organizer_contact AS organizerContact,
+publication_status AS publicationStatus, visibility, is_test AS isTest, deleted_at AS deletedAt,
+rejection_reason AS rejectionReason,
 submitted_at AS submittedAt, approved_at AS approvedAt, approved_by AS approvedBy,
 published_at AS publishedAt, published_by AS publishedBy, created_by AS createdBy,
 registration_deadline AS registrationDeadline,
@@ -66,13 +78,13 @@ SQL;
      */
     public function list(array $filters = []): array
     {
+        $this->lazilyFinishPastEvents();
         $where = [];
         $params = [];
 
         foreach ([
             'discipline' => 'discipline',
             'city' => 'city',
-            'status' => 'status',
             'seriesId' => 'series_id',
             'registrationStatus' => 'registration_status',
         ] as $input => $column) {
@@ -81,13 +93,18 @@ SQL;
                 $params[$input] = $filters[$input];
             }
         }
+        if (!empty($filters['status'])) {
+            $where[] = 'publication_status = :status';
+            $params['status'] = $this->normalizeStatus((string) $filters['status']);
+        }
         if (empty($filters['includePrivate'])) {
             $where[] = 'is_private = 0';
         }
         if (empty($filters['includeUnpublished'])) {
-            $where[] = "status IN ('active', 'past', 'archived')";
+            $where[] = "publication_status IN ('published', 'finished')";
+            $where[] = 'deleted_at IS NULL';
         } elseif (empty($filters['includeDeleted'])) {
-            $where[] = "status <> 'deleted'";
+            $where[] = 'deleted_at IS NULL';
         }
         if (!empty($filters['dateFrom'])) {
             $where[] = 'date >= :dateFrom';
@@ -130,6 +147,7 @@ SQL;
 
     public function find(string $id): ?array
     {
+        $this->lazilyFinishPastEvents();
         $stmt = $this->pdo->prepare('SELECT ' . self::EVENT_COLUMNS . ' FROM events WHERE id = :id');
         $stmt->execute(['id' => $id]);
         $row = $stmt->fetch();
@@ -138,6 +156,7 @@ SQL;
 
     public function findBySlug(string $slug): ?array
     {
+        $this->lazilyFinishPastEvents();
         $stmt = $this->pdo->prepare('SELECT ' . self::EVENT_COLUMNS . ' FROM events WHERE slug = :slug');
         $stmt->execute(['slug' => $slug]);
         $row = $stmt->fetch();
@@ -147,21 +166,24 @@ SQL;
     /** @return array<int, array<string, mixed>> */
     public function featured(): array
     {
-        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE featured = 1 AND status IN ('active', 'past', 'archived') ORDER BY date ASC");
+        $this->lazilyFinishPastEvents();
+        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE featured = 1 AND publication_status IN ('published', 'finished') ORDER BY date ASC");
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
 
     /** @return array<int, array<string, mixed>> */
     public function live(): array
     {
-        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE is_live = 1 AND status IN ('active', 'past', 'archived') ORDER BY date ASC");
+        $this->lazilyFinishPastEvents();
+        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE is_live = 1 AND publication_status IN ('published', 'finished') ORDER BY date ASC");
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
 
     /** @return array<int, array<string, mixed>> */
     public function byOrganizer(string $organizerId, bool $includeDeleted = false): array
     {
-        $deletedSql = $includeDeleted ? '' : " AND status <> 'deleted'";
+        $this->lazilyFinishPastEvents();
+        $deletedSql = $includeDeleted ? '' : ' AND deleted_at IS NULL';
         $stmt = $this->pdo->prepare('SELECT ' . self::EVENT_COLUMNS . " FROM events WHERE organizer_id = :organizerId{$deletedSql} ORDER BY date ASC");
         $stmt->execute(['organizerId' => $organizerId]);
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
@@ -195,7 +217,7 @@ SQL;
             $payload = $data;
             $payload['organizerId'] = $organizer['id'];
             $payload['organizerName'] = $organizer['companyName'] ?: $organizer['name'];
-            $payload['status'] = 'draft';
+            $payload['publicationStatus'] = 'draft';
             $payload['createdBy'] = $actorId;
             $payload['eventCreditKind'] = $this->creditKindForEvent($payload);
             $this->assertOrganizerHasCapacity((string) $organizer['id']);
@@ -228,7 +250,7 @@ SQL;
 
         $this->pdo->beginTransaction();
         try {
-            if (($event['status'] ?? '') !== 'deleted') {
+            if ($event['deletedAt'] === null) {
                 $this->assertOrganizerHasCapacity((string) $organizer['id']);
             }
             $this->updateById('events', $id, [
@@ -242,84 +264,173 @@ SQL;
         }
     }
 
+    /**
+     * Soft delete (E1.1). Used to be `status = 'deleted'`, folded into the same column
+     * as the moderation workflow; split out to its own timestamp because "is this row
+     * gone" isn't part of the publication_status axis.
+     */
     public function delete(string $id): void
     {
-        $this->updateById('events', $id, ['status' => 'deleted']);
+        $this->updateById('events', $id, ['deleted_at' => date(DATE_ATOM)]);
     }
 
+    /**
+     * Pre-E1.1 this was a free-form status PATCH (draft/past/archived, staff- or
+     * organizer-triggered). E1.1 replaces every one of those manual targets: `past`/
+     * `archived` are now the automatic lazy Published→Finished check
+     * (lazilyFinishPastEvents(), below), and the remaining transitions each have their
+     * own method — submit()/approve()/reject()/cancel()/setVisibility()/setIsTest().
+     * Kept only as a repository-level guard against writing publication_status directly
+     * and skipping the moderation workflow: every manual target is rejected, matching
+     * the "manual status change cannot bypass moderation" contract this repository has
+     * always enforced.
+     */
     public function updateStatus(string $id, string $status, ?string $reason): ?array
     {
         $event = $this->find($id);
-        if (!$event || $event['status'] === 'deleted') {
+        if (!$event || $event['deletedAt'] !== null) {
             return null;
         }
 
-        $status = $this->normalizeStatus($status);
-        $this->assertStatusTransition($event, $status);
-        $this->updateById('events', $id, [
-            'status' => $status,
-            'rejection_reason' => $reason,
-        ]);
-        return $this->find($id);
+        throw new \RuntimeException('invalid_status_transition');
     }
 
+    /**
+     * Draft -> Submitted. Also clears is_test irreversibly (E1.1: the flag only exists to
+     * let an organizer walk the registration form before moderation; once submitted for
+     * real, the event can never go back into test mode, even if rejected back to Draft).
+     */
     public function submit(string $id): ?array
     {
         $event = $this->find($id);
-        if (!$event || $event['status'] === 'deleted') {
+        if (!$event || $event['deletedAt'] !== null) {
             return null;
         }
-        if ((string) $event['status'] !== 'draft') {
+        if ((string) $event['publicationStatus'] !== 'draft') {
             return null;
         }
         $this->updateById('events', $id, [
-            'status' => 'awaiting_approval',
+            'publication_status' => 'submitted',
             'rejection_reason' => null,
             'submitted_at' => date(DATE_ATOM),
+            'is_test' => 0,
         ]);
         return $this->find($id);
     }
 
+    /**
+     * Submitted -> Published, in one step. The spec models `approved` as a resting ENUM
+     * value for future-proofing, but today approval and publication are the same action —
+     * there is no separate "approved, not yet published" state, so this never leaves the
+     * row at `approved`.
+     */
     public function approve(string $id, string $actorId): ?array
     {
         $event = $this->find($id);
-        if (!$event || $event['status'] !== 'awaiting_approval') {
+        if (!$event || $event['publicationStatus'] !== 'submitted') {
             return null;
         }
+        $now = date(DATE_ATOM);
         $this->updateById('events', $id, [
-            'status' => 'approved',
+            'publication_status' => 'published',
             'rejection_reason' => null,
-            'approved_at' => date(DATE_ATOM),
+            'approved_at' => $now,
             'approved_by' => $actorId,
+            'published_at' => $now,
+            'published_by' => $actorId,
         ]);
         return $this->find($id);
     }
 
+    /**
+     * Submitted -> Draft (with the reason kept for the organizer to see). Like `approved`,
+     * `rejected` is a legal ENUM value but not a resting state the application ever writes
+     * — rejecting an event is a new Draft cycle, not a persistent "Rejected" status.
+     */
     public function reject(string $id, string $reason): ?array
     {
         $event = $this->find($id);
-        if (!$event || $event['status'] !== 'awaiting_approval') {
+        if (!$event || $event['publicationStatus'] !== 'submitted') {
             return null;
         }
         $this->updateById('events', $id, [
-            'status' => 'draft',
+            'publication_status' => 'draft',
             'rejection_reason' => $reason,
         ]);
         return $this->find($id);
     }
 
-    public function publish(string $id, string $actorId): ?array
+    /**
+     * Published -> Cancelled. Manual, terminal, irreversible. Bulk refund handling for
+     * paid registrations is ticket 13 (out of scope here) — this is the hook point for it
+     * once that lands.
+     */
+    public function cancel(string $id): ?array
     {
         $event = $this->find($id);
-        if (!$event || $event['status'] !== 'approved') {
+        if (!$event || $event['publicationStatus'] !== 'published') {
             return null;
         }
+        // TODO(ticket 13): trigger bulk refunds for paid registrations before/at cancellation.
+        $this->updateById('events', $id, ['publication_status' => 'cancelled']);
+        return $this->find($id);
+    }
+
+    /**
+     * The visibility toggle (public/private), only meaningful once the event is
+     * Published. `is_private`/`access_code` remain the underlying storage (access_code
+     * already existed from an earlier ticket) and stay in sync with `visibility`.
+     */
+    public function setVisibility(string $id, string $visibility): ?array
+    {
+        $event = $this->find($id);
+        if (!$event || $event['publicationStatus'] !== 'published') {
+            return null;
+        }
+        $visibility = $visibility === 'private' ? 'private' : 'public';
         $this->updateById('events', $id, [
-            'status' => 'active',
-            'published_at' => date(DATE_ATOM),
-            'published_by' => $actorId,
+            'visibility' => $visibility,
+            'is_private' => (int) ($visibility === 'private'),
         ]);
         return $this->find($id);
+    }
+
+    /**
+     * is_test is only settable while Draft (E1.1) — it exists purely so an organizer can
+     * walk the registration form via a direct link before moderation. submit() clears it
+     * irreversibly, so there is no corresponding "set false" escape hatch needed once an
+     * event has moved on.
+     */
+    public function setIsTest(string $id, bool $isTest): ?array
+    {
+        $event = $this->find($id);
+        if (!$event || $event['publicationStatus'] !== 'draft') {
+            return null;
+        }
+        // Irreversible once the event has ever been submitted (E1.1) — a rejected event
+        // is Draft again but submitted_at survives the round trip specifically so this
+        // check can tell "never submitted" apart from "back in Draft after rejection".
+        if (!empty($event['submittedAt'])) {
+            return null;
+        }
+        $this->updateById('events', $id, ['is_test' => (int) $isTest]);
+        return $this->find($id);
+    }
+
+    /**
+     * Lazy Published -> Finished transition (E1.1). Mirrors
+     * AdminRepository::pruneExpiredActivityLogs()'s delete-on-read pattern from E0.8: no
+     * cron/queue infrastructure exists in this codebase to hook a scheduled job into
+     * (confirmed there, still true here), so every read path below runs this bulk UPDATE
+     * first — a published event whose day has passed is corrected before anyone reads it.
+     */
+    private function lazilyFinishPastEvents(): void
+    {
+        $this->pdo->exec(
+            "UPDATE events SET publication_status = 'finished'
+             WHERE publication_status = 'published'
+               AND COALESCE(NULLIF(end_date, ''), date) < CURDATE()"
+        );
     }
 
     /** @return array{limit: int, used: int, available: int} */
@@ -397,7 +508,7 @@ SQL;
     private function hydrate(array $row): array
     {
         $event = $this->decode($row, self::EVENT_JSON);
-        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'registrationUntilEventStart', 'enableMerchandiseInRegistration'] as $bool) {
+        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'isTest', 'registrationUntilEventStart', 'enableMerchandiseInRegistration'] as $bool) {
             $event[$bool] = (bool) ($event[$bool] ?? false);
         }
         $event['distances'] = array_map(
@@ -500,7 +611,7 @@ SQL;
             'organizerName' => 'organizer_name',
             'organizerContact' => 'organizer_contact',
             'organizerInfo' => 'organizer_info',
-            'status' => 'status',
+            'publicationStatus' => 'publication_status',
             'rejectionReason' => 'rejection_reason',
             'submittedAt' => 'submitted_at',
             'approvedAt' => 'approved_at',
@@ -536,6 +647,8 @@ SQL;
             'finalAcceptanceHtml' => 'final_acceptance_html',
             'requireFinalAcceptance' => 'require_final_acceptance',
             'isPrivate' => 'is_private',
+            'visibility' => 'visibility',
+            'isTest' => 'is_test',
             'accessCode' => 'access_code',
             'registrationEmbed' => 'registration_embed',
             'registrationFormConfig' => 'registration_form_config',
@@ -543,12 +656,25 @@ SQL;
             'logisticsInfo' => 'logistics_info',
             'backgroundId' => 'background_id',
         ];
-        $out = $creating ? ['id' => $id, 'status' => 'draft', 'featured' => 0] : [];
+        $out = $creating ? ['id' => $id, 'publication_status' => 'draft', 'featured' => 0] : [];
         foreach ($map as $input => $column) {
             if (array_key_exists($input, $data)) {
                 $value = is_bool($data[$input]) ? (int) $data[$input] : $data[$input];
-                $out[$column] = $input === 'status' ? $this->normalizeStatus((string) $value) : $value;
+                $out[$column] = $input === 'publicationStatus' ? $this->normalizeStatus((string) $value) : $value;
             }
+        }
+        // `status` is the pre-E1.1 input key (still used by older callers/fixtures);
+        // `publicationStatus` is the canonical one and wins if both are present.
+        if (array_key_exists('status', $data) && !array_key_exists('publicationStatus', $data)) {
+            $out['publication_status'] = $this->normalizeStatus((string) $data['status']);
+        }
+        // visibility (E1.1) and the legacy is_private boolean describe the same axis —
+        // keep them in sync however the caller supplied it, so old and new consumers
+        // both see a consistent value.
+        if (array_key_exists('visibility', $data) && !array_key_exists('isPrivate', $data)) {
+            $out['is_private'] = (int) ($data['visibility'] === 'private');
+        } elseif (array_key_exists('isPrivate', $data) && !array_key_exists('visibility', $data)) {
+            $out['visibility'] = !empty($data['isPrivate']) ? 'private' : 'public';
         }
         foreach (['organizer_contact', 'banner_crop_area', 'payment_config', 'registration_embed', 'registration_form_config', 'display_options', 'logistics_info', 'organizer_info', 'insurance_option'] as $jsonField) {
             if (array_key_exists($jsonField, $out) && $out[$jsonField] !== null && !is_string($out[$jsonField])) {
@@ -593,36 +719,33 @@ SQL;
         return in_array($kind, self::CREDIT_KINDS, true) ? $kind : 'standard';
     }
 
+    /**
+     * Accepts both the new canonical values and every historical spelling this column
+     * has ever had (pre-E1.1 `active`/`past`/`archived`/`awaiting_approval`, and the even
+     * older `published`/`completed`/`cancelled` aliases from 001_init.sql), so old
+     * fixtures/payloads keep working without a data migration of every call site.
+     *
+     * `approved` and `rejected` are legal ENUM values (schema future-proofing per spec)
+     * but are never the *result* of normalizing an action — approve()/reject() below
+     * write `published`/`draft` directly and never call this with those verbs. A caller
+     * handing this method the literal string 'approved' or 'rejected' still gets it back
+     * unchanged, since both are in PUBLICATION_STATUSES; they just never arise from the
+     * alias table.
+     */
     private function normalizeStatus(string $status): string
     {
         return match ($status) {
-            'published' => 'active',
-            'completed' => 'past',
-            'cancelled' => 'archived',
-            'rejected' => 'draft',
-            default => in_array($status, self::EVENT_STATUSES, true) ? $status : 'draft',
+            'active' => 'published',
+            'past', 'archived', 'completed' => 'finished',
+            'awaiting_approval' => 'submitted',
+            'deleted' => 'draft',
+            default => in_array($status, self::PUBLICATION_STATUSES, true) ? $status : 'draft',
         };
-    }
-
-    /** @param array<string, mixed> $event */
-    private function assertStatusTransition(array $event, string $status): void
-    {
-        if ($status === 'archived' && !$this->hasEventEnded($event)) {
-            throw new \RuntimeException('event_archive_before_start');
-        }
-
-        if ($status === (string) ($event['status'] ?? '')) {
-            return;
-        }
-
-        if (!in_array($status, ['draft', 'past', 'archived'], true)) {
-            throw new \RuntimeException('invalid_status_transition');
-        }
     }
 
     private function activeEventCount(string $organizerId): int
     {
-        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM events WHERE organizer_id = :organizerId AND status <> 'deleted'");
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM events WHERE organizer_id = :organizerId AND deleted_at IS NULL');
         $stmt->execute(['organizerId' => $organizerId]);
         return (int) $stmt->fetchColumn();
     }
@@ -630,7 +753,7 @@ SQL;
     /** @param array<string, mixed> $event */
     public function canDeleteBeforeRegistrationOpened(array $event): bool
     {
-        if (in_array((string) ($event['status'] ?? ''), ['past', 'archived', 'deleted'], true)) {
+        if (in_array((string) ($event['publicationStatus'] ?? ''), ['finished', 'cancelled'], true) || $event['deletedAt'] !== null) {
             return false;
         }
 
@@ -642,17 +765,6 @@ SQL;
         $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM registrations WHERE event_id = :eventId AND status <> 'removed'");
         $stmt->execute(['eventId' => $event['id']]);
         return (int) $stmt->fetchColumn() === 0;
-    }
-
-    /** @param array<string, mixed> $event */
-    private function hasEventEnded(array $event): bool
-    {
-        $endDate = (string) (($event['endDate'] ?? '') ?: ($event['date'] ?? ''));
-        if ($endDate === '') {
-            return false;
-        }
-
-        return substr($endDate, 0, 10) < date('Y-m-d');
     }
 
     private function assertOrganizerHasCapacity(string $organizerId): void

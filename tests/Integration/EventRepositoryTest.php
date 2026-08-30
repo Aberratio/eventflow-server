@@ -40,9 +40,16 @@ final class EventRepositoryTest extends TestCase
         $this->deletePhpUnitEvents('phpunit-event-%');
     }
 
+    /**
+     * E1.1 dropped the free-text `status` column entirely (see
+     * 031_e11_event_lifecycle.sql), so there is no ENUM to patch in place any more — the
+     * schema this test needs only exists once every migration has actually run. Calling
+     * the real Migrator (idempotent, no ledger — see its docblock) is the only thing that
+     * still makes sense here.
+     */
     private function ensureEventStatusWorkflowSchema(): void
     {
-        $this->pdo->exec("ALTER TABLE events MODIFY status ENUM('draft','awaiting_approval','approved','active','past','archived','deleted') NOT NULL DEFAULT 'draft'");
+        \ZmierzymyCzas\Database\Migrator::applyAll($this->pdo);
     }
 
     private function deletePhpUnitEvents(string $slugLike): void
@@ -247,11 +254,11 @@ final class EventRepositoryTest extends TestCase
 
         $publicEvent = $this->events->findBySlug((string) $visible['slug']);
         self::assertSame('PHPUnit Visible For Participants', $publicEvent['name']);
-        self::assertSame('active', $publicEvent['status']);
+        self::assertSame('published', $publicEvent['publicationStatus']);
         self::assertFalse($publicEvent['isPrivate']);
     }
 
-    public function testModerationWorkflowRequiresApprovalBeforePublishing(): void
+    public function testModerationWorkflowApprovesDirectlyToPublished(): void
     {
         $created = $this->events->create($this->payload([
             'slug' => $this->slugPrefix . '-workflow',
@@ -262,28 +269,24 @@ final class EventRepositoryTest extends TestCase
 
         $submitted = $this->events->submit((string) $created['id']);
         self::assertNotNull($submitted);
-        self::assertSame('awaiting_approval', $submitted['status']);
+        self::assertSame('submitted', $submitted['publicationStatus']);
         self::assertNotEmpty($submitted['submittedAt']);
 
-        self::assertNull($this->events->publish((string) $created['id'], 'phpunit-organizer'));
+        $publicBeforeApproval = $this->events->list(['search' => 'PHPUnit Moderation Workflow']);
+        self::assertSame([], array_column($publicBeforeApproval['data'], 'name'));
 
+        // E1.1: approve() lands directly on `published` — there is no separate
+        // "approved, not yet published" resting state to publish from afterwards.
         $approved = $this->events->approve((string) $created['id'], 'phpunit-admin');
         self::assertNotNull($approved);
-        self::assertSame('approved', $approved['status']);
+        self::assertSame('published', $approved['publicationStatus']);
         self::assertSame('phpunit-admin', $approved['approvedBy']);
         self::assertNotEmpty($approved['approvedAt']);
+        self::assertSame('phpunit-admin', $approved['publishedBy']);
+        self::assertNotEmpty($approved['publishedAt']);
 
-        $publicBeforePublish = $this->events->list(['search' => 'PHPUnit Moderation Workflow']);
-        self::assertSame([], array_column($publicBeforePublish['data'], 'name'));
-
-        $published = $this->events->publish((string) $created['id'], 'phpunit-organizer');
-        self::assertNotNull($published);
-        self::assertSame('active', $published['status']);
-        self::assertSame('phpunit-organizer', $published['publishedBy']);
-        self::assertNotEmpty($published['publishedAt']);
-
-        $publicAfterPublish = $this->events->list(['search' => 'PHPUnit Moderation Workflow']);
-        self::assertContains('PHPUnit Moderation Workflow', array_column($publicAfterPublish['data'], 'name'));
+        $publicAfterApproval = $this->events->list(['search' => 'PHPUnit Moderation Workflow']);
+        self::assertContains('PHPUnit Moderation Workflow', array_column($publicAfterApproval['data'], 'name'));
     }
 
     public function testRejectReturnsSubmittedEventToDraftWithReason(): void
@@ -295,11 +298,11 @@ final class EventRepositoryTest extends TestCase
         ]));
 
         $submitted = $this->events->submit((string) $created['id']);
-        self::assertSame('awaiting_approval', $submitted['status']);
+        self::assertSame('submitted', $submitted['publicationStatus']);
 
         $rejected = $this->events->reject((string) $created['id'], 'Brakuje regulaminu');
         self::assertNotNull($rejected);
-        self::assertSame('draft', $rejected['status']);
+        self::assertSame('draft', $rejected['publicationStatus']);
         self::assertSame('Brakuje regulaminu', $rejected['rejectionReason']);
     }
 
@@ -314,7 +317,56 @@ final class EventRepositoryTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('invalid_status_transition');
 
-        $this->events->updateStatus((string) $created['id'], 'active', null);
+        $this->events->updateStatus((string) $created['id'], 'published', null);
+    }
+
+    public function testCancelOnlyWorksFromPublished(): void
+    {
+        $draft = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-cancel-draft',
+            'name' => 'PHPUnit Cancel From Draft Forbidden',
+            'distances' => $this->minimalDistances($this->slugPrefix . '-cancel-draft'),
+        ]));
+        self::assertNull($this->events->cancel((string) $draft['id']));
+
+        $published = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-cancel-published',
+            'name' => 'PHPUnit Cancel From Published',
+            'status' => 'active',
+            'distances' => $this->minimalDistances($this->slugPrefix . '-cancel-published'),
+        ]));
+        $cancelled = $this->events->cancel((string) $published['id']);
+        self::assertNotNull($cancelled);
+        self::assertSame('cancelled', $cancelled['publicationStatus']);
+
+        // Terminal: cancelling again does nothing.
+        self::assertNull($this->events->cancel((string) $published['id']));
+    }
+
+    public function testIsTestOnlySettableWhileDraftAndClearedIrreversiblyOnSubmit(): void
+    {
+        $created = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-is-test',
+            'name' => 'PHPUnit Is Test Flag',
+            'distances' => $this->minimalDistances($this->slugPrefix . '-is-test'),
+        ]));
+
+        $withTest = $this->events->setIsTest((string) $created['id'], true);
+        self::assertNotNull($withTest);
+        self::assertTrue($withTest['isTest']);
+
+        $submitted = $this->events->submit((string) $created['id']);
+        self::assertNotNull($submitted);
+        self::assertFalse($submitted['isTest']);
+
+        // Rejected back to draft — is_test stays cleared, and it's irreversible: setIsTest
+        // no longer applies once the event has been through Submitted, since Draft here
+        // means "rejected", not "never submitted".
+        $rejected = $this->events->reject((string) $created['id'], 'Wymaga poprawek');
+        self::assertSame('draft', $rejected['publicationStatus']);
+        self::assertFalse($rejected['isTest']);
+
+        self::assertNull($this->events->setIsTest((string) $created['id'], true));
     }
 
     /**
@@ -328,7 +380,11 @@ final class EventRepositoryTest extends TestCase
             'name' => 'PHPUnit Event',
             'slug' => $slug,
             'discipline' => 'running',
-            'date' => '2026-06-15',
+            // Must stay in the future relative to "today" for any environment this runs
+            // in — EventRepository::lazilyFinishPastEvents() (E1.1) auto-flips a published
+            // event whose date has passed to `finished` on every read, and a stale date
+            // here would silently break every test that expects `published` to stick.
+            'date' => date('Y-m-d', strtotime('+18 months')),
             'location' => 'Stadion Testowy',
             'city' => 'Warszawa',
             'description' => '<p>Opis testowy</p>',

@@ -392,6 +392,13 @@ final class RegistrationRepositoryTest extends TestCase
             'distances' => [
                 [
                     'price' => 80,
+                    // E1.3: this fixture's registeredCount (999) is deliberately far
+                    // above payload()'s default distance limit (100) to prove the
+                    // *tier* has no limit — that would now collide with the new
+                    // capacity check (a real distance limit of 100) if left in
+                    // place, so this test explicitly opts the distance itself out
+                    // of a capacity limit; capacity behavior has its own tests below.
+                    'limit' => null,
                     'registeredCount' => 999,
                     'priceTiers' => [
                         ['price' => 60],
@@ -403,6 +410,153 @@ final class RegistrationRepositoryTest extends TestCase
         $registration = $this->registrations->create($this->registrationPayload($event, ''));
 
         self::assertEquals(60.00, (float) $registration['pricePaid']);
+    }
+
+    /**
+     * E1.3: the materialized `event_distances.registered_count` column advances
+     * transactionally on create() — this is the write side of the same counter
+     * the price-tier tests above already exercise on the read side (a seeded
+     * starting value). Two Zapisy on the same Dystans must leave the counter at
+     * exactly 2, and — since it now genuinely reflects reality — the third Zapis
+     * must see itself as the 3rd registration for its own tier resolution.
+     */
+    public function testCreateIncrementsMaterializedRegisteredCount(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-counter-increments',
+            'distances' => [
+                ['id' => 'd-counter-incr-1', 'price' => 80, 'limit' => 10, 'registeredCount' => 0],
+                ['id' => 'd-counter-incr-2'],
+            ],
+        ]));
+
+        $this->registrations->create($this->registrationPayload($event, '', 'phpunit-counter-user-1'));
+        self::assertSame(1, $this->rawRegisteredCount($event['distances'][0]['id']));
+
+        $this->registrations->create($this->registrationPayload($event, '', 'phpunit-counter-user-2'));
+        self::assertSame(2, $this->rawRegisteredCount($event['distances'][0]['id']));
+    }
+
+    /**
+     * E1.3: `registered_count` feeds price-tier resolution (rozstrzygnięcie 4 in
+     * 07-model-cenowy-zapisu.md — the tier's participantLimit counts the same
+     * population as the seat limit) directly from actual create() calls, not a
+     * value manually seeded into the fixture the way the tier tests above do.
+     * With `participantLimit: 1` on the tier, the first Zapis must still get the
+     * discounted tier price (0 prior registrations < 1) and the second must fall
+     * back to the base price (1 prior registration >= 1) — proving the counter
+     * this ticket maintains, not a live COUNT query, is what tier resolution
+     * actually reads (RegistrationRepository::pricingForRegistration reads the
+     * locked row's column, never re-counts).
+     */
+    public function testPriceTierThresholdSelectionUsesMaterializedCounterAcrossRealCreates(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-tier-uses-counter',
+            'distances' => [
+                [
+                    'id' => 'd-tier-counter-1',
+                    'price' => 80,
+                    'registeredCount' => 0,
+                    'priceTiers' => [
+                        ['participantLimit' => 1, 'price' => 60],
+                    ],
+                ],
+                ['id' => 'd-tier-counter-2'],
+            ],
+        ]));
+
+        $first = $this->registrations->create($this->registrationPayload($event, '', 'phpunit-tier-counter-1'));
+        self::assertEquals(60.00, (float) $first['pricePaid']);
+
+        $second = $this->registrations->create($this->registrationPayload($event, '', 'phpunit-tier-counter-2'));
+        self::assertEquals(80.00, (float) $second['pricePaid']);
+    }
+
+    /**
+     * E1.3: the seat-capacity limit (rozstrzygnięcie: 07-model-cenowy-zapisu.md,
+     * "limit miejsc na Dystansie") is enforced transactionally on create() — once
+     * `registered_count` reaches `participant_limit`, the next Zapis must be
+     * rejected with `registration_capacity_exceeded` rather than oversold, and
+     * the counter must not have advanced past the limit.
+     */
+    public function testCreateRejectsRegistrationOnceDistanceIsAtCapacity(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-capacity-full',
+            'distances' => [
+                ['id' => 'd-capacity-full-1', 'price' => 80, 'limit' => 1, 'registeredCount' => 0],
+                ['id' => 'd-capacity-full-2'],
+            ],
+        ]));
+        $distanceId = (string) $event['distances'][0]['id'];
+
+        $this->registrations->create($this->registrationPayload($event, '', 'phpunit-capacity-user-1'));
+        self::assertSame(1, $this->rawRegisteredCount($distanceId));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('registration_capacity_exceeded');
+
+        try {
+            $this->registrations->create($this->registrationPayload($event, '', 'phpunit-capacity-user-2'));
+        } finally {
+            // The rejected attempt must not have moved the counter at all — the
+            // whole create() (including the increment) rolls back together.
+            self::assertSame(1, $this->rawRegisteredCount($distanceId));
+        }
+    }
+
+    /**
+     * E1.3's core concern (rozstrzygnięcie: issue 21, "opóźnienie przy równoczesnych
+     * zapisach realnie sprzedaje więcej miejsc niż istnieje"): two overlapping
+     * transactions for the same Dystans must not both read the pre-increment
+     * count and both succeed. Simulated here with a second, independent PDO
+     * connection: connection A locks the Dystans row (the same `SELECT ... FOR
+     * UPDATE` create() takes) and holds it open, uninterrupted, while connection
+     * B — under a short `innodb_lock_wait_timeout` — attempts a real create() on
+     * the same distance. B must block on A's lock rather than racing past it, so
+     * it must fail with a lock-wait timeout, never with a successful, silently
+     * oversold registration.
+     */
+    public function testConcurrentCreatesForSameDistanceSerializeOnTheRowLock(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-concurrency',
+            'distances' => [
+                ['id' => 'd-concurrency-1', 'price' => 80, 'limit' => 5, 'registeredCount' => 0],
+                ['id' => 'd-concurrency-2'],
+            ],
+        ]));
+        $distanceId = (string) $event['distances'][0]['id'];
+
+        $connectionA = Connection::fromEnv();
+        $connectionA->beginTransaction();
+        $connectionA->prepare('SELECT registered_count FROM event_distances WHERE id = :id FOR UPDATE')
+            ->execute(['id' => $distanceId]);
+
+        $connectionB = Connection::fromEnv();
+        $connectionB->exec('SET innodb_lock_wait_timeout = 1');
+        $registrationsB = new RegistrationRepository($connectionB);
+
+        try {
+            $registrationsB->create($this->registrationPayload($event, '', 'phpunit-concurrency-user-b'));
+            self::fail('Expected connection B to block on connection A\'s row lock and time out.');
+        } catch (\PDOException $e) {
+            self::assertStringContainsStringIgnoringCase('lock wait timeout', $e->getMessage());
+        } finally {
+            $connectionA->rollBack();
+        }
+
+        // Connection A never committed an increment, and B's blocked attempt
+        // never got past the lock to run its own — the counter is untouched.
+        self::assertSame(0, $this->rawRegisteredCount($distanceId));
+    }
+
+    private function rawRegisteredCount(string $distanceId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT registered_count FROM event_distances WHERE id = :id');
+        $stmt->execute(['id' => $distanceId]);
+        return (int) $stmt->fetchColumn();
     }
 
     /**

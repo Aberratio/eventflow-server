@@ -405,6 +405,283 @@ final class RegistrationRepositoryTest extends TestCase
         self::assertEquals(60.00, (float) $registration['pricePaid']);
     }
 
+    /**
+     * E1.2: Wariant opłaty carries its own base price and its own Próg — separate
+     * from the legacy Dystans price/tiers path exercised by the tests above. The
+     * pricing variant's tier is displayed as a line relative to its own base
+     * (rozstrzygnięcie: spec worked example), not merged into a single number.
+     */
+    public function testPricingVariantWithOwnTierAndDiscountCodeComputesOplataStartowa(): void
+    {
+        $variantId = $this->slugPrefix . '-variant-standard';
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-variant-tier-discount',
+            'discountCodes' => [
+                [
+                    'id' => 'phpunit-szutry25-' . $this->slugPrefix,
+                    'code' => 'SZUTRY25',
+                    'discountType' => 'percent',
+                    'discountValue' => 14,
+                    'usedCount' => 0,
+                    'distanceIds' => [],
+                    'active' => true,
+                ],
+            ],
+            'distances' => [
+                [
+                    // Short, non-slug-derived id: event_distances.id is VARCHAR(36)
+                    // and this test's slug is already long enough that the default
+                    // payload()-generated id (slug + '-10k') would overflow it.
+                    'id' => 'd-variant-tier-1',
+                    // Legacy price/tiers deliberately left at the default (80, no
+                    // tiers) to prove the Wariant path is what actually gets used
+                    // once pricingVariantId is given — not a fallback to these.
+                    'pricingVariants' => [
+                        [
+                            'id' => $variantId,
+                            'name' => 'STANDARDOWA',
+                            'price' => 110,
+                            'priceTiers' => [
+                                ['name' => 'Early bird', 'endDate' => '2999-01-01', 'price' => 50],
+                            ],
+                        ],
+                    ],
+                ],
+                // payload()'s default has a second (5 km) distance merged in by index;
+                // it needs its own short id for the same VARCHAR(36) reason as above.
+                ['id' => 'd-variant-tier-2'],
+            ],
+        ]));
+
+        $reloaded = $this->events->find($event['id']);
+        self::assertSame($variantId, $reloaded['distances'][0]['pricingVariants'][0]['id']);
+        self::assertSame(50.0, (float) $reloaded['distances'][0]['pricingVariants'][0]['priceTiers'][0]['price']);
+
+        $registration = $this->registrations->create([
+            ...$this->registrationPayload($event, 'SZUTRY25'),
+            'pricingVariantId' => $variantId,
+        ]);
+
+        // 110,00 (Wariant) − 60,00 (próg → 50,00) − 7,00 (14% kodu od 50,00) = 43,00
+        self::assertEquals(43.00, (float) $registration['pricePaid']);
+        self::assertEquals(7.00, (float) $registration['discountAmount']);
+
+        $bases = array_column($registration['settlementItems'], 'amount', 'basis');
+        self::assertEquals(110.00, (float) $bases['distance_price']);
+        self::assertEquals(-60.00, (float) $bases['price_tier']);
+        self::assertEquals(-7.00, (float) $bases['discount_code']);
+    }
+
+    public function testUnknownPricingVariantIdIsRejected(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-variant-invalid']));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('pricing_variant_invalid');
+
+        $this->registrations->create([
+            ...$this->registrationPayload($event, ''),
+            'pricingVariantId' => 'does-not-exist',
+        ]);
+    }
+
+    /**
+     * E1.2 krok 5: cena × ilość liczy się zawsze z katalogu (`event_merchandise`),
+     * niezależnie od tego, co (jeśli cokolwiek) klient wyśle w polu 'price' —
+     * "klient nigdy nie przysyła kwot".
+     */
+    public function testMerchandiseSettlementPriceComesFromCatalogNotClient(): void
+    {
+        $merchandiseId = $this->slugPrefix . '-shirt';
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-merchandise',
+            'merchandise' => [
+                ['id' => $merchandiseId, 'name' => 'Koszulka techniczna', 'price' => 65, 'sizes' => ['M'], 'colors' => []],
+            ],
+        ]));
+
+        $registration = $this->registrations->create([
+            ...$this->registrationPayload($event, ''),
+            'merchandise' => [
+                ['merchandiseId' => $merchandiseId, 'size' => 'M', 'quantity' => 1, 'price' => 1.00],
+            ],
+        ]);
+
+        $bases = array_column($registration['settlementItems'], 'amount', 'basis');
+        self::assertEquals(65.00, (float) $bases['merchandise']);
+        self::assertEquals(80.00 + 65.00, (float) $registration['totalAmount']);
+        self::assertEquals(65.00, (float) $registration['merchandiseOrders'][0]['price']);
+    }
+
+    public function testUnknownMerchandiseIdIsRejected(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-merchandise-invalid',
+            // Short ids: this slug is long enough that the default payload()
+            // distance ids (slug + '-10k'/'-5k') would overflow VARCHAR(36).
+            'distances' => [['id' => 'd-merch-invalid-1'], ['id' => 'd-merch-invalid-2']],
+        ]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('merchandise_invalid');
+
+        $this->registrations->create([
+            ...$this->registrationPayload($event, ''),
+            'merchandise' => [['merchandiseId' => 'does-not-exist', 'quantity' => 1]],
+        ]);
+    }
+
+    /**
+     * E1.2 krok 6: NNW liczone z katalogu (insurance_settings) tylko dla wariantów,
+     * które organizator faktycznie oferuje na tym wydarzeniu (event_insurance_variants),
+     * z wiekiem liczonym na dzień wydarzenia (nie dziś, nie dzień zapisu).
+     */
+    public function testInsuranceAmountUsesAgeAsOfEventDateFromCatalogFormula(): void
+    {
+        $insuranceId = $this->insuranceVariantId('phpunit-nnw-' . $this->slugPrefix, 15.00, 0.20, 70);
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-insurance',
+            'date' => '2026-06-15',
+            'insuranceVariantIds' => [$insuranceId],
+        ]));
+
+        $reloaded = $this->events->find($event['id']);
+        self::assertSame($insuranceId, $reloaded['insuranceVariants'][0]['id']);
+
+        $registration = $this->registrations->create([
+            ...$this->registrationPayload($event, ''),
+            'insuranceVariantId' => $insuranceId,
+            // Zawodnik urodzony 1984-12-01: na dzień wydarzenia (2026-06-15) ma 41 lat
+            // (urodziny w grudniu jeszcze nie minęły w tym roku kalendarzowym).
+            'birthDate' => '1984-12-01',
+        ]);
+
+        // 15,00 + max(0, 41-18) * 0,20 = 15,00 + 4,60 = 19,60
+        self::assertEquals(19.60, (float) $registration['insurancePaid']);
+        self::assertEquals(80.00 + 19.60, (float) $registration['totalAmount']);
+    }
+
+    public function testInsuranceVariantNotOfferedByEventIsRejected(): void
+    {
+        $insuranceId = $this->insuranceVariantId('phpunit-nnw-uo-' . $this->slugPrefix, 15.00, 0.20, 70);
+        // Deliberately not linked via insuranceVariantIds on this event.
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-insurance-unoffered',
+            'distances' => [['id' => 'd-insurance-uo-1'], ['id' => 'd-insurance-uo-2']],
+        ]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('insurance_variant_invalid');
+
+        $this->registrations->create([
+            ...$this->registrationPayload($event, ''),
+            'insuranceVariantId' => $insuranceId,
+            'birthDate' => '1984-12-01',
+        ]);
+    }
+
+    /**
+     * Reproduces the spec's worked numeric example end to end (07-model-cenowy-zapisu.md):
+     * Wariant 110,00 → próg Early bird 50,00 (−60,00) → kod SZUTRY25 14% (−7,00) =
+     * opłata startowa 43,00; + Modyfikator "Udział w losowaniu" −5,00 (step 4 has no
+     * source yet — ticket 10/E1.13 — so this line is inserted directly to prove the
+     * stage's numbers flow through hydrate() once it exists); + Gadżety Koszulka M
+     * 65,00; + NNW Podstawowe wiek 41 → 19,60. Do zapłaty: 122,60.
+     */
+    public function testWorkedExampleFromSpecMatchesTotalAmount(): void
+    {
+        $variantId = $this->slugPrefix . '-worked-variant';
+        $merchandiseId = $this->slugPrefix . '-worked-shirt';
+        $insuranceId = $this->insuranceVariantId('phpunit-nnw-worked-' . $this->slugPrefix, 15.00, 0.20, 70);
+
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-worked-example',
+            'date' => '2026-06-15',
+            'insuranceVariantIds' => [$insuranceId],
+            'discountCodes' => [
+                [
+                    'id' => 'phpunit-w-szutry-' . $this->slugPrefix,
+                    'code' => 'SZUTRY25',
+                    'discountType' => 'percent',
+                    'discountValue' => 14,
+                    'usedCount' => 0,
+                    'distanceIds' => [],
+                    'active' => true,
+                ],
+            ],
+            'merchandise' => [
+                ['id' => $merchandiseId, 'name' => 'Koszulka techniczna', 'price' => 65, 'sizes' => ['M'], 'colors' => []],
+            ],
+            'distances' => [
+                [
+                    'id' => 'd-worked-example',
+                    'pricingVariants' => [
+                        [
+                            'id' => $variantId,
+                            'name' => 'STANDARDOWA',
+                            'price' => 110,
+                            'priceTiers' => [
+                                ['name' => 'Early bird', 'endDate' => '2999-01-01', 'price' => 50],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]));
+
+        $registration = $this->registrations->create([
+            ...$this->registrationPayload($event, 'SZUTRY25'),
+            'pricingVariantId' => $variantId,
+            'merchandise' => [['merchandiseId' => $merchandiseId, 'size' => 'M', 'quantity' => 1]],
+            'insuranceVariantId' => $insuranceId,
+            'birthDate' => '1984-12-01',
+        ]);
+
+        self::assertEquals(43.00, (float) $registration['pricePaid']);
+        self::assertEquals(7.00, (float) $registration['discountAmount']);
+        self::assertEquals(19.60, (float) $registration['insurancePaid']);
+        // Bez Modyfikatorów (krok 4 zawsze pusty do ticket 10): 43,00 + 65,00 + 19,60 = 127,60
+        self::assertEquals(127.60, (float) $registration['totalAmount']);
+
+        // Krok 4 (Modyfikatory) nie ma dziś źródła danych (ticket 10 / E1.13), ale
+        // jest realnym, zawsze-liczonym etapem: wstrzykujemy tu ręcznie dokładnie
+        // taką pozycję, jaką ten krok kiedyś wyprodukuje, żeby dowieść, że
+        // hydrate()'s DO ZAPŁATY policzy ją tak samo jak każdą inną pozycję Rozliczenia.
+        $this->pdo->prepare(
+            'INSERT INTO registration_settlement_items (id, registration_id, name, basis, amount, frozen_at, sort_order)
+             VALUES (:id, :registrationId, :name, :basis, :amount, :frozenAt, :sortOrder)'
+        )->execute([
+            'id' => 'phpunit-modifier-' . $this->slugPrefix,
+            'registrationId' => $registration['id'],
+            'name' => 'Udział w losowaniu',
+            'basis' => 'modifier',
+            'amount' => -5.00,
+            'frozenAt' => date(DATE_ATOM),
+            'sortOrder' => 2,
+        ]);
+
+        $withModifier = $this->registrations->find($registration['id']);
+        self::assertEquals(43.00, (float) $withModifier['pricePaid'], 'modifier must not affect opłata startowa');
+        self::assertEquals(122.60, (float) $withModifier['totalAmount']);
+    }
+
+    private function insuranceVariantId(string $id, float $baseFee, float $ageMultiplier, int $maxAge): string
+    {
+        $this->pdo->prepare(
+            'INSERT INTO insurance_settings (id, name, base_fee, age_multiplier, max_age, info_html, active, sort_order)
+             VALUES (:id, :name, :baseFee, :ageMultiplier, :maxAge, :infoHtml, 1, 0)'
+        )->execute([
+            'id' => $id,
+            'name' => 'Podstawowe (PHPUnit)',
+            'baseFee' => $baseFee,
+            'ageMultiplier' => $ageMultiplier,
+            'maxAge' => $maxAge,
+            'infoHtml' => '',
+        ]);
+
+        return $id;
+    }
+
     /** @param array<string, mixed> $event */
     private function registrationPayload(array $event, string $code, string $userId = 'phpunit-user'): array
     {
@@ -440,11 +717,20 @@ final class RegistrationRepositoryTest extends TestCase
             foreach (($registrationIds->fetchAll(PDO::FETCH_COLUMN) ?: []) as $registrationId) {
                 $this->pdo->prepare('DELETE FROM registration_merchandise_orders WHERE registration_id = :id')->execute(['id' => $registrationId]);
                 $this->pdo->prepare('DELETE FROM registration_payment_details WHERE registration_id = :id')->execute(['id' => $registrationId]);
+                $this->pdo->prepare('DELETE FROM registration_settlement_items WHERE registration_id = :id')->execute(['id' => $registrationId]);
+            }
+            $distanceIds = $this->pdo->prepare('SELECT id FROM event_distances WHERE event_id = :id');
+            $distanceIds->execute(['id' => $id]);
+            foreach (($distanceIds->fetchAll(PDO::FETCH_COLUMN) ?: []) as $distanceId) {
+                $this->pdo->prepare('DELETE FROM event_distance_pricing_variants WHERE distance_id = :id')->execute(['id' => $distanceId]);
             }
             $this->pdo->prepare('DELETE FROM registrations WHERE event_id = :id')->execute(['id' => $id]);
             $this->pdo->prepare('DELETE FROM event_distances WHERE event_id = :id')->execute(['id' => $id]);
             $this->pdo->prepare('DELETE FROM event_discount_codes WHERE event_id = :id')->execute(['id' => $id]);
+            $this->pdo->prepare('DELETE FROM event_merchandise WHERE event_id = :id')->execute(['id' => $id]);
+            $this->pdo->prepare('DELETE FROM event_insurance_variants WHERE event_id = :id')->execute(['id' => $id]);
             $this->pdo->prepare('DELETE FROM events WHERE id = :id')->execute(['id' => $id]);
         }
+        $this->pdo->prepare("DELETE FROM insurance_settings WHERE id LIKE 'phpunit-nnw-%'")->execute();
     }
 }

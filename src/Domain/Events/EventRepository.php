@@ -514,7 +514,7 @@ SQL;
         $event['distances'] = array_map(
             fn (array $distance): array => [
                 ...$distance,
-                'pricingVariants' => $this->children('event_distance_pricing_variants', 'distance_id', (string) $distance['id']),
+                'pricingVariants' => $this->children('event_distance_pricing_variants', 'distance_id', (string) $distance['id'], ['priceTiers']),
             ],
             $this->withPaidCounts(
                 $event['id'],
@@ -527,8 +527,55 @@ SQL;
         $event['galleryAlbums'] = $this->children('event_gallery_albums', 'event_id', $event['id']);
         $event['resultDocuments'] = $this->children('event_result_documents', 'event_id', $event['id']);
         $event['documents'] = $this->children('event_documents', 'event_id', $event['id']);
+        // E1.2 krok 6 (NNW): katalog wariantów jest globalny (InsuranceRepository),
+        // organizator wybiera tu, które z nich oferuje na tym wydarzeniu.
+        $event['insuranceVariants'] = $this->eventInsuranceVariants($event['id']);
 
         return $event;
+    }
+
+    /**
+     * Which NNW catalog variants (InsuranceRepository) this event offers — the
+     * organizer's selection from the admin-defined global catalog (E0.3 rozstrzygnięcie
+     * 9). Returns full variant objects (not just ids) so the client can render its
+     * selection UI without a second round-trip; inactive catalog rows are dropped even
+     * if still linked, same as the catalog's own `list()`.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function eventInsuranceVariants(string $eventId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT iv.id, iv.name, iv.base_fee AS baseFee, iv.age_multiplier AS ageMultiplier, iv.max_age AS maxAge, iv.info_html AS infoHtml
+             FROM event_insurance_variants eiv
+             INNER JOIN insurance_settings iv ON iv.id = eiv.insurance_variant_id
+             WHERE eiv.event_id = :eventId AND iv.active = 1
+             ORDER BY eiv.sort_order ASC, iv.sort_order ASC'
+        );
+        $stmt->execute(['eventId' => $eventId]);
+        return array_map(static function (array $row): array {
+            $row['baseFee'] = (float) $row['baseFee'];
+            $row['ageMultiplier'] = (float) $row['ageMultiplier'];
+            $row['maxAge'] = (int) $row['maxAge'];
+            return $row;
+        }, $stmt->fetchAll());
+    }
+
+    /** @param array<int, string> $variantIds */
+    private function replaceEventInsuranceVariants(string $eventId, array $variantIds): void
+    {
+        $this->pdo->prepare('DELETE FROM event_insurance_variants WHERE event_id = :eventId')->execute(['eventId' => $eventId]);
+        foreach (array_values($variantIds) as $index => $variantId) {
+            $variantId = (string) $variantId;
+            if ($variantId === '') {
+                continue;
+            }
+            $this->insert('event_insurance_variants', [
+                'event_id' => $eventId,
+                'insurance_variant_id' => $variantId,
+                'sort_order' => $index,
+            ]);
+        }
     }
 
     /**
@@ -832,6 +879,10 @@ SQL;
                 }
             }
         }
+
+        if (array_key_exists('insuranceVariantIds', $data)) {
+            $this->replaceEventInsuranceVariants($eventId, (array) ($data['insuranceVariantIds'] ?? []));
+        }
     }
 
     /**
@@ -850,6 +901,11 @@ SQL;
             $row['id'] = $row['id'] ?? $this->id();
             $row['distance_id'] = $distanceId;
             $row['sort_order'] = $index;
+            // E1.2: Próg Wariantu (krok 2) niesie ten sam kształt JSON co
+            // event_distances.price_tiers — patrz replaceChildren()'s handling of that field.
+            if (array_key_exists('price_tiers', $row) && $row['price_tiers'] !== null && !is_string($row['price_tiers'])) {
+                $row['price_tiers'] = json_encode($row['price_tiers'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            }
             $this->insert('event_distance_pricing_variants', $row);
         }
     }

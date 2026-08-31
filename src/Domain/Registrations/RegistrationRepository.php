@@ -148,7 +148,17 @@ SQL;
         $id = $this->id();
         $this->pdo->beginTransaction();
         try {
-            $pricing = $this->pricingForRegistration($data);
+            // E1.3: locks the Dystans row (SELECT ... FOR UPDATE) for the rest of
+            // this transaction — a concurrent create() for the same distance blocks
+            // here until this one commits or rolls back, so the capacity check and
+            // the price-tier's registeredCount below can never race with another
+            // Zapis. See enforceCapacity()/incrementRegisteredCount() for the write
+            // side of the same guarantee (belt-and-braces: the affected-rows check
+            // there still catches an overrun even if isolation level ever changes).
+            $distanceRow = $this->lockDistanceForRegistration((string) $data['eventId'], (string) $data['distanceId']);
+            $this->enforceCapacity($distanceRow);
+
+            $pricing = $this->pricingForRegistration($data, $distanceRow);
             $paymentDetails = $data['paymentDetails'] ?? null;
             $startFeePaid = is_array($paymentDetails) && (bool) ($paymentDetails['startFeePaid'] ?? false);
             $this->insert('registrations', [
@@ -169,6 +179,12 @@ SQL;
                 'registered_by_id' => $data['registeredById'] ?? null,
                 'discount_code' => $pricing['discountCode'],
             ]);
+            // E1.3: this Zapis is created as 'pending' or 'confirmed' — both count
+            // against the Dystans capacity (rozstrzygnięcie 4: "nieanulowane" =
+            // pending + confirmed) — so the counter always advances here. Guarded by
+            // the same WHERE the lock above already makes redundant in practice, but
+            // kept as the atomic affected-rows check (belt-and-braces, see above).
+            $this->incrementRegisteredCount((string) $distanceRow['distanceId']);
             $this->createSettlementItems($id, $pricing['settlementItems'], date(DATE_ATOM));
             if ($pricing['discountId'] !== null) {
                 $this->markDiscountUsed($pricing['discountId'], $id, $data, $pricing);
@@ -196,6 +212,149 @@ SQL;
         return $this->find($id);
     }
 
+    /**
+     * E1.3: statuses that count against a Dystans's capacity limit and price-tier
+     * threshold — "nieanulowane" (rozstrzygnięcie 4 w 07-model-cenowy-zapisu.md).
+     * Defined as everything *except* the two terminal not-counted statuses (rather
+     * than an explicit ['pending', 'confirmed'] allowlist) so it agrees with every
+     * other "not cancelled" predicate already in this codebase (publicStartList(),
+     * EventRepository's aggregate query) without a second list to keep in sync.
+     */
+    private const NOT_COUNTED_STATUSES = ['cancelled', 'removed'];
+
+    /**
+     * Locks the Dystans row (and its parent Event, via the JOIN) for the rest of
+     * the caller's transaction. Must only be called inside an already-open PDO
+     * transaction (create()/updateStatus()) — this is what turns the capacity
+     * check and the price-tier's registeredCount read into an atomic unit with
+     * the write that follows, closing the classic read-then-write overselling
+     * race between two concurrent Zapisy for the same Dystans.
+     *
+     * @return array<string, mixed>
+     */
+    private function lockDistanceForRegistration(string $eventId, string $distanceId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT e.name AS eventName, e.date AS eventDate, d.id AS distanceId, d.name AS distanceName,
+                    d.price AS distancePrice, d.registered_count AS registeredCount,
+                    d.participant_limit AS participantLimit, d.price_tiers AS priceTiers
+             FROM events e INNER JOIN event_distances d ON d.event_id = e.id
+             WHERE e.id = :eventId AND d.id = :distanceId
+             FOR UPDATE'
+        );
+        $stmt->execute(['eventId' => $eventId, 'distanceId' => $distanceId]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            throw new \RuntimeException('registration_distance_invalid');
+        }
+
+        return $row;
+    }
+
+    /**
+     * Seat-capacity limit (rozstrzygnięcie 4: "limit miejsc na Dystansie") — a null
+     * or zero `participant_limit` means unlimited. Checked against the locked
+     * row's registeredCount, so this can never observe a stale count from a
+     * concurrent Zapis still in flight.
+     *
+     * @param array<string, mixed> $distanceRow
+     */
+    private function enforceCapacity(array $distanceRow): void
+    {
+        $limit = $distanceRow['participantLimit'] !== null ? (int) $distanceRow['participantLimit'] : null;
+        if ($limit !== null && $limit > 0 && (int) $distanceRow['registeredCount'] >= $limit) {
+            throw new \RuntimeException('registration_capacity_exceeded');
+        }
+    }
+
+    /**
+     * Atomic, affected-rows-guarded increment — the write-side half of the
+     * transactional counter (the read-side half is lockDistanceForRegistration()
+     * + enforceCapacity()). The WHERE clause is redundant with the row lock
+     * already held by the caller under normal operation, but keeps the guarantee
+     * even if this method is ever called without that lock, and matches the
+     * ticket's "affected-rows check" pattern.
+     */
+    private function incrementRegisteredCount(string $distanceId): void
+    {
+        $stmt = $this->pdo->prepare(
+            'UPDATE event_distances
+             SET registered_count = registered_count + 1
+             WHERE id = :id AND (participant_limit IS NULL OR participant_limit <= 0 OR registered_count < participant_limit)'
+        );
+        $stmt->execute(['id' => $distanceId]);
+        if ($stmt->rowCount() !== 1) {
+            throw new \RuntimeException('registration_capacity_exceeded');
+        }
+    }
+
+    /**
+     * Mirror of incrementRegisteredCount() for a Zapis leaving the counted
+     * population (cancel/remove) — see updateStatus(). Clamped at 0 defensively;
+     * it should never go negative given the counter starts consistent
+     * (033_e13 backfill) and only ever decrements once per Zapis via
+     * updateStatus()'s old-status check, but a floor is cheap insurance against
+     * any future write path this ticket didn't anticipate.
+     */
+    private function decrementRegisteredCount(string $distanceId): void
+    {
+        $this->pdo->prepare(
+            'UPDATE event_distances SET registered_count = GREATEST(0, registered_count - 1) WHERE id = :id'
+        )->execute(['id' => $distanceId]);
+    }
+
+    /**
+     * E1.3: status changes cross the counted/not-counted boundary defined by
+     * NOT_COUNTED_STATUSES — a cancel (the only such path that exists in this
+     * repo today, per update()/cancel()) must decrement, and — since update()
+     * accepts an arbitrary status and nothing here invents a "reactivate" feature
+     * that doesn't otherwise exist — a hypothetical future move back out of
+     * cancelled/removed correctly re-increments (and re-checks capacity) rather
+     * than silently leaving the counter permanently short.
+     *
+     * @param array<string, mixed> $mapped
+     */
+    private function updateStatus(string $id, string $newStatus, array $mapped): void
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $stmt = $this->pdo->prepare('SELECT status, distance_id AS distanceId FROM registrations WHERE id = :id FOR UPDATE');
+            $stmt->execute(['id' => $id]);
+            $current = $stmt->fetch();
+            if ($current === false) {
+                $this->pdo->rollBack();
+                return;
+            }
+
+            $oldStatus = (string) $current['status'];
+            $wasCounted = !in_array($oldStatus, self::NOT_COUNTED_STATUSES, true);
+            $isCounted = !in_array($newStatus, self::NOT_COUNTED_STATUSES, true);
+
+            if (!$wasCounted && $isCounted) {
+                // Re-entering the counted population: lock+check the Dystans the same
+                // way create() does, so this can't push the count past capacity either.
+                $distanceRow = $this->lockDistanceForRegistration(
+                    (string) $this->registrationEventId($id),
+                    (string) $current['distanceId']
+                );
+                $this->enforceCapacity($distanceRow);
+            }
+
+            $this->updateById('registrations', $id, $mapped);
+
+            if ($wasCounted && !$isCounted) {
+                $this->decrementRegisteredCount((string) $current['distanceId']);
+            } elseif (!$wasCounted && $isCounted) {
+                $this->incrementRegisteredCount((string) $current['distanceId']);
+            }
+
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+    }
+
     /** @param array<string, mixed> $data */
     public function update(string $id, array $data): ?array
     {
@@ -213,7 +372,11 @@ SQL;
                 $mapped[$column] = $data[$input];
             }
         }
-        $this->updateById('registrations', $id, $mapped);
+        if (array_key_exists('status', $mapped)) {
+            $this->updateStatus($id, (string) $mapped['status'], $mapped);
+        } elseif ($mapped !== []) {
+            $this->updateById('registrations', $id, $mapped);
+        }
         if (array_key_exists('merchandise', $data) || array_key_exists('merchandiseOrders', $data)) {
             // Krok 5 (Gadżety): nawet na dopisanie do istniejącego Zapisu cena×ilość
             // liczy się z katalogu (`event_merchandise`), nigdy z tego, co przyśle klient —
@@ -268,6 +431,7 @@ SQL;
      * result is clamped to ≥0 (step 3's result, and the final total).
      *
      * @param array<string, mixed> $data
+     * @param array<string, mixed> $row locked Dystans row from lockDistanceForRegistration()
      * @return array{
      *     eventName: string,
      *     distanceName: string,
@@ -278,23 +442,8 @@ SQL;
      *     usedBy: array<int, mixed>
      * }
      */
-    private function pricingForRegistration(array $data): array
+    private function pricingForRegistration(array $data, array $row): array
     {
-        $stmt = $this->pdo->prepare(
-            'SELECT e.name AS eventName, e.date AS eventDate, d.id AS distanceId, d.name AS distanceName,
-                    d.price AS distancePrice, d.registered_count AS registeredCount, d.price_tiers AS priceTiers
-             FROM events e INNER JOIN event_distances d ON d.event_id = e.id
-             WHERE e.id = :eventId AND d.id = :distanceId'
-        );
-        $stmt->execute([
-            'eventId' => $data['eventId'],
-            'distanceId' => $data['distanceId'],
-        ]);
-        $row = $stmt->fetch();
-        if (!$row) {
-            throw new \RuntimeException('registration_distance_invalid');
-        }
-
         // ── Kroki 1+2: Wariant opłaty + jego własny Próg ────────────────────
         $base = $this->startFeeBaseItems($row, isset($data['pricingVariantId']) && $data['pricingVariantId'] !== null && $data['pricingVariantId'] !== '' ? (string) $data['pricingVariantId'] : null);
         $items = $base['items'];

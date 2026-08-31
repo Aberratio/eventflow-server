@@ -715,6 +715,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             try {
                 return JsonResponder::ok($response, $registrations->create($data), 'Registration created', 201);
             } catch (RuntimeException $e) {
+                // E1.3: the Dystans is full — a state conflict (someone else took the
+                // last slot), not a validation problem with this request, so 409
+                // rather than the 422s below.
+                if ($e->getMessage() === 'registration_capacity_exceeded') {
+                    return JsonResponder::error($response, 'registration_capacity_exceeded', 'This distance has reached its participant limit.', 409);
+                }
                 $discountErrors = [
                     'discount_code_invalid' => 'Discount code is invalid.',
                     'discount_code_inactive' => 'Discount code is inactive.',

@@ -11,6 +11,18 @@ final class EventRepository extends Repository
     private const CREDIT_KINDS = ['standard', 'virtual', 'timing'];
 
     /**
+     * E1.4: the two payment-window durations (docs/20-... pkt 1) live as two more
+     * keys inside the already-existing `payment_config` JSON blob (001_init.sql) —
+     * no schema change needed, same column the organizer already edits for
+     * type/bank-account fields via the generic PATCH /events/{id}. These are the
+     * defaults applied in hydrate() whenever an event's paymentConfig doesn't carry
+     * its own values yet (a brand-new event, or one created before this ticket) —
+     * "bramka: domyślnie 30-60 minut" / "przelew: domyślnie 3-5 dni roboczych".
+     */
+    private const DEFAULT_GATEWAY_WINDOW_MINUTES = 45;
+    private const DEFAULT_TRANSFER_WINDOW_DAYS = 3;
+
+    /**
      * The workflow axis (E1.1). `approved` and `rejected` are legal ENUM values on the
      * column (schema future-proofing, per spec) but the application never actually rests
      * a row there: approve() lands directly on `published`, reject() lands directly on
@@ -521,6 +533,9 @@ SQL;
                 $this->children('event_distances', 'event_id', $event['id'], self::DISTANCE_JSON)
             )
         );
+        $event['paymentConfig'] = $this->withPaymentWindowDefaults(
+            is_array($event['paymentConfig'] ?? null) ? $event['paymentConfig'] : []
+        );
         $event['paymentMethods'] = $this->children('event_payment_methods', 'event_id', $event['id']);
         $event['merchandise'] = $this->children('event_merchandise', 'event_id', $event['id'], ['sizes', 'colors', 'images', 'distanceIds', 'documents']);
         $event['discountCodes'] = $this->children('event_discount_codes', 'event_id', $event['id'], ['distanceIds', 'usedBy']);
@@ -532,6 +547,31 @@ SQL;
         $event['insuranceVariants'] = $this->eventInsuranceVariants($event['id']);
 
         return $event;
+    }
+
+    /**
+     * E1.4: applies the two payment-window defaults on top of whatever the organizer
+     * has already saved (or nothing at all) — always returns concrete, positive
+     * ints so a caller (RegistrationRepository::create(), or the API response the
+     * client's settings tab reads back) never has to special-case "not configured
+     * yet". Any non-positive or non-numeric override is treated the same as
+     * "not set" rather than trusted verbatim, since a zero/negative window would
+     * make a Zapis expire before it is even created.
+     *
+     * @param array<string, mixed> $paymentConfig
+     * @return array<string, mixed>
+     */
+    private function withPaymentWindowDefaults(array $paymentConfig): array
+    {
+        $gatewayMinutes = (int) ($paymentConfig['gatewayWindowMinutes'] ?? 0);
+        $transferDays = (int) ($paymentConfig['transferWindowDays'] ?? 0);
+
+        return [
+            'type' => 'admin_gateway',
+            ...$paymentConfig,
+            'gatewayWindowMinutes' => $gatewayMinutes > 0 ? $gatewayMinutes : self::DEFAULT_GATEWAY_WINDOW_MINUTES,
+            'transferWindowDays' => $transferDays > 0 ? $transferDays : self::DEFAULT_TRANSFER_WINDOW_DAYS,
+        ];
     }
 
     /**
@@ -588,7 +628,7 @@ SQL;
             return $distances;
         }
 
-        $stmt = $this->pdo->prepare("SELECT r.distance_id AS distanceId, COUNT(*) AS cnt FROM registrations r WHERE r.event_id = :eventId AND r.status NOT IN ('removed', 'cancelled') GROUP BY r.distance_id");
+        $stmt = $this->pdo->prepare("SELECT r.distance_id AS distanceId, COUNT(*) AS cnt FROM registrations r WHERE r.event_id = :eventId AND r.status NOT IN ('removed', 'cancelled', 'expired') GROUP BY r.distance_id");
         $stmt->execute(['eventId' => $eventId]);
         $registered = [];
         foreach ($stmt->fetchAll() as $row) {

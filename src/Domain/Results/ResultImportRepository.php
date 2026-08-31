@@ -853,7 +853,7 @@ r.distance_id AS distanceId, r.distance_name AS distanceName, r.category, r.bib_
 r.status, u.gender, u.birth_year AS birthYear, u.club
 FROM registrations r
 LEFT JOIN users u ON u.id = r.user_id
-WHERE r.event_id = :eventId AND r.distance_id = :distanceId AND r.status NOT IN ('removed','cancelled')
+WHERE r.event_id = :eventId AND r.distance_id = :distanceId AND r.status NOT IN ('removed','cancelled','expired')
 ORDER BY r.user_name
 SQL);
         $stmt->execute(['eventId' => $eventId, 'distanceId' => $distanceId]);

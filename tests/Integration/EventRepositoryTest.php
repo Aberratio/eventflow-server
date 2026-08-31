@@ -405,6 +405,70 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
+     * E1.4: an event created without ever touching paymentConfig's window fields
+     * still gets the two documented defaults back on read — "bramka: domyślnie
+     * 30-60 minut" (45), "przelew: domyślnie 3-5 dni roboczych" (3) — so a caller
+     * (RegistrationRepository::create(), or the organizer's settings tab) never has
+     * to special-case "not configured yet".
+     */
+    public function testPaymentWindowDefaultsApplyWhenNotConfigured(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-pay-def',
+            'paymentConfig' => ['type' => 'admin_gateway'],
+        ]));
+
+        self::assertSame(45, $event['paymentConfig']['gatewayWindowMinutes']);
+        self::assertSame(3, $event['paymentConfig']['transferWindowDays']);
+    }
+
+    /**
+     * E1.4: "Organizator może zmienić obie wartości domyślne per Wydarzenie" — both
+     * windows are real, independently organizer-editable fields, not fixed
+     * constants merely displayed to the organizer.
+     */
+    public function testPaymentWindowOverridesPersistPerEvent(): void
+    {
+        $created = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-pay-ovr',
+            'paymentConfig' => ['type' => 'admin_gateway'],
+        ]));
+
+        $updated = $this->events->update((string) $created['id'], [
+            'paymentConfig' => [
+                'type' => 'admin_gateway',
+                'gatewayWindowMinutes' => 60,
+                'transferWindowDays' => 5,
+            ],
+        ]);
+
+        self::assertSame(60, $updated['paymentConfig']['gatewayWindowMinutes']);
+        self::assertSame(5, $updated['paymentConfig']['transferWindowDays']);
+
+        // Persisted, not just echoed back from the request — a fresh read agrees.
+        $reloaded = $this->events->find((string) $created['id']);
+        self::assertSame(60, $reloaded['paymentConfig']['gatewayWindowMinutes']);
+        self::assertSame(5, $reloaded['paymentConfig']['transferWindowDays']);
+    }
+
+    /**
+     * A non-positive override (0, negative, or a garbage value client never should
+     * send but nothing stops it from sending) falls back to the default rather than
+     * freezing every future Zapis instantly or never — see
+     * EventRepository::withPaymentWindowDefaults().
+     */
+    public function testPaymentWindowNonPositiveOverrideFallsBackToDefault(): void
+    {
+        $created = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-pay-inv',
+            'paymentConfig' => ['type' => 'admin_gateway', 'gatewayWindowMinutes' => 0, 'transferWindowDays' => -1],
+        ]));
+
+        self::assertSame(45, $created['paymentConfig']['gatewayWindowMinutes']);
+        self::assertSame(3, $created['paymentConfig']['transferWindowDays']);
+    }
+
+    /**
      * @param array<string, mixed> $overrides
      * @return array<string, mixed>
      */

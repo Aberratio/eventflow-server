@@ -32,6 +32,7 @@ SQL;
      */
     public function list(array $filters = []): array
     {
+        $this->lazilyExpireUnpaidRegistrations();
         $where = [];
         $params = [];
         foreach (['eventId' => 'event_id', 'userId' => 'user_id', 'status' => 'status'] as $input => $column) {
@@ -70,6 +71,7 @@ SQL;
     /** @return array<int, array<string, mixed>> */
     public function byEvent(string $eventId): array
     {
+        $this->lazilyExpireUnpaidRegistrations();
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE event_id = :eventId ORDER BY registered_at DESC');
         $stmt->execute(['eventId' => $eventId]);
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
@@ -78,13 +80,14 @@ SQL;
     /** @return array<int, array<string, mixed>> */
     public function publicStartList(string $eventId, bool $showAll): array
     {
+        $this->lazilyExpireUnpaidRegistrations();
         if ($showAll) {
             $stmt = $this->pdo->prepare(
-                'SELECT ' . self::COLUMNS . " FROM registrations WHERE event_id = :eventId AND status NOT IN ('removed', 'cancelled') ORDER BY registered_at DESC"
+                'SELECT ' . self::COLUMNS . " FROM registrations WHERE event_id = :eventId AND status NOT IN ('removed', 'cancelled', 'expired') ORDER BY registered_at DESC"
             );
         } else {
             $stmt = $this->pdo->prepare(
-                'SELECT ' . self::COLUMNS_R . " FROM registrations r LEFT JOIN registration_payment_details pd ON pd.registration_id = r.id WHERE r.event_id = :eventId AND r.status NOT IN ('removed', 'cancelled') AND (r.status = 'confirmed' OR pd.start_fee_paid = 1) ORDER BY r.registered_at DESC"
+                'SELECT ' . self::COLUMNS_R . " FROM registrations r LEFT JOIN registration_payment_details pd ON pd.registration_id = r.id WHERE r.event_id = :eventId AND r.status NOT IN ('removed', 'cancelled', 'expired') AND (r.status = 'confirmed' OR pd.start_fee_paid = 1) ORDER BY r.registered_at DESC"
             );
         }
         $stmt->execute(['eventId' => $eventId]);
@@ -94,6 +97,7 @@ SQL;
     /** @return array<int, array<string, mixed>> */
     public function byUser(string $userId): array
     {
+        $this->lazilyExpireUnpaidRegistrations();
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE user_id = :userId ORDER BY registered_at DESC');
         $stmt->execute(['userId' => $userId]);
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
@@ -101,6 +105,7 @@ SQL;
 
     public function find(string $id): ?array
     {
+        $this->lazilyExpireUnpaidRegistrations();
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE id = :id');
         $stmt->execute(['id' => $id]);
         $row = $stmt->fetch();
@@ -124,7 +129,10 @@ SQL;
     /** @param array<string, mixed> $registration */
     private function asTicket(array $registration): array
     {
-        $status = in_array($registration['status'], ['cancelled', 'removed'], true)
+        // E1.4: an expired Zapis never got paid and never will (it must be re-created
+        // from scratch to try again) — the same terminal, "nothing to show up for"
+        // shape as cancelled/removed from the Bilet's point of view.
+        $status = in_array($registration['status'], ['cancelled', 'removed', 'expired'], true)
             ? 'cancelled'
             : ($registration['checkedInAt'] !== null ? 'used' : 'active');
 
@@ -145,6 +153,12 @@ SQL;
     /** @param array<string, mixed> $data */
     public function create(array $data): array
     {
+        // E1.4: free up any slots an expired Zapis is still silently holding before
+        // this new one checks capacity/tier thresholds below — this is exactly the
+        // "wygaśnięcie natychmiast odblokowuje miejsce w tańszej puli" guarantee the
+        // spec asks for, not just a display-time cleanup.
+        $this->lazilyExpireUnpaidRegistrations();
+
         $id = $this->id();
         $this->pdo->beginTransaction();
         try {
@@ -178,6 +192,10 @@ SQL;
                 'team_id' => $data['teamId'] ?? null,
                 'registered_by_id' => $data['registeredById'] ?? null,
                 'discount_code' => $pricing['discountCode'],
+                // E1.4: frozen at creation, same moment the price itself freezes
+                // (07 pkt 5) — a startFeePaid Zapis is born 'confirmed' and never
+                // needs to expire, so it gets no deadline at all.
+                'payment_expires_at' => $startFeePaid ? null : $this->paymentExpiryDeadline($distanceRow),
             ]);
             // E1.3: this Zapis is created as 'pending' or 'confirmed' — both count
             // against the Dystans capacity (rozstrzygnięcie 4: "nieanulowane" =
@@ -220,7 +238,20 @@ SQL;
      * other "not cancelled" predicate already in this codebase (publicStartList(),
      * EventRepository's aggregate query) without a second list to keep in sync.
      */
-    private const NOT_COUNTED_STATUSES = ['cancelled', 'removed'];
+    private const NOT_COUNTED_STATUSES = ['cancelled', 'removed', 'expired'];
+
+    /**
+     * E1.4 pragmatic default (documented in migration 034 and the ticket's commit
+     * message): payment *method* selection on a Zapis doesn't exist yet
+     * (E1.6-E1.8), so this always freezes the shorter gateway window as the expiry
+     * deadline, whatever the event's paymentConfig.type is today — never the
+     * longer transfer window. This is the safe side to guess wrong on: it only
+     * ever frees a slot *sooner* than a transfer-paying registrant might have
+     * wanted, never holds one longer than the organizer configured. Once E1.6-E1.8
+     * add a real per-Zapis payment method, this is the one method that needs to
+     * change to pick between gatewayWindowMinutes/transferWindowDays.
+     */
+    private const DEFAULT_GATEWAY_WINDOW_MINUTES = 45;
 
     /**
      * Locks the Dystans row (and its parent Event, via the JOIN) for the rest of
@@ -235,7 +266,8 @@ SQL;
     private function lockDistanceForRegistration(string $eventId, string $distanceId): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT e.name AS eventName, e.date AS eventDate, d.id AS distanceId, d.name AS distanceName,
+            'SELECT e.name AS eventName, e.date AS eventDate, e.payment_config AS paymentConfig,
+                    d.id AS distanceId, d.name AS distanceName,
                     d.price AS distancePrice, d.registered_count AS registeredCount,
                     d.participant_limit AS participantLimit, d.price_tiers AS priceTiers
              FROM events e INNER JOIN event_distances d ON d.event_id = e.id
@@ -301,6 +333,96 @@ SQL;
         $this->pdo->prepare(
             'UPDATE event_distances SET registered_count = GREATEST(0, registered_count - 1) WHERE id = :id'
         )->execute(['id' => $distanceId]);
+    }
+
+    /**
+     * E1.4: the frozen payment-window deadline for a brand-new pending Zapis —
+     * `registered_at` (now) plus the event's configured gateway window (see
+     * DEFAULT_GATEWAY_WINDOW_MINUTES doc for why gateway, not transfer). Reads the
+     * event's `payment_config` straight off the already-locked Dystans row
+     * (lockDistanceForRegistration() joins it in), so this never issues an extra
+     * query and can't observe a different row than the one create() just priced
+     * against.
+     *
+     * @param array<string, mixed> $distanceRow
+     */
+    private function paymentExpiryDeadline(array $distanceRow): string
+    {
+        $raw = $distanceRow['paymentConfig'] ?? null;
+        $paymentConfig = is_string($raw) && trim($raw) !== '' ? (json_decode($raw, true) ?: []) : [];
+        $minutes = is_array($paymentConfig) ? (int) ($paymentConfig['gatewayWindowMinutes'] ?? 0) : 0;
+        if ($minutes <= 0) {
+            $minutes = self::DEFAULT_GATEWAY_WINDOW_MINUTES;
+        }
+
+        return (new \DateTimeImmutable())->modify("+{$minutes} minutes")->format(DATE_ATOM);
+    }
+
+    /**
+     * Lazy `pending` -> `expired` transition (E1.4), the same delete/finish-on-read
+     * pattern as AdminRepository::pruneExpiredActivityLogs() (E0.8) and
+     * EventRepository::lazilyFinishPastEvents() (E1.1) — no cron/queue
+     * infrastructure exists in this codebase, so every read path (and create(),
+     * so a new Zapis never has to fight an already-expired one for the same slot)
+     * runs this first. Each expiry is its own small transaction (expireRegistration())
+     * rather than one bulk UPDATE, because — unlike lazilyFinishPastEvents(), which
+     * only ever touches the `events` row it's updating — this must also release the
+     * Dystans slot the same transactional way E1.3's cancel path does, which needs
+     * the Dystans row locked per-registration, not once for the whole batch.
+     */
+    private function lazilyExpireUnpaidRegistrations(): void
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT id FROM registrations
+             WHERE status = 'pending' AND payment_expires_at IS NOT NULL AND payment_expires_at < :now"
+        );
+        $stmt->execute(['now' => date(DATE_ATOM)]);
+        foreach ($stmt->fetchAll(\PDO::FETCH_COLUMN) ?: [] as $id) {
+            $this->expireRegistration((string) $id);
+        }
+    }
+
+    /**
+     * Expires exactly one Zapis, transactionally: locks the row, re-checks under
+     * the lock that it is still `pending` and still past its deadline (guards both
+     * a concurrent expireRegistration() for the same id — the second one's lock
+     * wait ends with nothing left to do — and this method simply being called
+     * twice for the same id, e.g. from two lazy checks racing on different read
+     * paths), then flips the status and decrements the Dystans counter exactly
+     * once, the same way updateStatus() does for a manual cancel.
+     */
+    private function expireRegistration(string $id): void
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $stmt = $this->pdo->prepare(
+                "SELECT status, distance_id AS distanceId, payment_expires_at AS paymentExpiresAt
+                 FROM registrations WHERE id = :id FOR UPDATE"
+            );
+            $stmt->execute(['id' => $id]);
+            $current = $stmt->fetch();
+            $now = date(DATE_ATOM);
+            if (
+                $current === false
+                || $current['status'] !== 'pending'
+                || $current['paymentExpiresAt'] === null
+                || (string) $current['paymentExpiresAt'] >= $now
+            ) {
+                $this->pdo->rollBack();
+                return;
+            }
+
+            $updated = $this->pdo->prepare("UPDATE registrations SET status = 'expired' WHERE id = :id AND status = 'pending'");
+            $updated->execute(['id' => $id]);
+            if ($updated->rowCount() === 1) {
+                $this->decrementRegisteredCount((string) $current['distanceId']);
+            }
+
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
     }
 
     /**

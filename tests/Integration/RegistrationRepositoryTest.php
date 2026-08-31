@@ -559,6 +559,169 @@ final class RegistrationRepositoryTest extends TestCase
         return (int) $stmt->fetchColumn();
     }
 
+    /** @return array{status: string, paymentExpiresAt: ?string} */
+    private function rawRegistration(string $id): array
+    {
+        $stmt = $this->pdo->prepare('SELECT status, payment_expires_at AS paymentExpiresAt FROM registrations WHERE id = :id');
+        $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch();
+        return ['status' => (string) $row['status'], 'paymentExpiresAt' => $row['paymentExpiresAt']];
+    }
+
+    /** Simulates time having passed, the same way the tier-expiry tests above use a past `endDate`. */
+    private function backdatePaymentExpiry(string $id, string $when): void
+    {
+        $this->pdo->prepare('UPDATE registrations SET payment_expires_at = :when WHERE id = :id')
+            ->execute(['when' => $when, 'id' => $id]);
+    }
+
+    /**
+     * E1.4: a brand-new pending Zapis freezes its payment-window deadline at
+     * creation, from the event's configured gateway window (docs/20 pkt 1 default
+     * 30-60 min — this repo's pragmatic default is 45, from EventRepository).
+     * Asserted with a tolerance window rather than an exact timestamp since both
+     * "now" calls (test and repository) can't literally coincide.
+     */
+    public function testCreateFreezesPaymentExpiryUsingEventsGatewayWindowDefault(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-exp-def',
+            'paymentConfig' => ['type' => 'admin_gateway'],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        self::assertSame('pending', $registration['status']);
+        $expiresAt = new \DateTimeImmutable((string) $this->rawRegistration($registration['id'])['paymentExpiresAt']);
+        $expectedAt = new \DateTimeImmutable('+45 minutes');
+        self::assertEqualsWithDelta($expectedAt->getTimestamp(), $expiresAt->getTimestamp(), 30);
+    }
+
+    /**
+     * "Organizator może zmienić obie wartości domyślne per Wydarzenie" — a Zapis on
+     * an event with a custom gatewayWindowMinutes freezes against *that* value, not
+     * the hardcoded default.
+     */
+    public function testCreateFreezesPaymentExpiryUsingOrganizerConfiguredGatewayWindow(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-exp-cst',
+            'paymentConfig' => ['type' => 'admin_gateway', 'gatewayWindowMinutes' => 10, 'transferWindowDays' => 5],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        $expiresAt = new \DateTimeImmutable((string) $this->rawRegistration($registration['id'])['paymentExpiresAt']);
+        $expectedAt = new \DateTimeImmutable('+10 minutes');
+        self::assertEqualsWithDelta($expectedAt->getTimestamp(), $expiresAt->getTimestamp(), 30);
+    }
+
+    /**
+     * A Zapis created already paid (startFeePaid true, born 'confirmed' — the
+     * existing create() behavior from before this ticket) has nothing to expire:
+     * it never gets a payment-window deadline at all, so the lazy check can never
+     * touch it.
+     */
+    public function testConfirmedRegistrationAtCreationGetsNoPaymentExpiry(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-exp-cfm',
+        ]));
+
+        $payload = $this->registrationPayload($event, '');
+        $payload['paymentDetails'] = ['startFeePaid' => true];
+        $registration = $this->registrations->create($payload);
+
+        self::assertSame('confirmed', $registration['status']);
+        self::assertNull($this->rawRegistration($registration['id'])['paymentExpiresAt']);
+    }
+
+    /**
+     * The core of E1.4: once a pending Zapis's frozen deadline has passed, the next
+     * read (find(), same as any other read path) lazily flips it to `expired` and
+     * releases the Dystans slot the same way a manual cancel does (E1.3) — the
+     * ticket's "wygaśnięcie natychmiast odblokowuje miejsce" guarantee.
+     */
+    public function testLazyReadExpiresPastDeadlineRegistrationAndReleasesSlot(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-expiry-lazy',
+            'distances' => [
+                ['id' => 'd-expiry-lazy-1', 'price' => 80, 'limit' => 10, 'registeredCount' => 0],
+                ['id' => 'd-expiry-lazy-2'],
+            ],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+        self::assertSame(1, $this->rawRegisteredCount('d-expiry-lazy-1'));
+
+        $this->backdatePaymentExpiry($registration['id'], (new \DateTimeImmutable('-1 minute'))->format(DATE_ATOM));
+
+        $reloaded = $this->registrations->find($registration['id']);
+        self::assertSame('expired', $reloaded['status']);
+        self::assertSame(0, $this->rawRegisteredCount('d-expiry-lazy-1'));
+    }
+
+    /**
+     * Running the lazy check more than once (e.g. two read paths hit back to back,
+     * or the same registration already flipped by an earlier read) must not
+     * decrement the counter a second time — expireRegistration()'s re-check under
+     * the row lock (status still 'pending') is what guards this.
+     */
+    public function testExpiryDoesNotDoubleDecrementOnRepeatedLazyChecks(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-expiry-no-double-decrement',
+            'distances' => [
+                ['id' => 'd-expiry-double-1', 'price' => 80, 'limit' => 10, 'registeredCount' => 0],
+                ['id' => 'd-expiry-double-2'],
+            ],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+        $this->backdatePaymentExpiry($registration['id'], (new \DateTimeImmutable('-1 minute'))->format(DATE_ATOM));
+
+        // First read expires it and decrements once.
+        $this->registrations->find($registration['id']);
+        self::assertSame(0, $this->rawRegisteredCount('d-expiry-double-1'));
+        self::assertSame('expired', $this->rawRegistration($registration['id'])['status']);
+
+        // Further reads (list/byEvent/find again) must all be no-ops for this row.
+        $this->registrations->find($registration['id']);
+        $this->registrations->byEvent((string) $event['id']);
+        $this->registrations->list(['eventId' => $event['id']]);
+        self::assertSame(0, $this->rawRegisteredCount('d-expiry-double-1'));
+    }
+
+    /**
+     * The expiry check runs inside create() itself (not just on reads) so a slot an
+     * expired Zapis is still silently holding is freed before the *next*
+     * registrant's capacity check — otherwise "Zapis wygasa i zwalnia slot" would
+     * only be true after someone happened to read the list first.
+     */
+    public function testCreateExpiresStaleRegistrationBeforeCheckingCapacityForNewOne(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-expiry-frees-capacity-on-create',
+            'distances' => [
+                ['id' => 'd-expiry-capacity-1', 'price' => 80, 'limit' => 1, 'registeredCount' => 0],
+                ['id' => 'd-expiry-capacity-2'],
+            ],
+        ]));
+
+        $first = $this->registrations->create($this->registrationPayload($event, '', 'phpunit-expiry-capacity-1'));
+        $this->backdatePaymentExpiry($first['id'], (new \DateTimeImmutable('-1 minute'))->format(DATE_ATOM));
+
+        // Distance is at its limit of 1, but the sole occupant's window has passed —
+        // a naive capacity check would reject this, but create() must lazily expire
+        // the stale Zapis first and let the new one through.
+        $second = $this->registrations->create($this->registrationPayload($event, '', 'phpunit-expiry-capacity-2'));
+
+        self::assertSame('pending', $second['status']);
+        self::assertSame('expired', $this->rawRegistration($first['id'])['status']);
+        self::assertSame(1, $this->rawRegisteredCount('d-expiry-capacity-1'));
+    }
+
     /**
      * E1.2: Wariant opłaty carries its own base price and its own Próg — separate
      * from the legacy Dystans price/tiers path exercised by the tests above. The

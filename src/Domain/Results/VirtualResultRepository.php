@@ -162,7 +162,7 @@ LEFT JOIN users u ON u.id = r.user_id
 WHERE r.event_id = :eventId
   AND r.distance_id = :distanceId
   AND r.user_id = :userId
-  AND r.status NOT IN ('cancelled', 'removed')
+  AND r.status NOT IN ('cancelled', 'removed', 'expired')
 ORDER BY r.registered_at DESC
 LIMIT 1
 SQL);

@@ -14,6 +14,12 @@ use ZmierzymyCzas\Domain\Cms\InfoPageRepository;
 use ZmierzymyCzas\Domain\Cms\PartnerRepository;
 use ZmierzymyCzas\Domain\Events\EventBackgroundRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
+use ZmierzymyCzas\Domain\Payments\Http\CurlHttpClient;
+use ZmierzymyCzas\Domain\Payments\Tpay\TpayConfig;
+use ZmierzymyCzas\Domain\Payments\Tpay\TpayGateway;
+use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotification;
+use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotificationVerifier;
+use ZmierzymyCzas\Domain\Payments\Tpay\TpayOAuthClient;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Results\ResultImportRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
@@ -34,7 +40,19 @@ use ZmierzymyCzas\Support\UploadedFileStorage;
 return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $users = new UserRepository($pdo);
     $events = new EventRepository($pdo);
-    $registrations = new RegistrationRepository($pdo);
+    // E1.6: trasa A (bramka) is only ever wired up with a real gateway when this
+    // deployment actually has Tpay credentials configured (production, or a real
+    // sandbox account) — everywhere else (local dev, CI, this repo's own test
+    // suite, none of which set TPAY_CLIENT_ID/SECRET) RegistrationRepository gets
+    // no gateway at all and simply skips starting a payment session, exactly as it
+    // behaved before this ticket. See TpayConfig::isConfigured().
+    $tpayConfig = TpayConfig::fromEnv();
+    $tpayHttp = new CurlHttpClient();
+    $tpayGateway = $tpayConfig->isConfigured()
+        ? new TpayGateway($tpayHttp, $tpayConfig, new TpayOAuthClient($tpayHttp, $tpayConfig))
+        : null;
+    $tpayNotificationVerifier = new TpayNotificationVerifier($tpayHttp, $tpayConfig);
+    $registrations = new RegistrationRepository($pdo, $tpayGateway);
     $results = new ResultRepository($pdo);
     $resultImports = new ResultImportRepository($pdo);
     $virtualResults = new VirtualResultRepository($pdo);
@@ -186,7 +204,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
@@ -846,6 +864,55 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 throw $e;
             }
         })->add(new AuthMiddleware($jwt));
+
+        // E1.6: Tpay webhook. Never behind AuthMiddleware — Tpay's servers call
+        // this, not a logged-in user, so there is no JWT to check; the signature
+        // verification below is what stands in for authentication here. Every
+        // step (extract raw body -> verify X-JWS-Signature -> parse -> apply
+        // idempotently by transaction_id) matches the ticket's "nigdy nie ufaj
+        // nagłówkom/body bez weryfikacji" and "idempotencja po transaction_id".
+        $api->post('/webhooks/tpay', function (Request $request, Response $response) use ($registrations, $tpayNotificationVerifier) {
+            $bodyStream = $request->getBody();
+            $bodyStream->rewind();
+            $rawBody = $bodyStream->getContents();
+            $signature = $request->getHeaderLine('X-JWS-Signature');
+
+            if ($signature === '' || !$tpayNotificationVerifier->verify($rawBody, $signature)) {
+                return JsonResponder::error($response, 'invalid_signature', 'Invalid or missing webhook signature.', 400);
+            }
+
+            try {
+                $notification = TpayNotification::fromRawBody($rawBody, $request->getHeaderLine('Content-Type'));
+            } catch (RuntimeException) {
+                return JsonResponder::error($response, 'invalid_payload', 'Malformed webhook payload.', 400);
+            }
+
+            try {
+                $result = $registrations->applyGatewayNotification(
+                    $notification->transactionId,
+                    $notification->paid,
+                    $notification->amount
+                );
+            } catch (RuntimeException $e) {
+                if ($e->getMessage() === 'gateway_transaction_unknown') {
+                    // Not this platform's transaction (or a stale/replayed id) — 404,
+                    // not a 500, and deliberately not written to the activity log
+                    // (E0.8's log is for actions by an authenticated actor; an
+                    // unrecognized webhook call isn't one).
+                    return JsonResponder::error($response, 'gateway_transaction_unknown', 'Unknown transaction.', 404);
+                }
+                throw $e;
+            }
+
+            // E1.10 seam (mail — out of scope here per the ticket): a confirmation
+            // email would be queued right here, gated on
+            // `$result['applied'] && $notification->paid`, i.e. only the one
+            // delivery of this notification that actually flipped the Zapis to
+            // `confirmed` — never a retried/idempotent no-op delivery.
+
+            $response->getBody()->write('TRUE');
+            return $response->withHeader('Content-Type', 'text/plain')->withStatus(200);
+        });
 
         $api->get('/virtual-results', function (Request $request, Response $response) use ($events, $virtualResults, $query, $isStaffRole, $canManageEvent) {
             $auth = (array) $request->getAttribute('auth');

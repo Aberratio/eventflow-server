@@ -7,9 +7,12 @@ namespace ZmierzymyCzas\Domain\Payments;
 /**
  * Trasa A (bramka) seam RegistrationRepository codes against — deliberately not
  * "TpayGateway" directly, so a second gateway (PayNow, E1.7) can implement this
- * same contract later without RegistrationRepository's create()/retryPayment()/
- * initiateGatewayRefund() changing shape. Today only Tpay\TpayGateway implements
- * it (see RegistrationRepository's constructor default).
+ * same contract without RegistrationRepository's create()/retryPayment()/
+ * initiateGatewayRefund() changing shape. Both Tpay\TpayGateway (E1.6) and
+ * PayNow\PayNowGateway (E1.7) implement it — RegistrationRepository takes one
+ * instance of each (constructor's $gateway and $payNowGateway) and picks
+ * between them per Wydarzenie via payment_config.provider; see
+ * RegistrationRepository::gatewayForProvider().
  */
 interface PaymentGatewayInterface
 {

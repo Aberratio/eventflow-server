@@ -570,6 +570,12 @@ SQL;
 
         return [
             'type' => 'admin_gateway',
+            // E1.7: which trasa-A gateway (RegistrationRepository::gatewayForProvider())
+            // this event's Zapisy pay through — 'tpay' (E1.6, the only provider that
+            // existed before this) is the default so every event configured before
+            // PayNow existed keeps its exact prior behavior. Irrelevant when
+            // `type` is 'organizer_bank' (trasa B has no gateway at all).
+            'provider' => 'tpay',
             ...$paymentConfig,
             'gatewayWindowMinutes' => $gatewayMinutes > 0 ? $gatewayMinutes : self::DEFAULT_GATEWAY_WINDOW_MINUTES,
             'transferWindowDays' => $transferDays > 0 ? $transferDays : self::DEFAULT_TRANSFER_WINDOW_DAYS,

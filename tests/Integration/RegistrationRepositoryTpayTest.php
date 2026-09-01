@@ -1,0 +1,351 @@
+<?php
+
+declare(strict_types=1);
+
+namespace ZmierzymyCzas\Tests\Integration;
+
+use PDO;
+use PHPUnit\Framework\TestCase;
+use ZmierzymyCzas\Database\Connection;
+use ZmierzymyCzas\Domain\Events\EventRepository;
+use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
+use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
+use ZmierzymyCzas\Support\Env;
+
+/**
+ * E1.6: RegistrationRepository wired against a fake gateway (implements the same
+ * PaymentGatewayInterface the real TpayGateway does) — exercises "start a session
+ * on create/retry", "amount always comes from the frozen Rozliczenie, never the
+ * caller", "webhook idempotency by transaction_id", and "a real refund call fires
+ * from approveRefund() on trasa A" without ever touching HTTP/Tpay itself (that
+ * part is covered by tests/Unit/Payments/*Test.php against a FakeHttpClient).
+ */
+final class RegistrationRepositoryTpayTest extends TestCase
+{
+    private PDO $pdo;
+    private EventRepository $events;
+    private FakeGateway $gateway;
+    private RegistrationRepository $registrations;
+    private string $slugPrefix;
+
+    protected function setUp(): void
+    {
+        Env::load(__DIR__ . '/../../.env');
+        $this->slugPrefix = 'phptpay-' . bin2hex(random_bytes(4));
+
+        try {
+            $this->pdo = Connection::fromEnv();
+            $this->deletePhpUnitEvents();
+            $this->events = new EventRepository($this->pdo);
+            $this->gateway = new FakeGateway();
+            $this->registrations = new RegistrationRepository($this->pdo, $this->gateway);
+        } catch (\Throwable $e) {
+            self::markTestSkipped('Database is not available for integration tests: ' . $e->getMessage());
+        }
+    }
+
+    protected function tearDown(): void
+    {
+        if (!isset($this->pdo)) {
+            return;
+        }
+        $this->deletePhpUnitEvents();
+    }
+
+    public function testCreateOnGatewayRouteStartsASessionWithTheFrozenSettlementAmount(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-gw']));
+        $this->gateway->nextSession = ['transactionId' => 'TX-100', 'redirectUrl' => 'https://pay.example.test/TX-100'];
+
+        $registration = $this->registrations->create($this->registrationPayload($event));
+
+        self::assertSame('pending', $registration['status']);
+        self::assertSame(['transactionId' => 'TX-100', 'redirectUrl' => 'https://pay.example.test/TX-100'], $registration['paymentSession']);
+        self::assertCount(1, $this->gateway->startSessionCalls);
+        // The amount handed to the gateway is exactly the frozen Rozliczenie total
+        // (distance price 80.0 here) — never anything a caller could have injected.
+        self::assertSame(80.0, $this->gateway->startSessionCalls[0]['amount']);
+        self::assertSame($registration['id'], $this->gateway->startSessionCalls[0]['registrationId']);
+
+        $tx = $this->rawGatewayTransaction('TX-100');
+        self::assertSame($registration['id'], $tx['registrationId']);
+        self::assertSame('created', $tx['status']);
+        self::assertSame('80.00', $tx['amount']);
+    }
+
+    public function testClientSuppliedAmountFieldsAreIgnoredByTheGatewaySession(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-inj']));
+        $this->gateway->nextSession = ['transactionId' => 'TX-inj', 'redirectUrl' => 'https://pay.example.test/TX-inj'];
+
+        $payload = $this->registrationPayload($event);
+        // A hostile/buggy client trying to smuggle its own amount in.
+        $payload['totalAmount'] = 1.0;
+        $payload['price'] = 1.0;
+        $payload['paymentDetails'] = ['startFeeAmount' => 1.0];
+
+        $this->registrations->create($payload);
+
+        self::assertSame(80.0, $this->gateway->startSessionCalls[0]['amount']);
+    }
+
+    public function testCreateOnOrganizerBankRouteNeverStartsAGatewaySession(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-bank',
+            'paymentConfig' => ['type' => 'organizer_bank'],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event));
+
+        self::assertNull($registration['paymentSession']);
+        self::assertCount(0, $this->gateway->startSessionCalls);
+    }
+
+    public function testNoGatewayConfiguredSkipsSessionStartWithoutError(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-nogw']));
+        $registrations = new RegistrationRepository($this->pdo);
+
+        $registration = $registrations->create($this->registrationPayload($event));
+
+        self::assertSame('pending', $registration['status']);
+        self::assertNull($registration['paymentSession']);
+    }
+
+    public function testGatewayFailureDoesNotBreakRegistrationCreation(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-fail']));
+        $this->gateway->throwOnStartSession = true;
+
+        $registration = $this->registrations->create($this->registrationPayload($event));
+
+        self::assertSame('pending', $registration['status']);
+        self::assertNull($registration['paymentSession']);
+    }
+
+    public function testRetryPaymentOnExpiredGatewayRegistrationStartsANewSession(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-retry']));
+        $this->gateway->nextSession = ['transactionId' => 'TX-first', 'redirectUrl' => 'https://pay.example.test/first'];
+        $registration = $this->registrations->create($this->registrationPayload($event));
+
+        $this->pdo->prepare("UPDATE registrations SET status = 'expired' WHERE id = :id")->execute(['id' => $registration['id']]);
+
+        $this->gateway->nextSession = ['transactionId' => 'TX-second', 'redirectUrl' => 'https://pay.example.test/second'];
+        $retried = $this->registrations->retryPayment($registration['id']);
+
+        self::assertSame('pending', $retried['status']);
+        self::assertSame('TX-second', $retried['paymentSession']['transactionId']);
+        self::assertCount(2, $this->gateway->startSessionCalls);
+        self::assertNotNull($this->rawGatewayTransaction('TX-first'));
+        self::assertNotNull($this->rawGatewayTransaction('TX-second'));
+    }
+
+    public function testApplyGatewayNotificationConfirmsAPendingRegistration(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-notif']));
+        $this->gateway->nextSession = ['transactionId' => 'TX-paid', 'redirectUrl' => 'https://pay.example.test/paid'];
+        $registration = $this->registrations->create($this->registrationPayload($event));
+        self::assertSame('pending', $registration['status']);
+
+        $result = $this->registrations->applyGatewayNotification('TX-paid', true, 80.0);
+
+        self::assertTrue($result['applied']);
+        self::assertSame($registration['id'], $result['registrationId']);
+        $reloaded = $this->registrations->find($registration['id']);
+        self::assertSame('confirmed', $reloaded['status']);
+        self::assertTrue($reloaded['paymentDetails']['startFeePaid']);
+        self::assertSame(80.0, (float) $reloaded['paymentDetails']['startFeeAmount']);
+    }
+
+    /**
+     * The ticket's core idempotency requirement: Tpay retrying the same webhook
+     * (its own timeout retry) after we already applied it once must be a pure
+     * no-op — no double side effects, no error.
+     */
+    public function testApplyGatewayNotificationIsIdempotentForARepeatedTransactionId(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-idem']));
+        $this->gateway->nextSession = ['transactionId' => 'TX-dup', 'redirectUrl' => 'https://pay.example.test/dup'];
+        $registration = $this->registrations->create($this->registrationPayload($event));
+
+        $first = $this->registrations->applyGatewayNotification('TX-dup', true, 80.0);
+        self::assertTrue($first['applied']);
+
+        // Simulate Tpay retrying the same notification after a timeout.
+        $second = $this->registrations->applyGatewayNotification('TX-dup', true, 80.0);
+        self::assertFalse($second['applied']);
+
+        $reloaded = $this->registrations->find($registration['id']);
+        self::assertSame('confirmed', $reloaded['status']);
+        $tx = $this->rawGatewayTransaction('TX-dup');
+        self::assertSame('paid', $tx['status']);
+    }
+
+    public function testApplyGatewayNotificationForUnknownTransactionThrows(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('gateway_transaction_unknown');
+        $this->registrations->applyGatewayNotification('does-not-exist', true, 10.0);
+    }
+
+    public function testApplyGatewayNotificationMarksFailedWithoutConfirming(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-declined']));
+        $this->gateway->nextSession = ['transactionId' => 'TX-declined', 'redirectUrl' => 'https://pay.example.test/declined'];
+        $registration = $this->registrations->create($this->registrationPayload($event));
+
+        $result = $this->registrations->applyGatewayNotification('TX-declined', false, 0.0);
+
+        self::assertTrue($result['applied']);
+        $reloaded = $this->registrations->find($registration['id']);
+        self::assertSame('pending', $reloaded['status']);
+        self::assertSame('failed', $this->rawGatewayTransaction('TX-declined')['status']);
+    }
+
+    public function testApproveRefundOnGatewayRouteCallsTheGatewaysRefundWithTheApprovedAmount(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-refund']));
+        $this->gateway->nextSession = ['transactionId' => 'TX-refundable', 'redirectUrl' => 'https://pay.example.test/refundable'];
+        $registration = $this->registrations->create($this->registrationPayload($event));
+        $this->registrations->applyGatewayNotification('TX-refundable', true, 80.0);
+
+        $this->registrations->requestRefund($registration['id'], 'phpunit-participant');
+        $this->registrations->approveRefund($registration['id'], 'phpunit-organizer', 30.0);
+
+        self::assertCount(1, $this->gateway->refundCalls);
+        self::assertSame('TX-refundable', $this->gateway->refundCalls[0]['transactionId']);
+        self::assertSame(30.0, $this->gateway->refundCalls[0]['amount']);
+    }
+
+    public function testApproveRefundOnOrganizerBankRouteNeverCallsTheGateway(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-refund-bank',
+            'paymentConfig' => ['type' => 'organizer_bank'],
+        ]));
+        $payload = $this->registrationPayload($event);
+        $payload['paymentDetails'] = ['startFeePaid' => true];
+        $registration = $this->registrations->create($payload);
+
+        $this->registrations->requestRefund($registration['id'], 'phpunit-participant');
+        $this->registrations->approveRefund($registration['id'], 'phpunit-organizer');
+
+        self::assertCount(0, $this->gateway->refundCalls);
+    }
+
+    /** @return array<string, mixed> */
+    private function rawGatewayTransaction(string $transactionId): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT transaction_id AS transactionId, registration_id AS registrationId, status, amount
+             FROM registration_gateway_transactions WHERE transaction_id = :id'
+        );
+        $stmt->execute(['id' => $transactionId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /** @param array<string, mixed> $overrides */
+    private function payload(array $overrides = []): array
+    {
+        $slug = (string) ($overrides['slug'] ?? $this->slugPrefix);
+        return array_replace_recursive([
+            'name' => 'PHPUnit Tpay Event',
+            'slug' => $slug,
+            'discipline' => 'running',
+            'date' => '2026-06-15',
+            'location' => 'Stadion Testowy',
+            'city' => 'Warszawa',
+            'description' => '<p>Opis testowy</p>',
+            'imageUrl' => 'https://example.test/event.jpg',
+            'organizerId' => 'phpunit-organizer',
+            'organizerName' => 'PHPUnit Organizer',
+            'status' => 'draft',
+            'registrationDeadline' => '2026-06-01',
+            'featured' => false,
+            'paymentConfig' => ['type' => 'admin_gateway'],
+            'distances' => [
+                [
+                    'id' => $slug . '-10k',
+                    'name' => '10 km',
+                    'length' => 10,
+                    'unit' => 'km',
+                    'categories' => ['Open'],
+                    'ageCategories' => [],
+                    'specialCategories' => [],
+                    'limit' => 100,
+                    'registeredCount' => 0,
+                    'price' => 80,
+                    'routeFiles' => [],
+                ],
+            ],
+        ], $overrides);
+    }
+
+    /** @param array<string, mixed> $event @return array<string, mixed> */
+    private function registrationPayload(array $event, string $userId = 'phpunit-participant'): array
+    {
+        return [
+            'eventId' => $event['id'],
+            'eventName' => $event['name'],
+            'userId' => $userId,
+            'userName' => 'PHPUnit User',
+            'userEmail' => $userId . '@example.test',
+            'distanceId' => $event['distances'][0]['id'],
+            'distanceName' => $event['distances'][0]['name'],
+            'category' => 'Open',
+            'merchandiseOrders' => [],
+        ];
+    }
+
+    private function deletePhpUnitEvents(): void
+    {
+        $stmt = $this->pdo->prepare('SELECT id FROM events WHERE slug LIKE :slugLike');
+        $stmt->execute(['slugLike' => 'phptpay-%']);
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) ?: [] as $eventId) {
+            $regStmt = $this->pdo->prepare('SELECT id FROM registrations WHERE event_id = :eventId');
+            $regStmt->execute(['eventId' => $eventId]);
+            foreach ($regStmt->fetchAll(PDO::FETCH_COLUMN) ?: [] as $registrationId) {
+                $this->pdo->prepare('DELETE FROM registration_gateway_transactions WHERE registration_id = :id')->execute(['id' => $registrationId]);
+                $this->pdo->prepare('DELETE FROM registration_refunds WHERE registration_id = :id')->execute(['id' => $registrationId]);
+                $this->pdo->prepare('DELETE FROM registration_payment_details WHERE registration_id = :id')->execute(['id' => $registrationId]);
+                $this->pdo->prepare('DELETE FROM registration_settlement_items WHERE registration_id = :id')->execute(['id' => $registrationId]);
+                $this->pdo->prepare('DELETE FROM registration_merchandise_orders WHERE registration_id = :id')->execute(['id' => $registrationId]);
+            }
+            $this->pdo->prepare('DELETE FROM registrations WHERE event_id = :eventId')->execute(['eventId' => $eventId]);
+            $this->pdo->prepare('DELETE FROM event_distances WHERE event_id = :eventId')->execute(['eventId' => $eventId]);
+            $this->pdo->prepare('DELETE FROM events WHERE id = :eventId')->execute(['eventId' => $eventId]);
+        }
+    }
+}
+
+/** Test double for PaymentGatewayInterface used only by this file's tests. */
+final class FakeGateway implements PaymentGatewayInterface
+{
+    /** @var array{transactionId: string, redirectUrl: string} */
+    public array $nextSession = ['transactionId' => 'TX-default', 'redirectUrl' => 'https://pay.example.test/default'];
+    public bool $throwOnStartSession = false;
+
+    /** @var array<int, array{registrationId: string, amount: float}> */
+    public array $startSessionCalls = [];
+
+    /** @var array<int, array{transactionId: string, amount: float}> */
+    public array $refundCalls = [];
+
+    public function startSession(string $registrationId, float $amount, string $description, string $payerEmail, string $payerName): array
+    {
+        $this->startSessionCalls[] = ['registrationId' => $registrationId, 'amount' => $amount];
+        if ($this->throwOnStartSession) {
+            throw new \RuntimeException('fake_gateway_unreachable');
+        }
+
+        return $this->nextSession;
+    }
+
+    public function refund(string $transactionId, float $amount): void
+    {
+        $this->refundCalls[] = ['transactionId' => $transactionId, 'amount' => $amount];
+    }
+}

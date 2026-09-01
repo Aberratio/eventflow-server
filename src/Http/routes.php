@@ -15,6 +15,10 @@ use ZmierzymyCzas\Domain\Cms\PartnerRepository;
 use ZmierzymyCzas\Domain\Events\EventBackgroundRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Payments\Http\CurlHttpClient;
+use ZmierzymyCzas\Domain\Payments\PayNow\PayNowConfig;
+use ZmierzymyCzas\Domain\Payments\PayNow\PayNowGateway;
+use ZmierzymyCzas\Domain\Payments\PayNow\PayNowNotification;
+use ZmierzymyCzas\Domain\Payments\PayNow\PayNowNotificationVerifier;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayConfig;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayGateway;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotification;
@@ -52,7 +56,15 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         ? new TpayGateway($tpayHttp, $tpayConfig, new TpayOAuthClient($tpayHttp, $tpayConfig))
         : null;
     $tpayNotificationVerifier = new TpayNotificationVerifier($tpayHttp, $tpayConfig);
-    $registrations = new RegistrationRepository($pdo, $tpayGateway);
+    // E1.7: trasa A's second gateway, PayNow — same "only wired up with real
+    // credentials configured" stance as Tpay above (see PayNowConfig::isConfigured()).
+    // Which of the two an event actually uses is resolved per-Wydarzenie by
+    // RegistrationRepository (payment_config.provider), not here.
+    $payNowConfig = PayNowConfig::fromEnv();
+    $payNowHttp = new CurlHttpClient();
+    $payNowGateway = $payNowConfig->isConfigured() ? new PayNowGateway($payNowHttp, $payNowConfig) : null;
+    $payNowNotificationVerifier = new PayNowNotificationVerifier($payNowConfig);
+    $registrations = new RegistrationRepository($pdo, $tpayGateway, $payNowGateway);
     $results = new ResultRepository($pdo);
     $resultImports = new ResultImportRepository($pdo);
     $virtualResults = new VirtualResultRepository($pdo);
@@ -204,7 +216,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
@@ -912,6 +924,57 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
 
             $response->getBody()->write('TRUE');
             return $response->withHeader('Content-Type', 'text/plain')->withStatus(200);
+        });
+
+        // E1.7: PayNow webhook. Never behind AuthMiddleware — PayNow's servers
+        // call this, not a logged-in user, so there is no JWT to check; the
+        // signature verification below is what stands in for authentication
+        // here. Every step (extract raw body -> verify Signature header ->
+        // parse -> apply idempotently by transaction_id) matches the ticket's
+        // "nigdy nie ufaj nagłówkom/body bez weryfikacji" and "idempotencja po
+        // transaction_id" — same shape as the Tpay webhook above, just against
+        // PayNow's own (simpler, HMAC-only) signature scheme.
+        $api->post('/webhooks/paynow', function (Request $request, Response $response) use ($registrations, $payNowNotificationVerifier) {
+            $bodyStream = $request->getBody();
+            $bodyStream->rewind();
+            $rawBody = $bodyStream->getContents();
+            $signature = $request->getHeaderLine('Signature');
+
+            if ($signature === '' || !$payNowNotificationVerifier->verify($rawBody, $signature)) {
+                return JsonResponder::error($response, 'invalid_signature', 'Invalid or missing webhook signature.', 400);
+            }
+
+            try {
+                $notification = PayNowNotification::fromRawBody($rawBody);
+            } catch (RuntimeException) {
+                return JsonResponder::error($response, 'invalid_payload', 'Malformed webhook payload.', 400);
+            }
+
+            try {
+                // PayNow's notification carries no amount (unlike Tpay's) — see
+                // PayNowNotification's docblock for why 0.0 here is correct, not
+                // a placeholder: applyGatewayNotification() never reads it.
+                $result = $registrations->applyGatewayNotification(
+                    $notification->transactionId,
+                    $notification->paid,
+                    0.0
+                );
+            } catch (RuntimeException $e) {
+                if ($e->getMessage() === 'gateway_transaction_unknown') {
+                    return JsonResponder::error($response, 'gateway_transaction_unknown', 'Unknown transaction.', 404);
+                }
+                throw $e;
+            }
+
+            // E1.10 seam (mail — out of scope here per the ticket): a confirmation
+            // email would be queued right here, gated on
+            // `$result['applied'] && $notification->paid`, i.e. only the one
+            // delivery of this notification that actually flipped the Zapis to
+            // `confirmed` — never a retried/idempotent no-op delivery.
+
+            // PayNow requires a 200 OK or 202 Accepted with an empty body — unlike
+            // Tpay's "TRUE" plaintext contract.
+            return $response->withStatus(200);
         });
 
         $api->get('/virtual-results', function (Request $request, Response $response) use ($events, $virtualResults, $query, $isStaffRole, $canManageEvent) {

@@ -15,13 +15,57 @@ final class RegistrationRepository extends Repository
      * in which case create()/retryPayment() simply don't start a payment session
      * (see startGatewaySessionIfNeeded()) rather than attempting a call that could
      * only ever fail. Production wiring lives in routes.php.
+     *
+     * Two independent gateways can be wired in — Tpay (`$gateway`, the default
+     * provider, E1.6) and PayNow (`$payNowGateway`, E1.7) — both implementing
+     * the exact same PaymentGatewayInterface, so nothing below branches on
+     * *behavior* between them; the only place either name appears is
+     * gatewayForProvider(), which just picks which already-built instance a
+     * given Wydarzenie's payment_config.provider selects. See
+     * paymentGatewayProviderFor().
      */
     private readonly ?PaymentGatewayInterface $gateway;
+    private readonly ?PaymentGatewayInterface $payNowGateway;
 
-    public function __construct(\PDO $pdo, ?PaymentGatewayInterface $gateway = null)
+    public function __construct(\PDO $pdo, ?PaymentGatewayInterface $gateway = null, ?PaymentGatewayInterface $payNowGateway = null)
     {
         parent::__construct($pdo);
         $this->gateway = $gateway;
+        $this->payNowGateway = $payNowGateway;
+    }
+
+    /** Provider name for the default gateway constructor argument ($gateway) — Tpay, E1.6. */
+    private const PROVIDER_TPAY = 'tpay';
+    /** Provider name for the second gateway constructor argument ($payNowGateway) — PayNow, E1.7. */
+    private const PROVIDER_PAYNOW = 'paynow';
+
+    /**
+     * Which already-constructed gateway instance a provider name resolves to.
+     * The only place in this class that ever mentions "tpay"/"paynow" by
+     * name — everywhere else just calls PaymentGatewayInterface methods on
+     * whatever this returns, so business logic (amount, idempotency, refund
+     * flow) is identical regardless of which provider a Wydarzenie picked.
+     */
+    private function gatewayForProvider(string $provider): ?PaymentGatewayInterface
+    {
+        return $provider === self::PROVIDER_PAYNOW ? $this->payNowGateway : $this->gateway;
+    }
+
+    /**
+     * `payment_config.provider` on the Wydarzenie — which gateway trasa A uses,
+     * defaulting to Tpay (E1.6, the only provider that existed before E1.7) when
+     * unset, so every event configured before PayNow existed keeps behaving
+     * exactly as it did.
+     */
+    private function paymentGatewayProviderFor(string $eventId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT payment_config AS paymentConfig FROM events WHERE id = :id');
+        $stmt->execute(['id' => $eventId]);
+        $raw = $stmt->fetchColumn();
+        $paymentConfig = is_string($raw) && trim((string) $raw) !== '' ? (json_decode((string) $raw, true) ?: []) : [];
+        $provider = is_array($paymentConfig) ? (string) ($paymentConfig['provider'] ?? '') : '';
+
+        return $provider === self::PROVIDER_PAYNOW ? self::PROVIDER_PAYNOW : self::PROVIDER_TPAY;
     }
 
     private const COLUMNS = <<<'SQL'
@@ -244,7 +288,7 @@ SQL;
         }
 
         $registration = $this->find($id);
-        // E1.6: trasa A (bramka) starts its Tpay session only once the Zapis (and
+        // E1.6/E1.7: trasa A (bramka) starts its gateway session only once the Zapis (and
         // its frozen Rozliczenie) are safely committed — never inside the
         // transaction above, which would hold the Dystans row lock for as long as
         // the outbound HTTP call takes. A startFeePaid Zapis is born 'confirmed'
@@ -660,10 +704,11 @@ SQL;
             throw $e;
         }
 
-        // E1.6: trasa A really calls Tpay's refund API now, once the "do zwrotu"
-        // approval itself is safely committed — same "never hold the row lock
-        // across an outbound HTTP call" reasoning as startGatewaySessionIfNeeded().
-        // Trasa B stays exactly as before (organizator marks it done by hand later).
+        // E1.6/E1.7: trasa A really calls the gateway's (Tpay or PayNow, whichever
+        // took the original payment) refund API now, once the "do zwrotu" approval
+        // itself is safely committed — same "never hold the row lock across an
+        // outbound HTTP call" reasoning as startGatewaySessionIfNeeded(). Trasa B
+        // stays exactly as before (organizator marks it done by hand later).
         if ($route === 'gateway') {
             $this->initiateGatewayRefund($id);
         }
@@ -674,14 +719,14 @@ SQL;
     /**
      * Executes the terminal `approved` -> `refunded` transition. Route B (przelew
      * tradycyjny) is fully manual and this IS the real "organizator odznacza
-     * zwrócono" action for it — in scope per the ticket. Route A (Tpay) now really
-     * does call the gateway's refund API from approveRefund() (E1.6, see
-     * initiateGatewayRefund()) — but Tpay confirms a refund asynchronously via its
-     * own notification, and wiring that specific notification straight into this
-     * method is E1.10 (mail) territory sharing the same webhook, so today this
-     * action still doubles as the admin's manual bookkeeping confirmation once
-     * they see the refund landed on Tpay's side (or, for PayNow/E1.7, once that
-     * gateway exists at all). Idempotent: marking an
+     * zwrócono" action for it — in scope per the ticket. Route A (Tpay or PayNow)
+     * now really does call the gateway's refund API from approveRefund() (E1.6/
+     * E1.7, see initiateGatewayRefund()) — but both gateways confirm a refund
+     * asynchronously via their own notification, and wiring that specific
+     * notification straight into this method is E1.10 (mail) territory sharing
+     * the same webhook, so today this action still doubles as the admin's manual
+     * bookkeeping confirmation once they see the refund landed on the gateway's
+     * side. Idempotent: marking an
      * already-`refunded` cycle refunded again is a no-op. When the refunded amount
      * covers the whole frozen Rozliczenie (a full refund, not a partial one), the
      * Zapis itself also moves to `cancelled` — rozstrzygnięcie: registrations.status
@@ -743,48 +788,59 @@ SQL;
     }
 
     /**
-     * Route A (Tpay; PayNow is E1.7, still out of scope) — the real gateway refund
-     * call E1.5 deliberately left this seam empty for. Finds the Zapis's most
-     * recently `paid` gateway transaction and asks Tpay to refund it for the
-     * approved refund amount (registration_refunds.amount — never anything else,
-     * same "amount only ever comes from the frozen Rozliczenie/refund cycle, not
-     * the caller" rule as everywhere else in this class). On Tpay's own
-     * confirmation (a `chargeback`/refund notification, delivered through the same
-     * webhook as a payment — TpayNotification) that integration is expected to
-     * call markRefunded() itself, the same terminal transition a route B
-     * organizer triggers by hand today; wiring that specific notification-to-
-     * markRefunded() call is left to E1.10 territory (mail seam) alongside it, not
-     * duplicated here.
+     * Route A (Tpay or PayNow) — the real gateway refund call E1.5 deliberately
+     * left this seam empty for. Finds the Zapis's most recently `paid` gateway
+     * transaction and asks whichever gateway processed it (its `gateway` column,
+     * see below) to refund it for the approved refund amount
+     * (registration_refunds.amount — never anything else, same "amount only
+     * ever comes from the frozen Rozliczenie/refund cycle, not the caller" rule
+     * as everywhere else in this class). On the gateway's own confirmation (a
+     * refund/chargeback notification, delivered through the same webhook as a
+     * payment — TpayNotification/PayNowNotification) that integration is
+     * expected to call markRefunded() itself, the same terminal transition a
+     * route B organizer triggers by hand today; wiring that specific
+     * notification-to-markRefunded() call is left to E1.10 territory (mail
+     * seam) alongside it, not duplicated here.
      *
-     * No-op (not an error) when there is no gateway configured or no paid
-     * transaction on file — mirrors startGatewaySessionIfNeeded()'s "never let a
-     * gateway hiccup block a state transition that already happened on our side"
-     * stance; approveRefund()/markRefunded() remain the source of truth for
-     * whether a refund is recorded as done on this platform.
+     * No-op (not an error) when there is no gateway configured for the paying
+     * provider or no paid transaction on file — mirrors
+     * startGatewaySessionIfNeeded()'s "never let a gateway hiccup block a state
+     * transition that already happened on our side" stance; approveRefund()/
+     * markRefunded() remain the source of truth for whether a refund is
+     * recorded as done on this platform.
      */
     public function initiateGatewayRefund(string $id): void
     {
-        if ($this->gateway === null) {
-            return;
-        }
-
         $refund = $this->refund($id);
         if ($refund === null || $refund['amount'] === null) {
             return;
         }
 
+        // The provider that actually took the payment — read off the paid
+        // transaction row itself (frozen at session-creation time), never
+        // re-derived from the Wydarzenie's *current* payment_config, which may
+        // have been reconfigured to a different provider since this Zapis paid.
         $stmt = $this->pdo->prepare(
-            "SELECT transaction_id AS transactionId FROM registration_gateway_transactions
+            "SELECT transaction_id AS transactionId, gateway FROM registration_gateway_transactions
              WHERE registration_id = :id AND status = 'paid' ORDER BY created_at DESC LIMIT 1"
         );
         $stmt->execute(['id' => $id]);
-        $transactionId = $stmt->fetchColumn();
-        if ($transactionId === false || $transactionId === '') {
+        $transaction = $stmt->fetch();
+        if ($transaction === false) {
+            return;
+        }
+        $transactionId = (string) $transaction['transactionId'];
+        if ($transactionId === '') {
+            return;
+        }
+
+        $gateway = $this->gatewayForProvider((string) $transaction['gateway']);
+        if ($gateway === null) {
             return;
         }
 
         try {
-            $this->gateway->refund((string) $transactionId, (float) $refund['amount']);
+            $gateway->refund($transactionId, (float) $refund['amount']);
         } catch (\Throwable) {
             // Deliberately swallowed: the platform-side refund state (approved) is
             // already recorded regardless of Tpay's reachability, exactly as
@@ -836,7 +892,7 @@ SQL;
             throw $e;
         }
 
-        // E1.6: "ponowienie" now really does hang a fresh Tpay session off the
+        // E1.6/E1.7: "ponowienie" now really does hang a fresh gateway session off the
         // re-opened `pending` state, per the ticket — the seam retryPayment()'s
         // own docblock (above) was left waiting for.
         $registration = $this->find($id);
@@ -993,30 +1049,39 @@ SQL;
     }
 
     /**
-     * E1.6: starts a new Tpay session for a fresh `pending` Zapis on trasa A
-     * (gdy payment_config.type nie jest 'organizer_bank') and records it in
-     * `registration_gateway_transactions`, keyed by Tpay's own transaction id —
-     * that key is what makes the webhook idempotent later (applyGatewayNotification()).
-     * The amount is always `totalAmountFor()` — the frozen Rozliczenie's DO ZAPŁATY
-     * total — never anything the caller of create()/retryPayment() passed in, per
-     * the ticket's hard "klient nigdy nie przysyła kwot" requirement extended to
-     * the gateway leg.
+     * E1.6/E1.7: starts a new gateway session for a fresh `pending` Zapis on
+     * trasa A (gdy payment_config.type nie jest 'organizer_bank') and records
+     * it in `registration_gateway_transactions`, keyed by the gateway's own
+     * transaction id — that key is what makes the webhook idempotent later
+     * (applyGatewayNotification()). Which gateway (Tpay or PayNow) is used is
+     * resolved once, from `payment_config.provider`
+     * (paymentGatewayProviderFor()), and the same name is frozen onto the
+     * transaction row so a later refund calls the same provider even if the
+     * Wydarzenie is reconfigured afterwards (see initiateGatewayRefund()).
+     * The amount is always `totalAmountFor()` — the frozen Rozliczenie's DO
+     * ZAPŁATY total — never anything the caller of create()/retryPayment()
+     * passed in, per the ticket's hard "klient nigdy nie przysyła kwot"
+     * requirement extended to the gateway leg.
      *
      * Returns null (never throws) whenever there is nothing to do: no gateway
-     * configured (dev/test/CI — see TpayConfig::isConfigured()), trasa B, a
-     * zero-amount Zapis, or the gateway call itself failed — a Zapis must still be
-     * creatable/retryable even if Tpay is unreachable; the payment window still
-     * governs when it expires either way.
+     * configured for the selected provider (dev/test/CI — see
+     * TpayConfig::isConfigured()/PayNowConfig::isConfigured()), trasa B, a
+     * zero-amount Zapis, or the gateway call itself failed — a Zapis must
+     * still be creatable/retryable even if the gateway is unreachable; the
+     * payment window still governs when it expires either way.
      *
      * @param array<string, mixed> $registration
      * @return array{transactionId: string, redirectUrl: string}|null
      */
     private function startGatewaySessionIfNeeded(array $registration): ?array
     {
-        if ($this->gateway === null) {
+        if ($this->paymentConfigType((string) $registration['eventId']) === 'organizer_bank') {
             return null;
         }
-        if ($this->paymentConfigType((string) $registration['eventId']) === 'organizer_bank') {
+
+        $provider = $this->paymentGatewayProviderFor((string) $registration['eventId']);
+        $gateway = $this->gatewayForProvider($provider);
+        if ($gateway === null) {
             return null;
         }
 
@@ -1026,7 +1091,7 @@ SQL;
         }
 
         try {
-            $session = $this->gateway->startSession(
+            $session = $gateway->startSession(
                 (string) $registration['id'],
                 $amount,
                 'Zapis: ' . (string) $registration['eventName'] . ' — ' . (string) $registration['distanceName'],
@@ -1034,15 +1099,16 @@ SQL;
                 (string) $registration['userName']
             );
         } catch (\Throwable) {
-            // Tpay unreachable/misconfigured: the Zapis itself was already committed
-            // successfully above — never let a gateway hiccup fail the registration.
+            // Gateway unreachable/misconfigured: the Zapis itself was already
+            // committed successfully above — never let a gateway hiccup fail
+            // the registration.
             return null;
         }
 
         $this->insert('registration_gateway_transactions', [
             'transaction_id' => $session['transactionId'],
             'registration_id' => (string) $registration['id'],
-            'gateway' => 'tpay',
+            'gateway' => $provider,
             'amount' => $this->roundMoney($amount),
             'redirect_url' => $session['redirectUrl'],
             'status' => 'created',
@@ -1053,14 +1119,20 @@ SQL;
     }
 
     /**
-     * E1.6 webhook entry point — apply (or idempotently ignore) one already
-     * signature-verified Tpay notification. `$transactionId`/`$paid`/`$paidAmount`
-     * must come from TpayNotification, never straight off unverified request data.
+     * E1.6/E1.7 webhook entry point — apply (or idempotently ignore) one already
+     * signature-verified gateway notification (Tpay or PayNow — both webhook
+     * routes call this same, provider-agnostic method). `$transactionId`/`$paid`
+     * must come from TpayNotification/PayNowNotification, never straight off
+     * unverified request data. `$paidAmount` is accepted for parity with the
+     * notification shapes that carry one (Tpay's does; PayNow's does not — see
+     * PayNowNotification) but is not otherwise used below: the amount of record
+     * is always what registration_gateway_transactions already stored when the
+     * session was started (totalAmountFor() at that time).
      *
      * Idempotency (ticket point 4): the gateway transaction row is looked up and
      * locked by `$transactionId` (its primary key) — a retried webhook for the
      * same transaction finds it already `paid`/`failed` and does nothing further,
-     * so a Tpay retry-after-timeout can never mark a Rozliczenie paid twice or
+     * so a gateway retry-after-timeout can never mark a Rozliczenie paid twice or
      * double-fire whatever side effect eventually hangs off this (E1.10 mail —
      * that seam is the `$applied` return value below: true only the one time this
      * call is the one that actually flipped the state).

@@ -877,6 +877,39 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
         })->add(new AuthMiddleware($jwt));
 
+        // E1.8: trasa B "oznacz jako opłacone" — organizer (własne Wydarzenie)
+        // lub admin/moderator ręcznie potwierdza wpłatę na konto bankowe. Nigdy
+        // zawodnik (brak $isRegistrationOwner tutaj, celowo, w odróżnieniu od
+        // refund-request/retry-payment powyżej) — to organizator/admin widzi
+        // wyciąg bankowy, nie zawodnik. Sama tranzycja pending -> confirmed i
+        // walidacja "czy to w ogóle trasa B" żyje w
+        // RegistrationRepository::markManualPaymentPaid() (reużywa
+        // markGatewayPaymentPaid(), tej samej ścieżki co webhook trasy A).
+        $api->post('/registrations/{id}/mark-paid', function (Request $request, Response $response, array $args) use ($registrations, $events, $canManageEvent) {
+            $auth = (array) $request->getAttribute('auth');
+            $registration = $registrations->find($args['id']);
+            if (!$registration) {
+                return JsonResponder::error($response, 'not_found', 'Registration not found', 404);
+            }
+            if (!$canManageEvent($events->find((string) $registration['eventId']), $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            try {
+                return JsonResponder::ok($response, $registrations->markManualPaymentPaid($args['id']));
+            } catch (RuntimeException $e) {
+                $errors = [
+                    'registration_not_manual_route' => ['registration_not_manual_route', 'Ten Zapis nie jest na trasie przelewu tradycyjnego.', 409],
+                    'registration_not_pending' => ['registration_not_pending', 'Tylko oczekujący Zapis można oznaczyć jako opłacony.', 409],
+                    'registration_not_found' => ['not_found', 'Registration not found', 404],
+                ];
+                if (isset($errors[$e->getMessage()])) {
+                    [$code, $message, $status] = $errors[$e->getMessage()];
+                    return JsonResponder::error($response, $code, $message, $status);
+                }
+                throw $e;
+            }
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
         // E1.6: Tpay webhook. Never behind AuthMiddleware — Tpay's servers call
         // this, not a logged-in user, so there is no JWT to check; the signature
         // verification below is what stands in for authentication here. Every

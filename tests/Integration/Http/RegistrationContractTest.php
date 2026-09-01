@@ -64,6 +64,14 @@ final class RegistrationContractTest extends HttpTestCase
         }
 
         $this->deleteRegistrationsForEvent((string) $this->activeEvent['id']);
+        // E1.8: helper tests also spin up their own one-off `-bank-...` events
+        // (organizer_bank/trasa B) — their registrations need the same cleanup
+        // before the event row itself can go.
+        $eventIds = $this->pdo->prepare('SELECT id FROM events WHERE slug LIKE :slug');
+        $eventIds->execute(['slug' => $this->prefix . '-bank-%']);
+        foreach (($eventIds->fetchAll(\PDO::FETCH_COLUMN) ?: []) as $bankEventId) {
+            $this->deleteRegistrationsForEvent((string) $bankEventId);
+        }
         $this->pdo->prepare('DELETE FROM events WHERE slug LIKE :slug')->execute(['slug' => $this->prefix . '-%']);
         $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')->execute(['email' => $this->prefix . '-%@example.test']);
     }
@@ -333,6 +341,157 @@ final class RegistrationContractTest extends HttpTestCase
             ...$this->registrationPayload(),
             'paymentDetails' => ['startFeePaid' => true],
         ]);
+    }
+
+    /**
+     * E1.8: registration transfer title is a pure `ZC-{id}` derivation, always
+     * present regardless of route, exactly like a computed ticket/QR field.
+     */
+    public function testRegistrationExposesDeterministicTransferTitle(): void
+    {
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations',
+            $this->registrationPayload(),
+            $this->bearer($this->participant['id'], 'participant', $this->participant['email'])
+        );
+        $payload = $this->json($response);
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('ZC-' . $payload['data']['id'], $payload['data']['transferTitle']);
+    }
+
+    /**
+     * E1.8: the owning organizer marks a pending trasa-B registration as paid —
+     * this must go through the same pending -> confirmed transition the trasa-A
+     * webhook uses, not a parallel status write.
+     */
+    public function testOwningOrganizerCanMarkRouteBRegistrationAsPaid(): void
+    {
+        $reg = $this->pendingBankTransferRegistration();
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/mark-paid',
+            [],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        $payload = $this->json($response);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('confirmed', $payload['data']['status']);
+        self::assertTrue($payload['data']['paymentDetails']['startFeePaid']);
+    }
+
+    /** Admin (not tied to any specific event) can also mark a trasa-B registration as paid. */
+    public function testAdminCanMarkRouteBRegistrationAsPaid(): void
+    {
+        $reg = $this->pendingBankTransferRegistration();
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/mark-paid',
+            [],
+            $this->bearer($this->admin['id'], 'admin', $this->admin['email'])
+        );
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('confirmed', $this->json($response)['data']['status']);
+    }
+
+    /** canManageEvent() scoping applies here exactly like it does for refunds. */
+    public function testOtherOrganizerCannotMarkPaidForSomeoneElsesEvent(): void
+    {
+        $otherOrganizer = $this->users->create([
+            'name' => 'Other Organizer Mark Paid',
+            'email' => $this->prefix . '-other-organizer-mp@example.test',
+            'password' => 'demo1234',
+            'role' => 'organizer',
+        ]);
+        $reg = $this->pendingBankTransferRegistration();
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/mark-paid',
+            [],
+            $this->bearer($otherOrganizer['id'], 'organizer', $otherOrganizer['email'])
+        );
+
+        self::assertSame(403, $response->getStatusCode());
+    }
+
+    /** A participant — even the owner of the registration — can never mark their own payment as paid. */
+    public function testParticipantCannotMarkOwnPaymentAsPaid(): void
+    {
+        $reg = $this->pendingBankTransferRegistration();
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/mark-paid',
+            [],
+            $this->bearer($this->participant['id'], 'participant', $this->participant['email'])
+        );
+
+        self::assertSame(403, $response->getStatusCode());
+    }
+
+    /**
+     * Trasa A (gateway) registrations must never be markable-as-paid through this
+     * organizer/admin door — it exists solely for trasa B (organizer's own bank
+     * account), where the platform has no technical way to confirm a payment
+     * itself.
+     */
+    public function testMarkPaidRejectsRouteARegistration(): void
+    {
+        // $this->activeEvent defaults to paymentConfig.type = 'admin_gateway' (trasa A).
+        $reg = $this->registrations->create($this->registrationPayload());
+        self::assertSame('pending', $reg['status']);
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/mark-paid',
+            [],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        $payload = $this->json($response);
+
+        self::assertSame(409, $response->getStatusCode());
+        self::assertSame('registration_not_manual_route', $payload['error']['code']);
+        self::assertSame('pending', $this->registrations->find($reg['id'])['status']);
+    }
+
+    /** A registration already confirmed cannot be marked paid a second time through this endpoint. */
+    public function testMarkPaidRejectsAlreadyConfirmedRegistration(): void
+    {
+        $reg = $this->pendingBankTransferRegistration();
+        $this->registrations->markManualPaymentPaid($reg['id']);
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/mark-paid',
+            [],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        $payload = $this->json($response);
+
+        self::assertSame(409, $response->getStatusCode());
+        self::assertSame('registration_not_pending', $payload['error']['code']);
+    }
+
+    /** @return array<string, mixed> a fresh, unpaid trasa-B (organizer_bank) registration */
+    private function pendingBankTransferRegistration(): array
+    {
+        $bankEvent = $this->events->create($this->eventPayload([
+            'slug' => $this->prefix . '-bank-' . bin2hex(random_bytes(3)),
+            'paymentConfig' => ['type' => 'organizer_bank', 'bankAccountHolder' => 'Reg Organizer'],
+        ]));
+
+        return $this->registrations->create($this->registrationPayload([
+            'eventId' => $bankEvent['id'],
+            'eventName' => $bankEvent['name'],
+            'distanceId' => $bankEvent['distances'][0]['id'],
+            'distanceName' => $bankEvent['distances'][0]['name'],
+        ]));
     }
 
     private function registrationPayload(array $overrides = []): array

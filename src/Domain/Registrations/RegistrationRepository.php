@@ -1231,6 +1231,60 @@ SQL;
     }
 
     /**
+     * E1.8: trasa B "oznacz jako opłacone" — the organizer (own Wydarzenie) or
+     * admin manually confirms a bank transfer they saw land in their own
+     * account. This performs *exactly* the same `pending` -> `confirmed`
+     * transition applyGatewayNotification() performs for trasa A —
+     * markGatewayPaymentPaid() is reused as-is, not duplicated, per the
+     * ticket's "no parallel ad-hoc status path" requirement. The only
+     * difference from the webhook is what triggers it: an authenticated
+     * organizer/admin clicking a button (permission-checked in routes.php
+     * via $canManageEvent), not a signed gateway callback.
+     *
+     * Guards against exactly the misuse the ticket calls out: a trasa-A
+     * (gateway) registration must never be marked paid through this door —
+     * it throws rather than silently doing nothing, so the route/http layer
+     * can surface a clear error instead of a no-op 200.
+     *
+     * @return array<string, mixed>
+     */
+    public function markManualPaymentPaid(string $id): array
+    {
+        $eventId = $this->registrationEventId($id);
+        if ($eventId === null) {
+            throw new \RuntimeException('registration_not_found');
+        }
+        if ($this->paymentConfigType($eventId) !== 'organizer_bank') {
+            throw new \RuntimeException('registration_not_manual_route');
+        }
+
+        $this->pdo->beginTransaction();
+        try {
+            $registration = $this->lockRegistration($id);
+            if ($registration === null) {
+                throw new \RuntimeException('registration_not_found');
+            }
+            if ($registration['status'] !== 'pending') {
+                throw new \RuntimeException('registration_not_pending');
+            }
+            $this->markGatewayPaymentPaid($id);
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        $registration = $this->find($id);
+        if ($registration === null) {
+            throw new \RuntimeException('registration_not_found');
+        }
+
+        return $registration;
+    }
+
+    /**
      * The refund cycle currently on file for this Zapis, if any — history from a
      * completed (`refunded`) cycle is kept, not deleted, so this stays non-null
      * after a refund finishes.
@@ -1557,6 +1611,12 @@ SQL;
     /** @param array<string, mixed> $row */
     private function hydrate(array $row): array
     {
+        // E1.8: deterministic, unique bank-transfer title for trasa B — pure
+        // `ZC-{id}` derived from the Zapis id, exactly like a QR/ticket code
+        // (E0.2's asTicket()) is derived rather than stored. Always present
+        // (trasa A ignores it), so the client never has to special-case its
+        // absence.
+        $row['transferTitle'] = 'ZC-' . $row['id'];
         $row['merchandiseOrders'] = $this->merchandise($row['id']);
         $row['paymentDetails'] = $this->paymentDetails($row['id']);
         $row['refund'] = $this->refund($row['id']);

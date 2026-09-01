@@ -538,6 +538,394 @@ SQL;
     }
 
     /**
+     * E1.5, spec 13 rozstrzygnięcie 1: Zawodnik never triggers a refund directly —
+     * this only ever creates a *request*, which an organizer (own Wydarzenie) or
+     * admin must separately approveRefund(). Only valid from a `confirmed`
+     * (opłacona) Zapis. Idempotent (point 6): calling again while a cycle is
+     * already `requested`/`approved` is a no-op that returns the current state; a
+     * *new* request is only accepted once the previous cycle finished `refunded`
+     * (supports a second, later, independent partial refund on the same Zapis).
+     */
+    public function requestRefund(string $id, string $requestedBy, ?string $reason = null): ?array
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $registration = $this->lockRegistration($id);
+            if ($registration === null) {
+                $this->pdo->rollBack();
+                return null;
+            }
+            if ($registration['status'] !== 'confirmed') {
+                throw new \RuntimeException('refund_requires_paid_registration');
+            }
+
+            $existing = $this->lockRefund($id);
+            if ($existing !== null && $existing['status'] !== 'refunded') {
+                $this->pdo->commit();
+                return $this->find($id);
+            }
+
+            $this->upsertRefundRow($id, [
+                'status' => 'requested',
+                'requested_at' => date(DATE_ATOM),
+                'requested_by' => $requestedBy,
+                'reason' => $reason,
+                'approved_at' => null,
+                'approved_by' => null,
+                'amount' => null,
+                'route' => null,
+                'completed_at' => null,
+                'completed_by' => null,
+            ]);
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
+        return $this->find($id);
+    }
+
+    /**
+     * Organizator (own Wydarzenie) or admin approves a pending refund request —
+     * spec's "do zwrotu". `$amount` is the saldo to refund (rozstrzygnięcie 3: same
+     * arithmetic mechanism for a full cancellation and a partial refund); when
+     * omitted it defaults to the whole frozen Rozliczenie total (full refund), and
+     * is always clamped to that total as a ceiling regardless of what is passed —
+     * a refund can never exceed what was actually collected. Idempotent: approving
+     * an already-`approved` cycle is a no-op.
+     */
+    public function approveRefund(string $id, string $approvedBy, ?float $amount = null): ?array
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $registration = $this->lockRegistration($id);
+            if ($registration === null) {
+                $this->pdo->rollBack();
+                return null;
+            }
+            $existing = $this->lockRefund($id);
+            if ($existing === null || $existing['status'] === 'refunded') {
+                throw new \RuntimeException('refund_request_not_found');
+            }
+            if ($existing['status'] === 'approved') {
+                $this->pdo->commit();
+                return $this->find($id);
+            }
+
+            $ceiling = $this->totalAmountFor($id);
+            $resolvedAmount = $amount !== null ? max(0.0, min($amount, $ceiling)) : $ceiling;
+
+            $this->pdo->prepare(
+                "UPDATE registration_refunds
+                 SET status = 'approved', approved_at = :approvedAt, approved_by = :approvedBy, amount = :amount, route = :route
+                 WHERE registration_id = :id AND status = 'requested'"
+            )->execute([
+                'approvedAt' => date(DATE_ATOM),
+                'approvedBy' => $approvedBy,
+                'amount' => $this->roundMoney($resolvedAmount),
+                'route' => $this->refundRouteForRegistration($registration),
+                'id' => $id,
+            ]);
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
+        return $this->find($id);
+    }
+
+    /**
+     * Executes the terminal `approved` -> `refunded` transition. Route B (przelew
+     * tradycyjny) is fully manual and this IS the real "organizator odznacza
+     * zwrócono" action for it — in scope per the ticket. Route A (Tpay/PayNow) has
+     * no gateway API integration yet (E1.6/E1.7, deliberately out of scope here —
+     * see initiateGatewayRefund()'s docblock), so today this same action doubles as
+     * the admin's manual bookkeeping confirmation once they have completed the
+     * gateway-side refund themselves outside the platform; once E1.6/E1.7 land,
+     * that path will call this same method automatically from the gateway's
+     * confirmation instead of a human clicking a button. Idempotent: marking an
+     * already-`refunded` cycle refunded again is a no-op. When the refunded amount
+     * covers the whole frozen Rozliczenie (a full refund, not a partial one), the
+     * Zapis itself also moves to `cancelled` — rozstrzygnięcie: registrations.status
+     * must stay consistent with the refund state machine, never a second, silently
+     * diverging source of truth (a partial refund leaves the Zapis `confirmed`,
+     * since the registrant is still attending).
+     */
+    public function markRefunded(string $id, string $completedBy): ?array
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $registration = $this->lockRegistration($id);
+            if ($registration === null) {
+                $this->pdo->rollBack();
+                return null;
+            }
+            $existing = $this->lockRefund($id);
+            if ($existing === null) {
+                throw new \RuntimeException('refund_request_not_found');
+            }
+            if ($existing['status'] === 'refunded') {
+                $this->pdo->commit();
+                return $this->find($id);
+            }
+            if ($existing['status'] !== 'approved') {
+                throw new \RuntimeException('refund_not_approved');
+            }
+
+            $this->pdo->prepare(
+                "UPDATE registration_refunds
+                 SET status = 'refunded', completed_at = :completedAt, completed_by = :completedBy
+                 WHERE registration_id = :id AND status = 'approved'"
+            )->execute([
+                'completedAt' => date(DATE_ATOM),
+                'completedBy' => $completedBy,
+                'id' => $id,
+            ]);
+
+            $refundedAmount = (float) $existing['amount'];
+            $ceiling = $this->totalAmountFor($id);
+            $isFullRefund = $refundedAmount >= ($ceiling - 0.005);
+            if ($isFullRefund && $registration['status'] === 'confirmed') {
+                $cancelled = $this->pdo->prepare(
+                    "UPDATE registrations SET status = 'cancelled' WHERE id = :id AND status = 'confirmed'"
+                );
+                $cancelled->execute(['id' => $id]);
+                if ($cancelled->rowCount() === 1) {
+                    $this->decrementRegisteredCount((string) $registration['distanceId']);
+                }
+            }
+
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
+        return $this->find($id);
+    }
+
+    /**
+     * Route A (Tpay/PayNow) seam for E1.6/E1.7 — deliberately a no-op today. The
+     * ticket's scope (E1.5) is explicit: build the state machine and a clear call
+     * point for the gateway integration, but never fake/mock an actual Tpay/PayNow
+     * API call. Once E1.6/E1.7 exist, this method's body becomes the real gateway
+     * refund call, and on the gateway's own confirmation (webhook or poll) that
+     * integration calls markRefunded() itself — the same terminal transition a
+     * route B organizer triggers by hand today.
+     */
+    public function initiateGatewayRefund(string $id): void
+    {
+        // Intentionally empty — see docblock. Not wired to any HTTP route yet.
+    }
+
+    /**
+     * "Ponowienie" (spec: „nie wiem jak zapłacić" — jednoklikowe ponowienie
+     * płatności): reopens a fresh `pending` state with a brand-new payment window,
+     * for a Zapis that has already `expired`. Deliberately does not call any
+     * gateway (E1.6/E1.7 out of scope, rozstrzygnięcie 8) — it only re-establishes
+     * the same slot-holding state a brand-new Zapis would have, ready for whichever
+     * gateway integration lands later to hang its "start new session" call off.
+     * Re-checks Dystans capacity under the same row lock create() uses, since the
+     * slot may have been taken by someone else while this one sat expired.
+     */
+    public function retryPayment(string $id): ?array
+    {
+        $this->lazilyExpireUnpaidRegistrations();
+        $this->pdo->beginTransaction();
+        try {
+            $registration = $this->lockRegistration($id);
+            if ($registration === null) {
+                $this->pdo->rollBack();
+                return null;
+            }
+            if ($registration['status'] !== 'expired') {
+                throw new \RuntimeException('retry_requires_expired_registration');
+            }
+
+            $distanceRow = $this->lockDistanceForRegistration((string) $registration['eventId'], (string) $registration['distanceId']);
+            $this->enforceCapacity($distanceRow);
+
+            $newExpiry = $this->paymentExpiryDeadline($distanceRow);
+            $updated = $this->pdo->prepare(
+                "UPDATE registrations SET status = 'pending', payment_expires_at = :expiresAt WHERE id = :id AND status = 'expired'"
+            );
+            $updated->execute(['expiresAt' => $newExpiry, 'id' => $id]);
+            if ($updated->rowCount() === 1) {
+                $this->incrementRegisteredCount((string) $distanceRow['distanceId']);
+            }
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
+        return $this->find($id);
+    }
+
+    /**
+     * Bulk trigger for "odwołanie Wydarzenia" (spec rozstrzygnięcie 2): every
+     * `confirmed` Zapis of the Wydarzenie is marked straight to `approved` ("do
+     * zwrotu") in one action — skipping the `requested` step entirely, since an
+     * organizer/admin cancelling their own event is already the approving party,
+     * there is no separate zawodnik request to wait for. Safe to call more than
+     * once (e.g. a defensive re-trigger): a Zapis already mid-cycle or already
+     * `refunded` is left untouched. Returns how many Zapisy were newly marked.
+     */
+    public function bulkApproveRefundsForEvent(string $eventId, string $approvedBy, string $reason = 'event_cancelled'): int
+    {
+        $stmt = $this->pdo->prepare("SELECT id FROM registrations WHERE event_id = :eventId AND status = 'confirmed'");
+        $stmt->execute(['eventId' => $eventId]);
+
+        $count = 0;
+        foreach ($stmt->fetchAll(\PDO::FETCH_COLUMN) ?: [] as $id) {
+            if ($this->bulkApproveOneRefund((string) $id, $approvedBy, $reason)) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    private function bulkApproveOneRefund(string $id, string $approvedBy, string $reason): bool
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $registration = $this->lockRegistration($id);
+            if ($registration === null || $registration['status'] !== 'confirmed') {
+                $this->pdo->rollBack();
+                return false;
+            }
+            $existing = $this->lockRefund($id);
+            if ($existing !== null && $existing['status'] !== 'refunded') {
+                $this->pdo->commit();
+                return false;
+            }
+
+            $this->upsertRefundRow($id, [
+                'status' => 'approved',
+                'requested_at' => null,
+                'requested_by' => null,
+                'reason' => $reason,
+                'approved_at' => date(DATE_ATOM),
+                'approved_by' => $approvedBy,
+                'amount' => $this->roundMoney($this->totalAmountFor($id)),
+                'route' => $this->refundRouteForRegistration($registration),
+                'completed_at' => null,
+                'completed_by' => null,
+            ]);
+            $this->pdo->commit();
+            return true;
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Locks a Zapis row for a refund-cycle transition — same "lock, re-check under
+     * the lock" pattern as expireRegistration()/updateStatus(), just scoped to the
+     * columns the refund methods above actually need.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function lockRegistration(string $id): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, status, event_id AS eventId, distance_id AS distanceId FROM registrations WHERE id = :id FOR UPDATE'
+        );
+        $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function lockRefund(string $id): ?array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM registration_refunds WHERE registration_id = :id FOR UPDATE');
+        $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /**
+     * Upsert on the single-row-per-Zapis refund table (INSERT .. ON DUPLICATE KEY
+     * UPDATE, not a delete+replace like upsertPaymentDetails() — a refund cycle's
+     * history must not vanish on an unrelated write). Must be called from inside a
+     * transaction that already holds the row lock (lockRefund()) when updating an
+     * existing cycle, so a concurrent transition can't interleave.
+     *
+     * @param array<string, mixed> $fields
+     */
+    private function upsertRefundRow(string $registrationId, array $fields): void
+    {
+        $columns = ['registration_id', ...array_keys($fields)];
+        $updates = implode(', ', array_map(static fn (string $column): string => "{$column} = VALUES({$column})", array_keys($fields)));
+        $sql = sprintf(
+            'INSERT INTO registration_refunds (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s',
+            implode(', ', $columns),
+            implode(', ', array_map(static fn (string $column): string => ':' . $column, $columns)),
+            $updates
+        );
+        $this->pdo->prepare($sql)->execute(['registration_id' => $registrationId, ...$fields]);
+    }
+
+    /** The frozen Rozliczenie's DO ZAPŁATY total — the refund ceiling. */
+    private function totalAmountFor(string $registrationId): float
+    {
+        $total = 0.0;
+        foreach ($this->settlementItems($registrationId) as $item) {
+            $total += (float) $item['amount'];
+        }
+
+        return $this->roundMoney(max(0, $total));
+    }
+
+    /**
+     * Trasa A (bramka) vs trasa B (przelew tradycyjny), read from the Wydarzenie's
+     * `payment_config.type` at the moment of approval — frozen onto the refund row
+     * so it does not silently change if the organizer later reconfigures payments.
+     *
+     * @param array<string, mixed> $registration
+     */
+    private function refundRouteForRegistration(array $registration): string
+    {
+        $stmt = $this->pdo->prepare('SELECT payment_config AS paymentConfig FROM events WHERE id = :id');
+        $stmt->execute(['id' => $registration['eventId']]);
+        $raw = $stmt->fetchColumn();
+        $paymentConfig = is_string($raw) && trim((string) $raw) !== '' ? (json_decode((string) $raw, true) ?: []) : [];
+        $type = is_array($paymentConfig) ? (string) ($paymentConfig['type'] ?? '') : '';
+
+        return $type === 'organizer_bank' ? 'manual' : 'gateway';
+    }
+
+    /**
+     * The refund cycle currently on file for this Zapis, if any — history from a
+     * completed (`refunded`) cycle is kept, not deleted, so this stays non-null
+     * after a refund finishes.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function refund(string $registrationId): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT status, requested_at AS requestedAt, requested_by AS requestedBy, reason,
+                    approved_at AS approvedAt, approved_by AS approvedBy, amount, route,
+                    completed_at AS completedAt, completed_by AS completedBy
+             FROM registration_refunds WHERE registration_id = :id'
+        );
+        $stmt->execute(['id' => $registrationId]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            return null;
+        }
+        $row['amount'] = $row['amount'] !== null ? (float) $row['amount'] : null;
+
+        return $row;
+    }
+
+    /**
      * The full six-step sequential pricing algorithm (spec:
      * 07-model-cenowy-zapisu.md). Klient nigdy nie przysyła kwot (rozstrzygnięcie 14)
      * — every amount below is derived server-side from ids/selections the client
@@ -841,6 +1229,7 @@ SQL;
     {
         $row['merchandiseOrders'] = $this->merchandise($row['id']);
         $row['paymentDetails'] = $this->paymentDetails($row['id']);
+        $row['refund'] = $this->refund($row['id']);
 
         $settlement = $this->settlementItems($row['id']);
         $row['settlementItems'] = $settlement;

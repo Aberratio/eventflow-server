@@ -374,8 +374,11 @@ SQL;
 
     /**
      * Published -> Cancelled. Manual, terminal, irreversible. Bulk refund handling for
-     * paid registrations is ticket 13 (out of scope here) — this is the hook point for it
-     * once that lands.
+     * paid registrations (E1.5, spec 13 rozstrzygnięcie 2) is triggered by the caller
+     * (routes.php's `/events/{id}/cancel` handler) via
+     * RegistrationRepository::bulkApproveRefundsForEvent() once this returns
+     * non-null — this repository has no RegistrationRepository dependency, so it is
+     * not done here.
      */
     public function cancel(string $id): ?array
     {
@@ -383,7 +386,6 @@ SQL;
         if (!$event || $event['publicationStatus'] !== 'published') {
             return null;
         }
-        // TODO(ticket 13): trigger bulk refunds for paid registrations before/at cancellation.
         $this->updateById('events', $id, ['publication_status' => 'cancelled']);
         return $this->find($id);
     }

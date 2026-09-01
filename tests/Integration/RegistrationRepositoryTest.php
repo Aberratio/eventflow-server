@@ -982,6 +982,221 @@ final class RegistrationRepositoryTest extends TestCase
         self::assertEquals(122.60, (float) $withModifier['totalAmount']);
     }
 
+    /**
+     * E1.5: żądanie zwrotu jest tylko dozwolone na opłaconym (`confirmed`) Zapisie
+     * — próba na `pending` musi zostać odrzucona, nie cichy no-op.
+     */
+    public function testRequestRefundRejectsUnpaidRegistration(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-refund-unpaid']));
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        self::assertSame('pending', $registration['status']);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('refund_requires_paid_registration');
+        $this->registrations->requestRefund($registration['id'], 'phpunit-user');
+    }
+
+    /**
+     * Happy path: opłacona -> żądanie zwrotu -> zatwierdzenie ("do zwrotu") ->
+     * wykonanie (trasa B, ręcznie) -> zwrócona. A full refund (amount == frozen
+     * totalAmount) also moves the Zapis itself to `cancelled` and releases its
+     * Dystans slot — rozstrzygnięcie 7 (registrations.status must stay consistent
+     * with the refund state machine).
+     */
+    public function testFullRefundLifecycleCancelsRegistrationAndReleasesSlot(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-refund-lifecycle',
+            'distances' => [
+                ['id' => 'd-refund-lifecycle-1', 'price' => 80, 'limit' => 10, 'registeredCount' => 0],
+                ['id' => 'd-refund-lifecycle-2'],
+            ],
+            'paymentConfig' => ['type' => 'organizer_bank'],
+        ]));
+        $payload = $this->registrationPayload($event, '');
+        $payload['distanceId'] = 'd-refund-lifecycle-1';
+        $payload['paymentDetails'] = ['startFeePaid' => true];
+        $registration = $this->registrations->create($payload);
+
+        self::assertSame('confirmed', $registration['status']);
+        self::assertSame(1, $this->rawRegisteredCount('d-refund-lifecycle-1'));
+
+        $requested = $this->registrations->requestRefund($registration['id'], 'phpunit-user', 'nie mogę przyjechać');
+        self::assertSame('requested', $requested['refund']['status']);
+        self::assertSame('phpunit-user', $requested['refund']['requestedBy']);
+
+        $approved = $this->registrations->approveRefund($registration['id'], 'phpunit-organizer');
+        self::assertSame('approved', $approved['refund']['status']);
+        self::assertEquals(80.00, (float) $approved['refund']['amount']);
+        self::assertSame('manual', $approved['refund']['route']);
+
+        $refunded = $this->registrations->markRefunded($registration['id'], 'phpunit-organizer');
+        self::assertSame('refunded', $refunded['refund']['status']);
+        self::assertSame('cancelled', $refunded['status']);
+        self::assertSame(0, $this->rawRegisteredCount('d-refund-lifecycle-1'));
+    }
+
+    /**
+     * Idempotencja (rozstrzygnięcie 6): a second requestRefund()/approveRefund()/
+     * markRefunded() call for a cycle already at (or past) that stage must not
+     * error and must not double-transition anything.
+     */
+    public function testRefundTransitionsAreIdempotent(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-refund-idempotent']));
+        $payload = $this->registrationPayload($event, '');
+        $payload['paymentDetails'] = ['startFeePaid' => true];
+        $registration = $this->registrations->create($payload);
+
+        $this->registrations->requestRefund($registration['id'], 'phpunit-user');
+        $again = $this->registrations->requestRefund($registration['id'], 'phpunit-user');
+        self::assertSame('requested', $again['refund']['status']);
+
+        $this->registrations->approveRefund($registration['id'], 'phpunit-organizer');
+        $approvedAgain = $this->registrations->approveRefund($registration['id'], 'phpunit-organizer-2');
+        self::assertSame('approved', $approvedAgain['refund']['status']);
+        // The second approve() call must not have overwritten who approved it first.
+        self::assertSame('phpunit-organizer', $approvedAgain['refund']['approvedBy']);
+
+        $this->registrations->markRefunded($registration['id'], 'phpunit-organizer');
+        $refundedAgain = $this->registrations->markRefunded($registration['id'], 'phpunit-organizer-2');
+        self::assertSame('refunded', $refundedAgain['refund']['status']);
+        self::assertSame('phpunit-organizer', $refundedAgain['refund']['completedBy']);
+    }
+
+    /**
+     * approveRefund() clamps a caller-supplied amount at the frozen Rozliczenie
+     * total (rozstrzygnięcie 3: saldo dodatnie z Rozliczenia is the ceiling, even
+     * for a deliberately partial refund) — and a partial refund must leave the
+     * Zapis itself `confirmed` (the registrant is still attending), not cancel it.
+     */
+    public function testPartialRefundAmountIsClampedAndDoesNotCancelRegistration(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-refund-partial']));
+        $payload = $this->registrationPayload($event, '');
+        $payload['paymentDetails'] = ['startFeePaid' => true];
+        $registration = $this->registrations->create($payload);
+        self::assertEquals(80.00, (float) $registration['totalAmount']);
+
+        $this->registrations->requestRefund($registration['id'], 'phpunit-user');
+        $approved = $this->registrations->approveRefund($registration['id'], 'phpunit-organizer', 200.0);
+        self::assertEquals(80.00, (float) $approved['refund']['amount'], 'amount must be clamped to the settlement total');
+
+        $partial = $this->registrations->approveRefund($registration['id'], 'phpunit-organizer');
+        // Already approved — idempotent, keeps the clamped amount from the first call.
+        self::assertEquals(80.00, (float) $partial['refund']['amount']);
+
+        $refunded = $this->registrations->markRefunded($registration['id'], 'phpunit-organizer');
+        self::assertSame('cancelled', $refunded['status'], 'the full settlement amount was refunded, so this is a full refund');
+    }
+
+    /**
+     * Zawodnik never triggers a refund directly (rozstrzygnięcie 1) — this is
+     * enforced at the HTTP layer (RegistrationContractTest), but the repository
+     * method itself has no such gate; approveRefund()/markRefunded() require an
+     * existing `requested`/`approved` cycle, so calling markRefunded() with nothing
+     * requested/approved yet must fail loudly rather than silently completing.
+     */
+    public function testMarkRefundedWithoutAnApprovedCycleFails(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-refund-no-cycle']));
+        $payload = $this->registrationPayload($event, '');
+        $payload['paymentDetails'] = ['startFeePaid' => true];
+        $registration = $this->registrations->create($payload);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('refund_request_not_found');
+        $this->registrations->markRefunded($registration['id'], 'phpunit-organizer');
+    }
+
+    /**
+     * Odwołanie Wydarzenia (rozstrzygnięcie 2): a bulk operation, not N individual
+     * requests — every `confirmed` Zapis of the Wydarzenie moves straight to
+     * `approved` ("do zwrotu") in one call, `pending` ones are left untouched (they
+     * never paid anything to refund), and calling it twice does not double-process
+     * an already-mid-cycle Zapis.
+     */
+    public function testBulkApproveRefundsForEventOnlyTouchesConfirmedRegistrationsOnce(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-refund-bulk',
+            'distances' => [
+                ['id' => 'd-refund-bulk-1', 'price' => 80, 'limit' => 10, 'registeredCount' => 0],
+                ['id' => 'd-refund-bulk-2'],
+            ],
+        ]));
+
+        $paidPayload = $this->registrationPayload($event, '', 'phpunit-bulk-paid');
+        $paidPayload['distanceId'] = 'd-refund-bulk-1';
+        $paidPayload['paymentDetails'] = ['startFeePaid' => true];
+        $paid = $this->registrations->create($paidPayload);
+
+        $unpaidPayload = $this->registrationPayload($event, '', 'phpunit-bulk-unpaid');
+        $unpaidPayload['distanceId'] = 'd-refund-bulk-1';
+        $unpaid = $this->registrations->create($unpaidPayload);
+
+        $count = $this->registrations->bulkApproveRefundsForEvent((string) $event['id'], 'phpunit-admin');
+        self::assertSame(1, $count);
+
+        $paidReloaded = $this->registrations->find($paid['id']);
+        self::assertSame('approved', $paidReloaded['refund']['status']);
+        self::assertSame('event_cancelled', $paidReloaded['refund']['reason']);
+
+        $unpaidReloaded = $this->registrations->find($unpaid['id']);
+        self::assertNull($unpaidReloaded['refund']);
+
+        // A second bulk trigger (e.g. a defensive re-call) must not re-process the
+        // already-mid-cycle paid registration.
+        $secondCount = $this->registrations->bulkApproveRefundsForEvent((string) $event['id'], 'phpunit-admin-2');
+        self::assertSame(0, $secondCount);
+        self::assertSame('phpunit-admin', $this->registrations->find($paid['id'])['refund']['approvedBy']);
+    }
+
+    /**
+     * "Ponowienie" (spec: jednoklikowe ponowienie płatności): a `wygasła` Zapis
+     * reopens as a fresh `pending` with a brand-new payment-window deadline, and
+     * re-occupies the Dystans slot it had released on expiry.
+     */
+    public function testRetryPaymentReopensExpiredRegistrationWithFreshWindow(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-retry',
+            'distances' => [
+                ['id' => 'd-retry-1', 'price' => 80, 'limit' => 10, 'registeredCount' => 0],
+                ['id' => 'd-retry-2'],
+            ],
+        ]));
+        $payload = $this->registrationPayload($event, '');
+        $payload['distanceId'] = 'd-retry-1';
+        $registration = $this->registrations->create($payload);
+        $this->backdatePaymentExpiry($registration['id'], (new \DateTimeImmutable('-1 minute'))->format(DATE_ATOM));
+
+        $expired = $this->registrations->find($registration['id']);
+        self::assertSame('expired', $expired['status']);
+        self::assertSame(0, $this->rawRegisteredCount('d-retry-1'));
+
+        $retried = $this->registrations->retryPayment($registration['id']);
+        self::assertSame('pending', $retried['status']);
+        self::assertSame(1, $this->rawRegisteredCount('d-retry-1'));
+
+        $newExpiresAt = new \DateTimeImmutable((string) $this->rawRegistration($registration['id'])['paymentExpiresAt']);
+        $expectedAt = new \DateTimeImmutable('+45 minutes');
+        self::assertEqualsWithDelta($expectedAt->getTimestamp(), $newExpiresAt->getTimestamp(), 30);
+    }
+
+    /** Retrying a Zapis that never expired (still pending/confirmed) must be rejected. */
+    public function testRetryPaymentRejectsNonExpiredRegistration(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-retry-not-expired']));
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('retry_requires_expired_registration');
+        $this->registrations->retryPayment($registration['id']);
+    }
+
     private function insuranceVariantId(string $id, float $baseFee, float $ageMultiplier, int $maxAge): string
     {
         $this->pdo->prepare(
@@ -1035,6 +1250,7 @@ final class RegistrationRepositoryTest extends TestCase
                 $this->pdo->prepare('DELETE FROM registration_merchandise_orders WHERE registration_id = :id')->execute(['id' => $registrationId]);
                 $this->pdo->prepare('DELETE FROM registration_payment_details WHERE registration_id = :id')->execute(['id' => $registrationId]);
                 $this->pdo->prepare('DELETE FROM registration_settlement_items WHERE registration_id = :id')->execute(['id' => $registrationId]);
+                $this->pdo->prepare('DELETE FROM registration_refunds WHERE registration_id = :id')->execute(['id' => $registrationId]);
             }
             $distanceIds = $this->pdo->prepare('SELECT id FROM event_distances WHERE event_id = :id');
             $distanceIds->execute(['id' => $id]);

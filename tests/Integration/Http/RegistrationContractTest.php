@@ -191,6 +191,150 @@ final class RegistrationContractTest extends HttpTestCase
         self::assertSame(401, $response->getStatusCode());
     }
 
+    /**
+     * E1.5, spec 13 rozstrzygnięcie 1: Zawodnik (właściciel Zapisu) can request a
+     * refund for their own paid registration, and — since this is only a request,
+     * not an execution — the response reflects `requested`, not something further
+     * along the state machine.
+     */
+    public function testParticipantCanRequestRefundOnOwnPaidRegistration(): void
+    {
+        $reg = $this->paidRegistration();
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/refund-request',
+            ['reason' => 'nie mogę przyjechać'],
+            $this->bearer($this->participant['id'], 'participant', $this->participant['email'])
+        );
+        $payload = $this->json($response);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('requested', $payload['data']['refund']['status']);
+    }
+
+    /** Zawodnik never triggers a refund directly — only ever requests it. */
+    public function testParticipantCannotRequestRefundForSomeoneElsesRegistration(): void
+    {
+        $other = $this->users->create([
+            'name' => 'Other Participant',
+            'email' => $this->prefix . '-other-participant@example.test',
+            'password' => 'demo1234',
+            'role' => 'participant',
+        ]);
+        $reg = $this->paidRegistration();
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/refund-request',
+            [],
+            $this->bearer($other['id'], 'participant', $other['email'])
+        );
+
+        self::assertSame(403, $response->getStatusCode());
+    }
+
+    /** Zawodnik never approves or executes a refund — only the organizer/admin does. */
+    public function testParticipantCannotApproveOwnRefundRequest(): void
+    {
+        $reg = $this->paidRegistration();
+        $this->registrations->requestRefund($reg['id'], $this->participant['id']);
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/refund-approve',
+            [],
+            $this->bearer($this->participant['id'], 'participant', $this->participant['email'])
+        );
+
+        self::assertSame(403, $response->getStatusCode());
+    }
+
+    /**
+     * canManageEvent() scoping: an organizer who does not own this Wydarzenie must
+     * not be able to approve a refund on it, even though they hold the organizer
+     * role in general.
+     */
+    public function testOtherOrganizerCannotApproveRefundForSomeoneElsesEvent(): void
+    {
+        $otherOrganizer = $this->users->create([
+            'name' => 'Other Organizer',
+            'email' => $this->prefix . '-other-organizer@example.test',
+            'password' => 'demo1234',
+            'role' => 'organizer',
+        ]);
+        $reg = $this->paidRegistration();
+        $this->registrations->requestRefund($reg['id'], $this->participant['id']);
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/refund-approve',
+            [],
+            $this->bearer($otherOrganizer['id'], 'organizer', $otherOrganizer['email'])
+        );
+
+        self::assertSame(403, $response->getStatusCode());
+    }
+
+    /** The organizer who owns the event can approve, then mark it as refunded (route B). */
+    public function testOwningOrganizerCanApproveAndCompleteRefund(): void
+    {
+        $reg = $this->paidRegistration();
+        $this->registrations->requestRefund($reg['id'], $this->participant['id']);
+
+        $approveResponse = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/refund-approve',
+            [],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        $approvePayload = $this->json($approveResponse);
+        self::assertSame(200, $approveResponse->getStatusCode());
+        self::assertSame('approved', $approvePayload['data']['refund']['status']);
+
+        $completeResponse = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $reg['id'] . '/refund-complete',
+            [],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        $completePayload = $this->json($completeResponse);
+        self::assertSame(200, $completeResponse->getStatusCode());
+        self::assertSame('refunded', $completePayload['data']['refund']['status']);
+        self::assertSame('cancelled', $completePayload['data']['status']);
+    }
+
+    /**
+     * Odwołanie Wydarzenia (rozstrzygnięcie 2): cancelling the event bulk-marks
+     * every paid registration as `approved` ("do zwrotu") in one action — no
+     * per-registration refund-request round trip needed.
+     */
+    public function testCancellingEventBulkApprovesRefundsForPaidRegistrations(): void
+    {
+        $reg = $this->paidRegistration();
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/events/' . $this->activeEvent['id'] . '/cancel',
+            [],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        self::assertSame(200, $response->getStatusCode());
+
+        $reloaded = $this->registrations->find($reg['id']);
+        self::assertSame('approved', $reloaded['refund']['status']);
+        self::assertSame('event_cancelled', $reloaded['refund']['reason']);
+    }
+
+    /** @return array<string, mixed> */
+    private function paidRegistration(): array
+    {
+        return $this->registrations->create([
+            ...$this->registrationPayload(),
+            'paymentDetails' => ['startFeePaid' => true],
+        ]);
+    }
+
     private function registrationPayload(array $overrides = []): array
     {
         return array_merge([
@@ -213,6 +357,8 @@ final class RegistrationContractTest extends HttpTestCase
         foreach (($stmt->fetchAll(\PDO::FETCH_COLUMN) ?: []) as $regId) {
             $this->pdo->prepare('DELETE FROM registration_merchandise_orders WHERE registration_id = :id')->execute(['id' => $regId]);
             $this->pdo->prepare('DELETE FROM registration_payment_details WHERE registration_id = :id')->execute(['id' => $regId]);
+            $this->pdo->prepare('DELETE FROM registration_settlement_items WHERE registration_id = :id')->execute(['id' => $regId]);
+            $this->pdo->prepare('DELETE FROM registration_refunds WHERE registration_id = :id')->execute(['id' => $regId]);
         }
         $this->pdo->prepare('DELETE FROM registrations WHERE event_id = :id')->execute(['id' => $eventId]);
     }

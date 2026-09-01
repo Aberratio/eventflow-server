@@ -567,7 +567,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         // Published -> Cancelled. Manual, terminal, Owner or admin only per the matrix
         // (deliberately narrower than $eventManagerRoles — no moderator, no Event Team
         // other than the owner). Bulk refunds are ticket 13, out of scope here.
-        $api->post('/events/{id}/cancel', function (Request $request, Response $response, array $args) use ($events, $adminRoles, $logActivity) {
+        $api->post('/events/{id}/cancel', function (Request $request, Response $response, array $args) use ($events, $registrations, $adminRoles, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             $role = (string) ($auth['role'] ?? '');
@@ -579,6 +579,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if (!$cancelled) {
                 return JsonResponder::error($response, 'invalid_status_transition', 'Only a published event can be cancelled', 409);
             }
+            // E1.5, spec 13 rozstrzygnięcie 2: odwołanie Wydarzenia to zbiorcza operacja —
+            // wszystkie opłacone Zapisy trafiają w jednej akcji do „do zwrotu", nie N
+            // osobnych żądań zawodnika.
+            $registrations->bulkApproveRefundsForEvent((string) $args['id'], (string) ($auth['sub'] ?? ''));
             $logActivity($auth, 'event_cancelled', 'Odwołano wydarzenie', 'event', (string) $args['id'], (string) ($cancelled['name'] ?? ''));
             return JsonResponder::ok($response, $cancelled);
         })->add(new AuthMiddleware($jwt, ['organizer', 'admin', 'superadmin']));
@@ -742,6 +746,106 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             ->add(new AuthMiddleware($jwt));
         $api->patch('/registrations/{id}/payment-details', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->updatePaymentDetails($args['id'], $body($request))))
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        // E1.5: Maszyna stanów płatności — zwroty. Zawodnik (właściciel Zapisu, albo
+        // kto go zapisał — registeredById) może tylko poprosić; organizator (własne
+        // Wydarzenie) lub admin/moderator zatwierdza i wykonuje (trasa B, ręcznie —
+        // trasa A/bramka to E1.6/E1.7, zob. RegistrationRepository::initiateGatewayRefund()).
+        $isRegistrationOwner = static function (?array $registration, array $auth): bool {
+            if (!$registration) {
+                return false;
+            }
+            $callerId = (string) ($auth['sub'] ?? '');
+            return $callerId !== '' && (
+                (string) $registration['userId'] === $callerId
+                || (string) ($registration['registeredById'] ?? '') === $callerId
+            );
+        };
+        $api->post('/registrations/{id}/refund-request', function (Request $request, Response $response, array $args) use ($registrations, $events, $canManageEvent, $isRegistrationOwner, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $registration = $registrations->find($args['id']);
+            if (!$registration) {
+                return JsonResponder::error($response, 'not_found', 'Registration not found', 404);
+            }
+            if (!$isRegistrationOwner($registration, $auth) && !$canManageEvent($events->find((string) $registration['eventId']), $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $reason = trim((string) ($body($request)['reason'] ?? ''));
+            try {
+                return JsonResponder::ok($response, $registrations->requestRefund($args['id'], (string) ($auth['sub'] ?? ''), $reason !== '' ? $reason : null));
+            } catch (RuntimeException $e) {
+                if ($e->getMessage() === 'refund_requires_paid_registration') {
+                    return JsonResponder::error($response, 'refund_requires_paid_registration', 'Only a paid registration can request a refund.', 409);
+                }
+                throw $e;
+            }
+        })->add(new AuthMiddleware($jwt));
+        $api->post('/registrations/{id}/refund-approve', function (Request $request, Response $response, array $args) use ($registrations, $events, $canManageEvent, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $registration = $registrations->find($args['id']);
+            if (!$registration) {
+                return JsonResponder::error($response, 'not_found', 'Registration not found', 404);
+            }
+            if (!$canManageEvent($events->find((string) $registration['eventId']), $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $payload = $body($request);
+            $amount = isset($payload['amount']) && $payload['amount'] !== '' && $payload['amount'] !== null ? (float) $payload['amount'] : null;
+            try {
+                return JsonResponder::ok($response, $registrations->approveRefund($args['id'], (string) ($auth['sub'] ?? ''), $amount));
+            } catch (RuntimeException $e) {
+                if ($e->getMessage() === 'refund_request_not_found') {
+                    return JsonResponder::error($response, 'refund_request_not_found', 'No refund request pending for this registration.', 409);
+                }
+                throw $e;
+            }
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->post('/registrations/{id}/refund-complete', function (Request $request, Response $response, array $args) use ($registrations, $events, $canManageEvent) {
+            $auth = (array) $request->getAttribute('auth');
+            $registration = $registrations->find($args['id']);
+            if (!$registration) {
+                return JsonResponder::error($response, 'not_found', 'Registration not found', 404);
+            }
+            if (!$canManageEvent($events->find((string) $registration['eventId']), $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            try {
+                return JsonResponder::ok($response, $registrations->markRefunded($args['id'], (string) ($auth['sub'] ?? '')));
+            } catch (RuntimeException $e) {
+                $errors = [
+                    'refund_request_not_found' => 'No refund cycle found for this registration.',
+                    'refund_not_approved' => 'The refund must be approved before it can be marked as completed.',
+                ];
+                if (isset($errors[$e->getMessage()])) {
+                    return JsonResponder::error($response, $e->getMessage(), $errors[$e->getMessage()], 409);
+                }
+                throw $e;
+            }
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->post('/registrations/{id}/retry-payment', function (Request $request, Response $response, array $args) use ($registrations, $events, $canManageEvent, $isRegistrationOwner) {
+            $auth = (array) $request->getAttribute('auth');
+            $registration = $registrations->find($args['id']);
+            if (!$registration) {
+                return JsonResponder::error($response, 'not_found', 'Registration not found', 404);
+            }
+            if (!$isRegistrationOwner($registration, $auth) && !$canManageEvent($events->find((string) $registration['eventId']), $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            try {
+                return JsonResponder::ok($response, $registrations->retryPayment($args['id']));
+            } catch (RuntimeException $e) {
+                $errors = [
+                    'retry_requires_expired_registration' => ['retry_requires_expired_registration', 'Only an expired registration can be retried.', 409],
+                    'registration_capacity_exceeded' => ['registration_capacity_exceeded', 'This distance has reached its participant limit.', 409],
+                    'registration_distance_invalid' => ['registration_distance_invalid', 'Selected distance is invalid.', 422],
+                ];
+                if (isset($errors[$e->getMessage()])) {
+                    [$code, $message, $status] = $errors[$e->getMessage()];
+                    return JsonResponder::error($response, $code, $message, $status);
+                }
+                throw $e;
+            }
+        })->add(new AuthMiddleware($jwt));
 
         $api->get('/virtual-results', function (Request $request, Response $response) use ($events, $virtualResults, $query, $isStaffRole, $canManageEvent) {
             $auth = (array) $request->getAttribute('auth');

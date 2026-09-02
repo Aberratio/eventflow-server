@@ -1,0 +1,144 @@
+<?php
+
+declare(strict_types=1);
+
+namespace ZmierzymyCzas\Domain\Mailer\CentralMailer;
+
+use ZmierzymyCzas\Domain\Mailer\Http\HttpClientInterface;
+use ZmierzymyCzas\Domain\Mailer\Http\HttpResponse;
+
+/**
+ * Real Central Mailer client-zone API client (kontrakt-central-mailer.md §1.2),
+ * built against that document's reverse-engineered contract — every call here is
+ * a genuine HTTP request to Central Mailer's `/emails*` endpoints; only the
+ * credentials (CentralMailerConfig, from env) are placeholders in dev/test.
+ *
+ * E1.9 scope only: single-message enqueue plus the two read endpoints needed for
+ * reconciliation. `/emails/batch` is deliberately not implemented (out of scope
+ * per the ticket).
+ */
+final class CentralMailerClient implements CentralMailerClientInterface
+{
+    private const VALID_PRIORITIES = ['normal', 'high', 'technical'];
+
+    public function __construct(
+        private readonly HttpClientInterface $http,
+        private readonly CentralMailerConfig $config,
+    ) {
+    }
+
+    public function enqueue(array $email, ?string $idempotencyKey = null): array
+    {
+        $priority = (string) ($email['priority'] ?? 'normal');
+        if (!in_array($priority, self::VALID_PRIORITIES, true)) {
+            throw new \InvalidArgumentException('central_mailer_invalid_priority: ' . $priority);
+        }
+
+        $payload = [
+            'to' => (string) $email['to'],
+            'subject' => (string) $email['subject'],
+            'html' => (string) $email['html'],
+            'priority' => $priority,
+        ];
+
+        if (isset($email['text']) && $email['text'] !== null) {
+            $payload['text'] = (string) $email['text'];
+        }
+
+        // §1.2: category is forced to `transactional` server-side for
+        // priority=technical regardless of what is sent — made explicit here too
+        // so the outbox records exactly what will actually apply.
+        $category = $email['category'] ?? null;
+        if ($priority === 'technical') {
+            $category = 'transactional';
+        }
+        if ($category !== null) {
+            $payload['category'] = (string) $category;
+        }
+
+        if (!empty($email['contextId'])) {
+            $payload['contextId'] = (string) $email['contextId'];
+        }
+        if (!empty($email['metadata'])) {
+            $payload['metadata'] = $email['metadata'];
+        }
+        if (!empty($email['attachments'])) {
+            $payload['attachments'] = $email['attachments'];
+        }
+
+        $headers = [
+            'X-API-Key' => $this->config->apiKey,
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json',
+        ];
+        if ($idempotencyKey !== null && $idempotencyKey !== '') {
+            $headers['Idempotency-Key'] = $idempotencyKey;
+        }
+
+        $response = $this->http->request(
+            'POST',
+            $this->config->baseUrl . '/emails',
+            $headers,
+            (string) json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        );
+
+        $this->throwOnClientErrors($response);
+
+        if (!$response->isSuccessful()) {
+            throw new \RuntimeException('central_mailer_enqueue_failed: HTTP ' . $response->status . ' ' . $response->body);
+        }
+
+        $decoded = $response->json();
+        $id = (string) ($decoded['id'] ?? '');
+        $status = (string) ($decoded['status'] ?? '');
+        if ($id === '') {
+            throw new \RuntimeException('central_mailer_enqueue_malformed_response');
+        }
+
+        return ['id' => $id, 'status' => $status];
+    }
+
+    public function getStatus(string $centralMailerEmailId): array
+    {
+        $response = $this->http->request('GET', $this->config->baseUrl . '/emails/' . rawurlencode($centralMailerEmailId), [
+            'X-API-Key' => $this->config->apiKey,
+            'Accept' => 'application/json',
+        ]);
+
+        if (!$response->isSuccessful()) {
+            throw new \RuntimeException('central_mailer_get_status_failed: HTTP ' . $response->status . ' ' . $response->body);
+        }
+
+        return $response->json();
+    }
+
+    public function getStatusByContext(string $contextId, int $limit = 500, int $offset = 0): array
+    {
+        $query = http_build_query(['limit' => $limit, 'offset' => $offset]);
+
+        $response = $this->http->request(
+            'GET',
+            $this->config->baseUrl . '/emails/context/' . rawurlencode($contextId) . '?' . $query,
+            [
+                'X-API-Key' => $this->config->apiKey,
+                'Accept' => 'application/json',
+            ]
+        );
+
+        if (!$response->isSuccessful()) {
+            throw new \RuntimeException('central_mailer_get_status_by_context_failed: HTTP ' . $response->status . ' ' . $response->body);
+        }
+
+        return $response->json();
+    }
+
+    private function throwOnClientErrors(HttpResponse $response): void
+    {
+        if ($response->status === 409) {
+            throw new IdempotencyConflictException('central_mailer_idempotency_conflict: ' . $response->body);
+        }
+        if ($response->status === 422) {
+            throw new RecipientSuppressedException('central_mailer_recipient_suppressed: ' . $response->body);
+        }
+    }
+}

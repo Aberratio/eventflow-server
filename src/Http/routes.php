@@ -31,6 +31,13 @@ use ZmierzymyCzas\Domain\Results\VirtualResultRepository;
 use ZmierzymyCzas\Domain\Series\SeriesRepository;
 use ZmierzymyCzas\Domain\Certificate\CertificateRepository;
 use ZmierzymyCzas\Domain\Insurance\InsuranceRepository;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerClient;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxRepository;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
+use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
+use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
+use ZmierzymyCzas\Domain\Mailer\Http\CurlHttpClient as MailerCurlHttpClient;
 use ZmierzymyCzas\Domain\Shop\OrderRepository;
 use ZmierzymyCzas\Domain\Shop\ShopRepository;
 use ZmierzymyCzas\Domain\Care\CareRepository;
@@ -64,7 +71,39 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $payNowHttp = new CurlHttpClient();
     $payNowGateway = $payNowConfig->isConfigured() ? new PayNowGateway($payNowHttp, $payNowConfig) : null;
     $payNowNotificationVerifier = new PayNowNotificationVerifier($payNowConfig);
-    $registrations = new RegistrationRepository($pdo, $tpayGateway, $payNowGateway);
+    // E1.10: Central Mailer-backed critical mail sending, built on top of E1.9's
+    // outbox service. Same "isConfigured() gates whether sending is even
+    // attempted" stance as Tpay/PayNow above — CriticalMailer checks
+    // CentralMailerConfig::isConfigured() itself before every send, so this is
+    // safe to build and hand out even when CENTRAL_MAILER_API_KEY/BASE_URL are
+    // unset (local dev, CI, this repo's own test suite).
+    $centralMailerConfig = CentralMailerConfig::fromEnv();
+    $centralMailerClient = new CentralMailerClient(new MailerCurlHttpClient(), $centralMailerConfig);
+    $centralMailerOutbox = new CentralMailerOutboxService($centralMailerClient, new CentralMailerOutboxRepository($pdo));
+    $mailTemplates = new MailTemplateRepository($pdo);
+    $mailer = new CriticalMailer($centralMailerConfig, $centralMailerOutbox, $mailTemplates);
+    $registrations = new RegistrationRepository($pdo, $tpayGateway, $payNowGateway, $mailer);
+    // E1.10 mail #8 ("Zmiana/odwołanie Wydarzenia", 17 §1 row 8) — one call per
+    // registered Zapis. Lives here (not inside EventRepository) for the same
+    // reason bulkApproveRefundsForEvent() is orchestrated from routes.php
+    // rather than from EventRepository::cancel() itself (see that method's
+    // doc comment): EventRepository deliberately has no RegistrationRepository
+    // dependency, so cross-repo fan-out belongs at this call-site layer.
+    $notifyEventChanged = static function (array $event, string $changeSummary, string $refundStatus = '') use ($registrations, $mailer): void {
+        foreach ($registrations->byEvent((string) $event['id']) as $registration) {
+            if (in_array((string) ($registration['status'] ?? ''), ['cancelled', 'removed'], true)) {
+                continue;
+            }
+            $mailer->sendEventChanged(
+                (string) $event['id'],
+                (string) $registration['id'],
+                (string) ($registration['userEmail'] ?? ''),
+                (string) ($event['name'] ?? ''),
+                $changeSummary,
+                $refundStatus
+            );
+        }
+    };
     $results = new ResultRepository($pdo);
     $resultImports = new ResultImportRepository($pdo);
     $virtualResults = new VirtualResultRepository($pdo);
@@ -216,7 +255,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
@@ -344,7 +383,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, ['user' => $user, 'token' => $token]);
         });
 
-        $api->post('/auth/register', function (Request $request, Response $response) use ($users, $body) {
+        $api->post('/auth/register', function (Request $request, Response $response) use ($users, $body, $jwt, $mailer) {
             $payload = $body($request);
             if (empty($payload['name']) || empty($payload['email']) || empty($payload['password'])) {
                 return JsonResponder::error($response, 'validation_error', 'Name, email and password are required', 422);
@@ -352,11 +391,38 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if ($users->findByEmail((string) $payload['email'])) {
                 return JsonResponder::error($response, 'email_taken', 'Email is already registered', 409);
             }
-            return JsonResponder::ok($response, $users->create($payload), 'User registered', 201);
+            $created = $users->create($payload);
+            // E1.10 mail #1 ("Weryfikacja adresu e-mail", 17 §1 row 1). This
+            // ticket does not build a full email-verification feature (no
+            // `email_verified_at` column, no consuming endpoint exists in this
+            // codebase) — only the mail catalog's trigger wiring is in scope.
+            // The verification token is a short-lived JWT reusing JwtService
+            // (already used for login sessions) rather than a new table, purely
+            // to make the link in the mail meaningful; wiring an actual
+            // `/auth/verify-email` consumer is a separate, later concern.
+            $verificationToken = $jwt->issue(['sub' => $created['id'], 'purpose' => 'email_verification']);
+            $verificationLink = rtrim((string) Env::get('APP_URL', ''), '/') . '/verify-email?token=' . $verificationToken;
+            $mailer->sendEmailVerification((string) $created['id'], (string) $created['email'], $verificationLink);
+            return JsonResponder::ok($response, $created, 'User registered', 201);
         });
 
         $api->post('/auth/logout', static fn (Request $request, Response $response) => JsonResponder::ok($response, null));
-        $api->post('/auth/password/reset', static fn (Request $request, Response $response) => JsonResponder::ok($response, null, 'Password reset email queued'));
+        $api->post('/auth/password/reset', function (Request $request, Response $response) use ($users, $body, $jwt, $mailer) {
+            $payload = $body($request);
+            $email = trim((string) ($payload['email'] ?? ''));
+            $user = $email !== '' ? $users->findByEmail($email) : null;
+            // E1.10 mail #2 ("Reset hasła", 17 §1 row 2). Same scope boundary as
+            // registration above: only the mail trigger is wired here, not a full
+            // token-consuming "set new password" endpoint (out of scope for this
+            // ticket). Never reveals whether the email exists — always 200.
+            if ($user !== null) {
+                $ttlMinutes = max(1, (int) ((int) Env::get('JWT_TTL_SECONDS', '86400')) / 60);
+                $resetToken = $jwt->issue(['sub' => $user['id'], 'purpose' => 'password_reset']);
+                $resetLink = rtrim((string) Env::get('APP_URL', ''), '/') . '/reset-password?token=' . $resetToken;
+                $mailer->sendPasswordReset((string) $user['id'], (string) $user['email'], $resetLink, $ttlMinutes);
+            }
+            return JsonResponder::ok($response, null, 'Password reset email queued');
+        });
 
         $api->get('/auth/me', function (Request $request, Response $response) use ($users) {
             $auth = (array) $request->getAttribute('auth');
@@ -412,13 +478,26 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->patch('/users/{id}/status', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount, $logActivity) {
-            if ($touchesAdminAccount($users->find($args['id']), []) && !$isSuperAdmin($request)) {
+        $api->patch('/users/{id}/status', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount, $logActivity, $mailer) {
+            $existing = $users->find($args['id']);
+            if ($touchesAdminAccount($existing, []) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can change admin status', 403);
             }
-            $status = $body($request)['status'] ?? null;
+            $payload = $body($request);
+            $status = $payload['status'] ?? null;
             $updated = $users->update($args['id'], ['status' => $status]);
             $logActivity((array) $request->getAttribute('auth'), 'user_status_changed', 'Zmieniono status użytkownika na ' . (string) $status, 'user', (string) $args['id'], (string) ($updated['name'] ?? ''));
+            // E1.10 mail #3 ("Blokada konta", 09 §5.11) — fires exactly on the
+            // active -> blocked edge, not on every /status write (re-blocking an
+            // already-blocked account, or unblocking, sends nothing).
+            if ($status === 'blocked' && (string) ($existing['status'] ?? '') !== 'blocked' && $updated !== null) {
+                $mailer->sendAccountLocked(
+                    (string) $updated['id'],
+                    (string) $updated['email'],
+                    (string) ($payload['reason'] ?? 'Naruszenie regulaminu platformy.'),
+                    (string) Env::get('SUPPORT_EMAIL', 'kontakt@zmierzymyczas.pl')
+                );
+            }
             return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt, $staffRoles));
@@ -490,7 +569,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 throw $e;
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->patch('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $users, $body, $canManageEvent, $isStaffRole, $logActivity) {
+        $api->patch('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $users, $body, $canManageEvent, $isStaffRole, $logActivity, $notifyEventChanged) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             if (!$canManageEvent($event, $auth)) {
@@ -536,6 +615,21 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             $updated = $events->update($args['id'], $payload);
             $logActivity($auth, 'event_updated', 'Zaktualizowano wydarzenie', 'event', (string) $args['id'], (string) ($updated['name'] ?? $event['name'] ?? ''));
+            // E1.10 mail #8: only "pola krytyczne" (17 §1 row 8) — date and
+            // location — and only once the event is actually live (Published/
+            // Finished); a Draft/Submitted edit has no registrants to notify yet.
+            if ($updated !== null && in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished'], true)) {
+                $changes = [];
+                if (array_key_exists('date', $payload) && (string) $payload['date'] !== (string) ($event['date'] ?? '')) {
+                    $changes[] = sprintf('data wydarzenia: %s -> %s', (string) ($event['date'] ?? ''), (string) $payload['date']);
+                }
+                if (array_key_exists('location', $payload) && (string) $payload['location'] !== (string) ($event['location'] ?? '')) {
+                    $changes[] = sprintf('miejsce: %s -> %s', (string) ($event['location'] ?? ''), (string) $payload['location']);
+                }
+                if ($changes !== []) {
+                    $notifyEventChanged($updated, implode('; ', $changes), '');
+                }
+            }
             return JsonResponder::ok($response, $updated);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->delete('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $isStaffRole, $logActivity) {
@@ -570,7 +664,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $logActivity($auth, 'event_submitted', 'Przesłano wydarzenie do moderacji', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
             return JsonResponder::ok($response, $event);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->post('/events/{id}/approve', function (Request $request, Response $response, array $args) use ($events, $logActivity) {
+        $api->post('/events/{id}/approve', function (Request $request, Response $response, array $args) use ($events, $users, $logActivity, $mailer) {
             $auth = (array) $request->getAttribute('auth');
             // Approve is a one-step Submitted -> Published (E1.1) — there is no separate
             // "approved" resting state to publish from afterwards.
@@ -579,9 +673,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be approved in its current status', 409);
             }
             $logActivity($auth, 'event_approved', 'Zatwierdzono i opublikowano wydarzenie', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
+            // E1.10 mail #9 ("Decyzja moderacji", 17 §1 row 9) — recipient is the
+            // "Event Team", which (per EventRepository's own permission-matrix
+            // doc comment) has no membership model yet in this codebase, so this
+            // is the event's single owning organizer account, same stand-in.
+            $organizer = $users->find((string) ($event['organizerId'] ?? ''));
+            if ($organizer !== null) {
+                $mailer->sendModerationDecision((string) $args['id'], (string) $organizer['email'], (string) $event['name'], 'zatwierdzono i opublikowano');
+            }
             return JsonResponder::ok($response, $event);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->post('/events/{id}/reject', function (Request $request, Response $response, array $args) use ($events, $body, $logActivity) {
+        $api->post('/events/{id}/reject', function (Request $request, Response $response, array $args) use ($events, $users, $body, $logActivity, $mailer) {
             $auth = (array) $request->getAttribute('auth');
             $reason = trim((string) ($body($request)['reason'] ?? ''));
             if ($reason === '') {
@@ -592,12 +694,16 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be rejected in its current status', 409);
             }
             $logActivity($auth, 'event_rejected', 'Odrzucono wydarzenie: ' . $reason, 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
+            $organizer = $users->find((string) ($event['organizerId'] ?? ''));
+            if ($organizer !== null) {
+                $mailer->sendModerationDecision((string) $args['id'], (string) $organizer['email'], (string) $event['name'], 'odrzucono', $reason);
+            }
             return JsonResponder::ok($response, $event);
         })->add(new AuthMiddleware($jwt, $staffRoles));
         // Published -> Cancelled. Manual, terminal, Owner or admin only per the matrix
         // (deliberately narrower than $eventManagerRoles — no moderator, no Event Team
         // other than the owner). Bulk refunds are ticket 13, out of scope here.
-        $api->post('/events/{id}/cancel', function (Request $request, Response $response, array $args) use ($events, $registrations, $adminRoles, $logActivity) {
+        $api->post('/events/{id}/cancel', function (Request $request, Response $response, array $args) use ($events, $registrations, $adminRoles, $logActivity, $notifyEventChanged) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             $role = (string) ($auth['role'] ?? '');
@@ -614,6 +720,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             // osobnych żądań zawodnika.
             $registrations->bulkApproveRefundsForEvent((string) $args['id'], (string) ($auth['sub'] ?? ''));
             $logActivity($auth, 'event_cancelled', 'Odwołano wydarzenie', 'event', (string) $args['id'], (string) ($cancelled['name'] ?? ''));
+            // E1.10 mail #8 — cancellation branch. One mail per registrant,
+            // stating both the cancellation and that a refund was just
+            // initiated (bulkApproveRefundsForEvent(), just above) — no separate
+            // mail #14 per registrant here, see RegistrationRepository::bulkApproveOneRefund()'s doc comment.
+            $notifyEventChanged($cancelled, 'wydarzenie zostało odwołane', 'Zwrot środków za opłacony start zostanie zainicjowany automatycznie.');
             return JsonResponder::ok($response, $cancelled);
         })->add(new AuthMiddleware($jwt, ['organizer', 'admin', 'superadmin']));
         // Visibility toggle (public/private), only valid once Published — organizer/team,
@@ -949,11 +1060,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 throw $e;
             }
 
-            // E1.10 seam (mail — out of scope here per the ticket): a confirmation
-            // email would be queued right here, gated on
-            // `$result['applied'] && $notification->paid`, i.e. only the one
-            // delivery of this notification that actually flipped the Zapis to
-            // `confirmed` — never a retried/idempotent no-op delivery.
+            // E1.10: mail #5 ("Potwierdzenie płatności / bilet") is sent from
+            // inside RegistrationRepository::applyGatewayNotification() itself,
+            // after its own commit — gated there on `$paid`, and naturally only
+            // for the one delivery of this notification that actually flips the
+            // Zapis to `confirmed` (a retried/idempotent no-op delivery returns
+            // early, before that call). No mail wiring needed at this call site.
 
             $response->getBody()->write('TRUE');
             return $response->withHeader('Content-Type', 'text/plain')->withStatus(200);
@@ -999,11 +1111,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 throw $e;
             }
 
-            // E1.10 seam (mail — out of scope here per the ticket): a confirmation
-            // email would be queued right here, gated on
-            // `$result['applied'] && $notification->paid`, i.e. only the one
-            // delivery of this notification that actually flipped the Zapis to
-            // `confirmed` — never a retried/idempotent no-op delivery.
+            // E1.10: mail #5 ("Potwierdzenie płatności / bilet") is sent from
+            // inside RegistrationRepository::applyGatewayNotification() itself,
+            // after its own commit — gated there on `$paid`, and naturally only
+            // for the one delivery of this notification that actually flips the
+            // Zapis to `confirmed` (a retried/idempotent no-op delivery returns
+            // early, before that call). No mail wiring needed at this call site.
 
             // PayNow requires a 200 OK or 202 Accepted with an empty body — unlike
             // Tpay's "TRUE" plaintext contract.
@@ -1054,7 +1167,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
         })->add(new AuthMiddleware($jwt, ['participant']));
 
-        $api->patch('/virtual-results/{id}/review', function (Request $request, Response $response, array $args) use ($events, $virtualResults, $body, $canManageEvent) {
+        $api->patch('/virtual-results/{id}/review', function (Request $request, Response $response, array $args) use ($events, $virtualResults, $body, $canManageEvent, $mailer) {
             $submission = $virtualResults->find((string) $args['id']);
             if (!$submission) {
                 return JsonResponder::error($response, 'not_found', 'Submission not found', 404);
@@ -1066,12 +1179,27 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $payload = $body($request);
             $auth = (array) $request->getAttribute('auth');
             try {
-                return JsonResponder::ok($response, $virtualResults->review(
+                $reviewed = $virtualResults->review(
                     (string) $args['id'],
                     (string) ($payload['status'] ?? ''),
                     (string) ($auth['sub'] ?? ''),
                     isset($payload['reason']) ? (string) $payload['reason'] : null
-                ));
+                );
+                // E1.10 mail #11 ("Weryfikacja wyniku wirtualnego", 17 §1 row 11).
+                // Recipient is "zgłaszający Zawodnik/Opiekun" — this submission's
+                // own userEmail, which is whichever Konto actually submitted it
+                // (the Zawodnik's own, or their Opiekun's if submitted on behalf).
+                if ($reviewed !== null) {
+                    $mailer->sendVirtualResultVerdict(
+                        (string) $args['id'],
+                        (string) $submission['eventId'],
+                        (string) ($reviewed['userEmail'] ?? $submission['userEmail'] ?? ''),
+                        (string) ($reviewed['eventName'] ?? $submission['eventName'] ?? ''),
+                        (string) ($reviewed['status'] ?? ''),
+                        (string) ($reviewed['rejectionReason'] ?? '')
+                    );
+                }
+                return JsonResponder::ok($response, $reviewed);
             } catch (RuntimeException $e) {
                 return JsonResponder::error($response, $e->getMessage(), 'Nie udało się zweryfikować wyniku.', 422);
             }
@@ -1365,13 +1493,29 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             ->add(new AuthMiddleware($jwt, $staffRoles));
         $api->get('/shop/orders/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $orders->find($args['id'])))
             ->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->post('/shop/orders', fn (Request $request, Response $response) => JsonResponder::ok($response, $orders->create($body($request)), 'Order created', 201))
+        $api->post('/shop/orders', function (Request $request, Response $response) use ($orders, $users, $body, $mailer) {
+            $created = $orders->create($body($request));
+            // E1.10 mail #12 ("Zamówienie sklepowe: potwierdzenie i zmiana
+            // statusu", 17 §1 row 12) — systemic, the shop belongs to the
+            // platform, not an organizer (17 §5).
+            $buyer = $users->find((string) ($created['userId'] ?? ''));
+            if ($buyer !== null) {
+                $mailer->sendShopOrderStatus((string) $created['id'], (string) $buyer['email'], (string) $created['orderNumber'], (string) $created['status']);
+            }
+            return JsonResponder::ok($response, $created, 'Order created', 201);
+        })
             ->add(new AuthMiddleware($jwt, []));
-        $api->patch('/shop/orders/{id}/status', function (Request $request, Response $response, array $args) use ($orders, $body, $logActivity) {
+        $api->patch('/shop/orders/{id}/status', function (Request $request, Response $response, array $args) use ($orders, $users, $body, $logActivity, $mailer) {
             $data = $body($request);
             $status = (string) ($data['status'] ?? '');
             $updated = $orders->updateStatus($args['id'], $status, $data['trackingNumber'] ?? null);
             $logActivity((array) $request->getAttribute('auth'), 'order_status_changed', 'Zmieniono status zamówienia na ' . $status, 'order', (string) $args['id'], (string) ($updated['id'] ?? $args['id']));
+            if ($updated !== null) {
+                $buyer = $users->find((string) ($updated['userId'] ?? ''));
+                if ($buyer !== null) {
+                    $mailer->sendShopOrderStatus((string) $updated['id'], (string) $buyer['email'], (string) $updated['orderNumber'], (string) $updated['status'], (string) ($updated['trackingNumber'] ?? ''));
+                }
+            }
             return JsonResponder::ok($response, $updated);
         })->add(new AuthMiddleware($jwt, $staffRoles));
         $api->patch('/shop/orders/{id}', function (Request $request, Response $response, array $args) use ($orders, $body, $logActivity) {
@@ -1458,12 +1602,29 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         })->add(new AuthMiddleware($jwt));
         $api->post('/challenge-entries', fn (Request $request, Response $response) => JsonResponder::ok($response, $challenges->submitEntry($body($request), (array) $request->getAttribute('auth')), 'Challenge entry submitted', 201))
             ->add(new AuthMiddleware($jwt));
-        $api->patch('/challenge-entries/{id}/review', function (Request $request, Response $response, array $args) use ($challenges, $body, $logActivity) {
+        $api->patch('/challenge-entries/{id}/review', function (Request $request, Response $response, array $args) use ($challenges, $users, $body, $logActivity, $mailer) {
             $auth = (array) $request->getAttribute('auth');
             $payload = $body($request);
             $status = (string) ($payload['status'] ?? 'pending');
             $reviewed = $challenges->reviewEntry($args['id'], $status, $payload['reason'] ?? null, (string) ($auth['sub'] ?? ''));
             $logActivity($auth, 'challenge_entry_reviewed', 'Zweryfikowano zgłoszenie wyzwania: ' . $status, 'challengeEntry', (string) $args['id'], (string) ($reviewed['userId'] ?? ''));
+            // E1.10 mail #13 ("Ukończenie Wyzwania") — fires exactly once, the
+            // first time this Zawodnik's approved entries reach the challenge's
+            // minCompleted threshold (see ChallengeRepository::checkCompletion()).
+            if ($status === 'approved' && $reviewed !== null) {
+                $completion = $challenges->checkCompletion((string) $reviewed['challengeId'], (string) $reviewed['userId']);
+                if ($completion !== null) {
+                    $participant = $users->find($completion['userId']);
+                    if ($participant !== null) {
+                        $mailer->sendChallengeCompleted(
+                            $completion['challengeId'] . ':' . $completion['userId'],
+                            (string) $participant['email'],
+                            $completion['challengeName'],
+                            rtrim((string) Env::get('APP_URL', ''), '/') . '/challenges/' . $completion['challengeId'] . '/reward'
+                        );
+                    }
+                }
+            }
             return JsonResponder::ok($response, $reviewed);
         })->add(new AuthMiddleware($jwt, $staffRoles));
 
@@ -1981,7 +2142,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
 
         // Udziel Opieki: albo nad istniejącym Kontem (po e-mailu, jak dawny "authorize"),
         // albo nad nowo utworzonym samodzielnym Zawodnikiem (np. dzieckiem, bez Konta).
-        $api->post('/care', function (Request $request, Response $response) use ($competitors, $care, $users, $body): Response {
+        $api->post('/care', function (Request $request, Response $response) use ($competitors, $care, $users, $body, $mailer): Response {
             $auth = (array) $request->getAttribute('auth');
             $kontoId = (string) ($auth['sub'] ?? '');
 
@@ -2034,6 +2195,16 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $record['competitor'] = $competitor;
             $record['duplicateWarnings'] = $competitor['duplicateWarnings'] ?? [];
 
+            // E1.10 mail #6 ("Kod tożsamości", 17 §1 row 6) — sent once, here, at
+            // the actual moment of Zawodnik creation, to the Opiekun's (this
+            // $kontoId's) own Konto e-mail — a child Zawodnik created this way
+            // has no e-mail of its own. See CriticalMailer::sendIdentityCode()'s
+            // doc comment for the QR seam this leaves for E1.12.
+            $guardian = $users->find($kontoId);
+            if ($guardian !== null) {
+                $mailer->sendIdentityCode((string) $competitor['id'], (string) $guardian['email'], trim($firstName . ' ' . $lastName));
+            }
+
             return JsonResponder::ok($response, $record, 'Zawodnik dodany, opieka nadana.', 201);
         })->add(new AuthMiddleware($jwt));
 
@@ -2050,5 +2221,86 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
 
             return JsonResponder::ok($response, null, 'Opieka została cofnięta.');
         })->add(new AuthMiddleware($jwt));
+
+        // E1.10 §5 (model szablonów) — minimal server-side CRUD, no frontend in
+        // this ticket (server-only, like E1.6-E1.9 before it). Reuses the same
+        // $canManageEvent/$adminRoles idioms already used everywhere else in
+        // this file rather than inventing a new authorization shape.
+        $api->get('/admin/mail-templates', function (Request $request, Response $response) use ($mailTemplates) {
+            $out = [];
+            foreach (\ZmierzymyCzas\Domain\Mailer\CriticalMails\MailCatalog::all() as $mailType => $definition) {
+                $out[] = ['mailType' => $mailType, 'overridable' => $definition['overridable'], ...$mailTemplates->resolve($mailType, null)];
+            }
+            return JsonResponder::ok($response, $out);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->put('/admin/mail-templates/{mailType}', function (Request $request, Response $response, array $args) use ($mailTemplates, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $payload = $body($request);
+            try {
+                $saved = $mailTemplates->saveGlobal(
+                    (string) $args['mailType'],
+                    (string) ($payload['subject'] ?? ''),
+                    (string) ($payload['bodyHtml'] ?? ''),
+                    (string) ($auth['sub'] ?? '')
+                );
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
+            $logActivity($auth, 'mail_template_updated', 'Zaktualizowano globalny szablon maila: ' . $args['mailType'], 'mailTemplate', (string) $args['mailType'], (string) $args['mailType']);
+            return JsonResponder::ok($response, $saved);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+
+        $api->get('/events/{eventId}/mail-templates', function (Request $request, Response $response, array $args) use ($events, $mailTemplates, $canManageEvent) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            return JsonResponder::ok($response, $mailTemplates->listForEvent((string) $args['eventId']));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->put('/events/{eventId}/mail-templates/{mailType}', function (Request $request, Response $response, array $args) use ($events, $mailTemplates, $canManageEvent, $body, $logActivity) {
+            $event = $events->find((string) $args['eventId']);
+            $auth = (array) $request->getAttribute('auth');
+            if (!$canManageEvent($event, $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $payload = $body($request);
+            try {
+                $saved = $mailTemplates->saveEventOverride(
+                    (string) $args['mailType'],
+                    (string) $args['eventId'],
+                    (string) ($payload['subject'] ?? ''),
+                    (string) ($payload['bodyHtml'] ?? ''),
+                    (string) ($auth['sub'] ?? '')
+                );
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
+            $logActivity($auth, 'mail_template_overridden', 'Nadpisano szablon maila dla wydarzenia: ' . $args['mailType'], 'mailTemplate', (string) $args['mailType'], (string) ($event['name'] ?? ''));
+            return JsonResponder::ok($response, $saved);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->delete('/events/{eventId}/mail-templates/{mailType}', function (Request $request, Response $response, array $args) use ($events, $mailTemplates, $canManageEvent, $logActivity) {
+            $event = $events->find((string) $args['eventId']);
+            $auth = (array) $request->getAttribute('auth');
+            if (!$canManageEvent($event, $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $mailTemplates->deleteEventOverride((string) $args['mailType'], (string) $args['eventId']);
+            $logActivity($auth, 'mail_template_reverted', 'Przywrócono domyślny szablon maila dla wydarzenia: ' . $args['mailType'], 'mailTemplate', (string) $args['mailType'], (string) ($event['name'] ?? ''));
+            return JsonResponder::ok($response, $mailTemplates->resolve((string) $args['mailType'], (string) $args['eventId']));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        // E1.10 §8 ("Przepustowość: komunikat, nie cisza") — mass-send progress
+        // for mail #5, the one genuinely bulk mail in this catalog (tickets to a
+        // full paid start list). Defaults to payment_confirmed but accepts any
+        // mail type via ?mailType=, since the same readout works for any
+        // event-scoped mail sent in bulk.
+        $api->get('/events/{eventId}/mail-send-progress', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $centralMailerOutbox, $query) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $mailType = (string) ($query($request)['mailType'] ?? \ZmierzymyCzas\Domain\Mailer\CriticalMails\MailCatalog::PAYMENT_CONFIRMED);
+            return JsonResponder::ok($response, $centralMailerOutbox->progressForContext((string) $args['eventId'], $mailType));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
     });
 };

@@ -179,6 +179,52 @@ final class ChallengeRepository extends Repository
         return $this->entry($id);
     }
 
+    /**
+     * E1.10 mail #13 ("Ukończenie Wyzwania", 17 §1 row 13). Challenge completion
+     * has no discrete write of its own anywhere in this codebase —
+     * hydrateParticipation() only *computes* isCompleted on every read from the
+     * live entries list (see its `completedCount >= minCompleted` check above).
+     * This is the one materialized moment: called right after an entry review
+     * (approve) or a result-derived auto-approval (syncResultEntries()), it
+     * checks whether the just-updated entry count crosses the threshold for
+     * the first time and, if so, marks `completion_notified_at` so it is never
+     * reported "just completed" twice for the same participation — the caller
+     * (routes.php) is responsible for actually sending the mail with whatever
+     * it gets back here.
+     *
+     * @return array{challengeId: string, userId: string, challengeName: string}|null
+     */
+    public function checkCompletion(string $challengeId, string $userId): ?array
+    {
+        $challenge = $this->find($challengeId);
+        if ($challenge === null) {
+            return null;
+        }
+
+        $stmt = $this->pdo->prepare(
+            'SELECT id, completion_notified_at AS completionNotifiedAt FROM challenge_participations WHERE challenge_id = :challengeId AND user_id = :userId'
+        );
+        $stmt->execute(['challengeId' => $challengeId, 'userId' => $userId]);
+        $participation = $stmt->fetch();
+        if ($participation === false || $participation['completionNotifiedAt'] !== null) {
+            return null;
+        }
+
+        $completedCount = count(array_filter(
+            $this->entries($challengeId, $userId),
+            static fn (array $entry): bool => $entry['status'] === 'approved'
+        ));
+        if ($completedCount < (int) ($challenge['rule']['minCompleted'] ?? 1)) {
+            return null;
+        }
+
+        $this->updateById('challenge_participations', (string) $participation['id'], [
+            'completion_notified_at' => date(DATE_ATOM),
+        ]);
+
+        return ['challengeId' => $challengeId, 'userId' => $userId, 'challengeName' => (string) $challenge['name']];
+    }
+
     /** @param array<string, mixed> $row */
     private function hydrate(array $row): array
     {
@@ -266,6 +312,15 @@ final class ChallengeRepository extends Repository
         return $row ?: null;
     }
 
+    /**
+     * E1.10 note: this auto-approval path can also cross a challenge's
+     * completion threshold, but checkCompletion() is deliberately not called
+     * here — this method runs from participations(), a GET endpoint, and a
+     * mail send should never be a side effect of a read. The manual moderation
+     * path (reviewEntry()) is where mail #13 is actually wired; a result-driven
+     * completion is picked up the next time that Zawodnik's entries are
+     * reviewed or participations() is polled from a write-adjacent action.
+     */
     private function syncResultEntries(string $challengeId, string $userId): void
     {
         $stmt = $this->pdo->prepare("SELECT r.event_id AS eventId, r.time, r.position FROM results r INNER JOIN challenge_events ce ON ce.event_id = r.event_id WHERE ce.challenge_id = :challengeId AND r.user_id = :userId AND r.status = 'finished'");

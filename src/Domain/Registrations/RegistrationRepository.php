@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Registrations;
 
+use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
 use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
 use ZmierzymyCzas\Domain\Repository;
 
@@ -27,11 +28,24 @@ final class RegistrationRepository extends Repository
     private readonly ?PaymentGatewayInterface $gateway;
     private readonly ?PaymentGatewayInterface $payNowGateway;
 
-    public function __construct(\PDO $pdo, ?PaymentGatewayInterface $gateway = null, ?PaymentGatewayInterface $payNowGateway = null)
-    {
+    /**
+     * E1.10 seam — mirrors $gateway/$payNowGateway above: null whenever Central
+     * Mailer isn't configured (CriticalMailer's own CentralMailerConfig::isConfigured()
+     * gate handles that), in which case every send*() call below is a silent
+     * no-op rather than an attempted call that could only ever fail.
+     */
+    private readonly ?CriticalMailer $mailer;
+
+    public function __construct(
+        \PDO $pdo,
+        ?PaymentGatewayInterface $gateway = null,
+        ?PaymentGatewayInterface $payNowGateway = null,
+        ?CriticalMailer $mailer = null,
+    ) {
         parent::__construct($pdo);
         $this->gateway = $gateway;
         $this->payNowGateway = $payNowGateway;
+        $this->mailer = $mailer;
     }
 
     /** Provider name for the default gateway constructor argument ($gateway) — Tpay, E1.6. */
@@ -297,6 +311,25 @@ SQL;
             $registration['paymentSession'] = $this->startGatewaySessionIfNeeded($registration);
         }
 
+        // E1.10 mail #4 ("Potwierdzenie zapisu", 17 §1) — fires for every newly
+        // created Zapis, paid or not yet. A Zapis born already `confirmed`
+        // (startFeePaid at creation, e.g. free entry or an admin-entered paid
+        // record) additionally gets mail #5 right away — that really is both
+        // events happening at once, not a race the outbox needs to dedupe.
+        if ($registration !== null) {
+            $this->mailer?->sendRegistrationCreated(
+                $id,
+                (string) $registration['eventId'],
+                (string) $registration['userEmail'],
+                (string) $registration['eventName'],
+                (string) $registration['distanceName'],
+                number_format((float) $registration['totalAmount'], 2, '.', '')
+            );
+            if ($registration['status'] === 'confirmed') {
+                $this->sendPaymentConfirmedMail($id);
+            }
+        }
+
         return $registration;
     }
 
@@ -442,6 +475,8 @@ SQL;
      */
     private function lazilyExpireUnpaidRegistrations(): void
     {
+        $this->sendPaymentReminders();
+
         $stmt = $this->pdo->prepare(
             "SELECT id FROM registrations
              WHERE status = 'pending' AND payment_expires_at IS NOT NULL AND payment_expires_at < :now"
@@ -449,6 +484,49 @@ SQL;
         $stmt->execute(['now' => date(DATE_ATOM)]);
         foreach ($stmt->fetchAll(\PDO::FETCH_COLUMN) ?: [] as $id) {
             $this->expireRegistration((string) $id);
+        }
+    }
+
+    /**
+     * E1.10 mail #7 ("Przypomnienie o nieopłaconym zapisie", §5.16). Same lazy,
+     * no-cron trigger shape as lazilyExpireUnpaidRegistrations() itself (this
+     * repo has none — see that method's doc comment) — called from the same
+     * spot, once per read, before expiry is checked, so a registration gets one
+     * last chance to be reminded before it lapses. Never sends twice for the
+     * same registration: CriticalMailer's idempotency key is
+     * `{registrationId}:unpaid_reminder:v{version}`, so a repeat call within
+     * the reminder window is a guaranteed outbox no-op (see
+     * CentralMailerOutboxService::enqueue()), not a duplicate mail — no extra
+     * "already reminded" column needed.
+     */
+    private const REMINDER_WINDOW_MINUTES = 15;
+
+    private function sendPaymentReminders(): void
+    {
+        if ($this->mailer === null) {
+            return;
+        }
+
+        $now = new \DateTimeImmutable();
+        $windowEnd = $now->modify('+' . self::REMINDER_WINDOW_MINUTES . ' minutes')->format(DATE_ATOM);
+        $stmt = $this->pdo->prepare(
+            "SELECT id, event_id AS eventId, event_name AS eventName, user_email AS userEmail, payment_expires_at AS paymentExpiresAt
+             FROM registrations
+             WHERE status = 'pending' AND payment_expires_at IS NOT NULL
+               AND payment_expires_at >= :now AND payment_expires_at < :windowEnd"
+        );
+        $stmt->execute(['now' => $now->format(DATE_ATOM), 'windowEnd' => $windowEnd]);
+
+        foreach ($stmt->fetchAll() as $row) {
+            $this->mailer->sendUnpaidReminder(
+                (string) $row['id'],
+                (string) $row['eventId'],
+                (string) $row['userEmail'],
+                (string) $row['eventName'],
+                number_format($this->totalAmountFor((string) $row['id']), 2, '.', ''),
+                rtrim((string) \ZmierzymyCzas\Support\Env::get('APP_URL', ''), '/') . '/registrations/' . $row['id'] . '/pay',
+                (string) $row['paymentExpiresAt']
+            );
         }
     }
 
@@ -704,6 +782,15 @@ SQL;
             throw $e;
         }
 
+        // E1.10 mail #14 ("Zwrot pieniędzy zatwierdzony") — the "do zwrotu"
+        // transition itself, sent once per approval (not repeated at
+        // markRefunded()'s later "zwrócona" transition — one notification per
+        // refund cycle is enough, and the amount/route are already final here).
+        // Deliberately NOT sent from bulkApproveOneRefund() (event cancellation):
+        // that flow sends mail #8 instead, which already carries refund status
+        // inline for every affected registrant — see routes.php's cancel handler.
+        $this->sendRefundApprovedMail($id, $resolvedAmount, $route);
+
         // E1.6/E1.7: trasa A really calls the gateway's (Tpay or PayNow, whichever
         // took the original payment) refund API now, once the "do zwrotu" approval
         // itself is safely committed — same "never hold the row lock across an
@@ -927,6 +1014,12 @@ SQL;
         return $count;
     }
 
+    /**
+     * E1.10 note: deliberately does not call sendRefundApprovedMail() (unlike
+     * the public approveRefund() above) — event cancellation sends mail #8 to
+     * every registrant instead, which already states the refund status inline;
+     * a second, separate mail #14 per registrant here would be redundant noise.
+     */
     private function bulkApproveOneRefund(string $id, string $approvedBy, string $reason): bool
     {
         $this->pdo->beginTransaction();
@@ -1182,6 +1275,16 @@ SQL;
             throw $e;
         }
 
+        // E1.10 mail #5 ("Potwierdzenie płatności / bilet") — sent only after the
+        // `pending` -> `confirmed` transition is safely committed, never from
+        // inside markGatewayPaymentPaid() itself (that runs inside this method's
+        // transaction; an outbound HTTP call must never happen before a commit
+        // that might still roll back — same reasoning as initiateGatewayRefund()
+        // being called after approveRefund()'s own commit, below).
+        if ($paid) {
+            $this->sendPaymentConfirmedMail($registrationId);
+        }
+
         return ['applied' => true, 'registrationId' => $registrationId];
     }
 
@@ -1276,12 +1379,73 @@ SQL;
             throw $e;
         }
 
+        // E1.10 mail #5 — see applyGatewayNotification()'s identical comment on
+        // why this happens after the commit, not inside markGatewayPaymentPaid().
+        $this->sendPaymentConfirmedMail($id);
+
         $registration = $this->find($id);
         if ($registration === null) {
             throw new \RuntimeException('registration_not_found');
         }
 
         return $registration;
+    }
+
+    /**
+     * Shared by create() (a Zapis born already-paid), applyGatewayNotification()
+     * (trasa A) and markManualPaymentPaid() (trasa B) — every path that lands a
+     * Zapis on `confirmed` funnels through here for mail #5, so there is exactly
+     * one place that knows how to turn a paid Zapis into that email. Reads its
+     * own fresh row rather than accepting one from the caller so it never risks
+     * sending stale eventName/distanceName/userEmail.
+     */
+    private function sendPaymentConfirmedMail(string $registrationId): void
+    {
+        if ($this->mailer === null) {
+            return;
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT event_id AS eventId, event_name AS eventName, distance_name AS distanceName, user_email AS userEmail
+             FROM registrations WHERE id = :id'
+        );
+        $stmt->execute(['id' => $registrationId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return;
+        }
+
+        $this->mailer->sendPaymentConfirmed(
+            $registrationId,
+            (string) $row['eventId'],
+            (string) $row['userEmail'],
+            (string) $row['eventName'],
+            (string) $row['distanceName'],
+            rtrim((string) \ZmierzymyCzas\Support\Env::get('APP_URL', ''), '/') . '/my-starts'
+        );
+    }
+
+    private function sendRefundApprovedMail(string $registrationId, float $amount, string $route): void
+    {
+        if ($this->mailer === null) {
+            return;
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT event_id AS eventId, event_name AS eventName, user_email AS userEmail FROM registrations WHERE id = :id'
+        );
+        $stmt->execute(['id' => $registrationId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return;
+        }
+
+        $this->mailer->sendRefundApproved(
+            $registrationId,
+            (string) $row['eventId'],
+            (string) $row['userEmail'],
+            (string) $row['eventName'],
+            number_format($amount, 2, '.', ''),
+            $route === 'gateway' ? 'zwrot na kartę/konto użyte do płatności' : 'przelew tradycyjny'
+        );
     }
 
     /**

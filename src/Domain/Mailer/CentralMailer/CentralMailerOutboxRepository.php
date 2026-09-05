@@ -111,6 +111,37 @@ final class CentralMailerOutboxRepository extends Repository
     }
 
     /**
+     * E1.10 §8 ("Przepustowość: komunikat, nie cisza") — the read this
+     * platform's mass-send progress bar needs: how many outbox rows for one
+     * mail type in one Wydarzenie (`contextId`) are still `queued`, how many
+     * ended up `sent`, and how many `failed`, plus a catch-all `other` bucket
+     * for every other status Central Mailer might report (`pending`,
+     * `processing`, `retry`, `unknown`, §6.3). No new outbox-wide feature here
+     * — just a GROUP BY on the same table CentralMailerOutboxService already
+     * writes to.
+     *
+     * @return array{total: int, queued: int, sent: int, failed: int, other: int}
+     */
+    public function countByContext(string $contextId, string $sourceEntityType): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT status, COUNT(*) AS count FROM central_mailer_outbox '
+            . 'WHERE context_id = :contextId AND source_entity_type = :sourceEntityType GROUP BY status'
+        );
+        $stmt->execute(['contextId' => $contextId, 'sourceEntityType' => $sourceEntityType]);
+
+        $counts = ['total' => 0, 'queued' => 0, 'sent' => 0, 'failed' => 0, 'other' => 0];
+        foreach ($stmt->fetchAll() as $row) {
+            $status = (string) $row['status'];
+            $count = (int) $row['count'];
+            $counts['total'] += $count;
+            $counts[in_array($status, ['queued', 'sent', 'failed'], true) ? $status : 'other'] += $count;
+        }
+
+        return $counts;
+    }
+
+    /**
      * Rows accepted by Central Mailer (so they have a `central_mailer_email_id`
      * to poll) whose last known status is not terminal — the reconciliation
      * queue. `sent`/`failed` are terminal from this table's point of view; a

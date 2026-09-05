@@ -34,7 +34,11 @@ CREATE TABLE IF NOT EXISTS mail_templates (
 -- only *computes* isCompleted on every read from the entries list. This column
 -- is the minimal addition needed to fire the completion mail exactly once per
 -- participation, at the actual moment an approved entry count first reaches
--- the challenge's minCompleted threshold (see ChallengeRepository::reviewEntry()
--- and ::syncResultEntries()).
+-- the challenge's minCompleted threshold. ChallengeRepository::checkCompletion()
+-- is the single gate that reads/sets this column; it is invoked from
+-- routes.php after both write paths that can cross the threshold — manual
+-- moderation (reviewEntry()) and result-derived auto-approval (join(), via
+-- syncResultEntries()) — so completion is caught regardless of which path
+-- got the Zawodnik there, without ever double-sending.
 ALTER TABLE challenge_participations
   ADD COLUMN IF NOT EXISTS completion_notified_at VARCHAR(64) NULL;

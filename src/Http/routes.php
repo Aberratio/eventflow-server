@@ -110,6 +110,32 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $series = new SeriesRepository($pdo);
     $shop = new ShopRepository($pdo);
     $challenges = new ChallengeRepository($pdo);
+    // E1.10 mail #13 ("Ukończenie Wyzwania") — shared by every write path that
+    // can cross a challenge's minCompleted threshold: manual approval
+    // (reviewEntry(), below) and result-derived auto-approval (join(), which
+    // runs syncResultEntries() internally). checkCompletion() itself is the
+    // single idempotent gate (it marks completion_notified_at and returns
+    // null on any later call for the same participation), so calling this
+    // from more than one write path is safe and never double-sends.
+    $notifyChallengeCompletion = static function (?array $participation) use ($challenges, $users, $mailer): void {
+        if ($participation === null) {
+            return;
+        }
+        $completion = $challenges->checkCompletion((string) $participation['challengeId'], (string) $participation['userId']);
+        if ($completion === null) {
+            return;
+        }
+        $participant = $users->find($completion['userId']);
+        if ($participant === null) {
+            return;
+        }
+        $mailer->sendChallengeCompleted(
+            $completion['challengeId'] . ':' . $completion['userId'],
+            (string) $participant['email'],
+            $completion['challengeName'],
+            rtrim((string) Env::get('APP_URL', ''), '/') . '/challenges/' . $completion['challengeId'] . '/reward'
+        );
+    };
     $pages = new InfoPageRepository($pdo);
     $partners = new PartnerRepository($pdo);
     $admin = new AdminRepository($pdo);
@@ -1592,17 +1618,24 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             ->add(new AuthMiddleware($jwt, $staffRoles));
         $api->get('/challenge-participations', fn (Request $request, Response $response) => JsonResponder::ok($response, $challenges->participations($request->getQueryParams()['challengeId'] ?? null, $request->getQueryParams()['userId'] ?? null)))
             ->add(new AuthMiddleware($jwt));
-        $api->post('/challenges/{id}/join', function (Request $request, Response $response, array $args) use ($challenges, $users) {
+        $api->post('/challenges/{id}/join', function (Request $request, Response $response, array $args) use ($challenges, $users, $notifyChallengeCompletion) {
             $auth = (array) $request->getAttribute('auth');
             $user = $users->find((string) ($auth['sub'] ?? ''));
             if (!$user) {
                 return JsonResponder::error($response, 'not_found', 'User not found', 404);
             }
-            return JsonResponder::ok($response, $challenges->join($args['id'], $user), 'Challenge joined', 201);
+            $joined = $challenges->join($args['id'], $user);
+            // E1.10 mail #13: joining runs syncResultEntries(), which can
+            // auto-approve entries from already-finished results and cross
+            // the completion threshold on the spot (e.g. late sign-up after
+            // the event already has a result on file) — check here too, not
+            // just after manual review.
+            $notifyChallengeCompletion($joined);
+            return JsonResponder::ok($response, $joined, 'Challenge joined', 201);
         })->add(new AuthMiddleware($jwt));
         $api->post('/challenge-entries', fn (Request $request, Response $response) => JsonResponder::ok($response, $challenges->submitEntry($body($request), (array) $request->getAttribute('auth')), 'Challenge entry submitted', 201))
             ->add(new AuthMiddleware($jwt));
-        $api->patch('/challenge-entries/{id}/review', function (Request $request, Response $response, array $args) use ($challenges, $users, $body, $logActivity, $mailer) {
+        $api->patch('/challenge-entries/{id}/review', function (Request $request, Response $response, array $args) use ($challenges, $body, $logActivity, $notifyChallengeCompletion) {
             $auth = (array) $request->getAttribute('auth');
             $payload = $body($request);
             $status = (string) ($payload['status'] ?? 'pending');
@@ -1612,18 +1645,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             // first time this Zawodnik's approved entries reach the challenge's
             // minCompleted threshold (see ChallengeRepository::checkCompletion()).
             if ($status === 'approved' && $reviewed !== null) {
-                $completion = $challenges->checkCompletion((string) $reviewed['challengeId'], (string) $reviewed['userId']);
-                if ($completion !== null) {
-                    $participant = $users->find($completion['userId']);
-                    if ($participant !== null) {
-                        $mailer->sendChallengeCompleted(
-                            $completion['challengeId'] . ':' . $completion['userId'],
-                            (string) $participant['email'],
-                            $completion['challengeName'],
-                            rtrim((string) Env::get('APP_URL', ''), '/') . '/challenges/' . $completion['challengeId'] . '/reward'
-                        );
-                    }
-                }
+                $notifyChallengeCompletion($reviewed);
             }
             return JsonResponder::ok($response, $reviewed);
         })->add(new AuthMiddleware($jwt, $staffRoles));

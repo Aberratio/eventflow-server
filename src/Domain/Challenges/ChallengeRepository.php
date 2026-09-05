@@ -315,11 +315,14 @@ final class ChallengeRepository extends Repository
     /**
      * E1.10 note: this auto-approval path can also cross a challenge's
      * completion threshold, but checkCompletion() is deliberately not called
-     * here — this method runs from participations(), a GET endpoint, and a
-     * mail send should never be a side effect of a read. The manual moderation
-     * path (reviewEntry()) is where mail #13 is actually wired; a result-driven
-     * completion is picked up the next time that Zawodnik's entries are
-     * reviewed or participations() is polled from a write-adjacent action.
+     * from *this* method — it also runs from participations(), a GET
+     * endpoint, and a mail send should never be a side effect of a read.
+     * Instead, the write path that can trigger a result-derived completion —
+     * join(), which calls this method directly — checks completion itself
+     * right after syncing (see routes.php's $notifyChallengeCompletion,
+     * used by both the join and manual-review routes). checkCompletion()'s
+     * own idempotency (completion_notified_at) makes it safe to call from
+     * multiple write paths without risk of double-sending mail #13.
      */
     private function syncResultEntries(string $challengeId, string $userId): void
     {

@@ -100,4 +100,61 @@ final class ChallengeCompletionTest extends TestCase
         self::assertNotNull($this->challenges->checkCompletion($this->challengeId, $this->userId));
         self::assertNull($this->challenges->checkCompletion($this->challengeId, $this->userId));
     }
+
+    /**
+     * E1.10 fix-loop round 1: a challenge that reaches minCompleted purely
+     * through syncResultEntries()'s result-derived auto-approval (no
+     * reviewEntry() call at all) must still be detectable as "just
+     * completed" — this is the join() write path routes.php now checks via
+     * $notifyChallengeCompletion, not just the manual-review path.
+     */
+    public function testJoinAutoApprovalCrossesThresholdAndCompletionDetectedOnce(): void
+    {
+        $challengeId = 'phpunit-chal-' . bin2hex(random_bytes(4));
+        $joiningUserId = 'phpunit-user-' . bin2hex(random_bytes(4));
+
+        $this->pdo->prepare(
+            "INSERT INTO challenges (id, name, slug, description, min_completed, status, created_by)
+             VALUES (:id, 'Auto Challenge', :slug, 'desc', 2, 'active', 'tester')"
+        )->execute(['id' => $challengeId, 'slug' => $challengeId]);
+
+        foreach (['evt-a', 'evt-b'] as $eventId) {
+            $this->pdo->prepare(
+                'INSERT INTO challenge_events (challenge_id, event_id, sort_order) VALUES (:challengeId, :eventId, 0)'
+            )->execute(['challengeId' => $challengeId, 'eventId' => $eventId]);
+
+            $this->pdo->prepare(
+                "INSERT INTO results (id, event_id, event_name, distance_id, distance_name, user_id, user_name, bib_number, category, time, time_in_seconds, position, category_position, status)
+                 VALUES (:id, :eventId, 'Test Event', 'dist-1', '10km', :userId, 'Tester', '1', 'open', '00:45:00', 2700, 1, 1, 'finished')"
+            )->execute(['id' => $this->id(), 'eventId' => $eventId, 'userId' => $joiningUserId]);
+        }
+
+        try {
+            // No reviewEntry() call anywhere in this test: join() alone must
+            // auto-approve both already-finished results via
+            // syncResultEntries() and cross minCompleted = 2.
+            $joined = $this->challenges->join($challengeId, ['id' => $joiningUserId, 'name' => 'Tester']);
+            self::assertTrue($joined['isCompleted']);
+            self::assertSame(2, $joined['completedCount']);
+
+            $completion = $this->challenges->checkCompletion($challengeId, $joiningUserId);
+            self::assertNotNull($completion);
+            self::assertSame($challengeId, $completion['challengeId']);
+            self::assertSame($joiningUserId, $completion['userId']);
+            self::assertSame('Auto Challenge', $completion['challengeName']);
+
+            // Re-running the sync (join() again, or a later participations()
+            // poll — both call syncResultEntries()) must not re-insert
+            // entries or report completion a second time, so routes.php
+            // never enqueues mail #13 twice for the same participation.
+            $this->challenges->join($challengeId, ['id' => $joiningUserId, 'name' => 'Tester']);
+            self::assertNull($this->challenges->checkCompletion($challengeId, $joiningUserId));
+        } finally {
+            $this->pdo->prepare('DELETE FROM results WHERE user_id = :userId')->execute(['userId' => $joiningUserId]);
+            $this->pdo->prepare('DELETE FROM challenge_entries WHERE challenge_id = :id')->execute(['id' => $challengeId]);
+            $this->pdo->prepare('DELETE FROM challenge_events WHERE challenge_id = :id')->execute(['id' => $challengeId]);
+            $this->pdo->prepare('DELETE FROM challenge_participations WHERE challenge_id = :id')->execute(['id' => $challengeId]);
+            $this->pdo->prepare('DELETE FROM challenges WHERE id = :id')->execute(['id' => $challengeId]);
+        }
+    }
 }

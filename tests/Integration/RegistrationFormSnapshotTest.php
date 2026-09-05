@@ -49,15 +49,22 @@ final class RegistrationFormSnapshotTest extends TestCase
 
         try {
             $this->pdo = Connection::fromEnv();
-            Migrator::applyAll($this->pdo);
-            $this->fields = new FormFieldRepository($this->pdo);
-            $this->events = new EventRepository($this->pdo);
-            $this->registrations = new RegistrationRepository($this->pdo, null, null, null);
-            $this->competitors = new CompetitorRepository($this->pdo);
-            $this->eventId = $this->createEvent();
         } catch (\Throwable $e) {
             self::markTestSkipped('Database is not available for integration tests: ' . $e->getMessage());
         }
+
+        // Deliberately outside the try/catch above (E1.14 verification fix):
+        // a migration failure means the DB IS reachable but broken, which is
+        // a real bug, not "DB not available" — folding it into the same
+        // broad catch previously turned migration 041's JSON_TABLE syntax
+        // error into a silent "skipped" on every test in this class, masking
+        // the actual root cause. Let it propagate and fail the test loudly.
+        Migrator::applyAll($this->pdo);
+        $this->fields = new FormFieldRepository($this->pdo);
+        $this->events = new EventRepository($this->pdo);
+        $this->registrations = new RegistrationRepository($this->pdo, null, null, null);
+        $this->competitors = new CompetitorRepository($this->pdo);
+        $this->eventId = $this->createEvent();
     }
 
     protected function tearDown(): void

@@ -33,6 +33,12 @@ final class Migrator
             self::applyFile($pdo, $file);
         }
 
+        // E1.14 verification fix: migration 041's legacy customFields JSON
+        // backfill moved out of SQL (see that file's own comment — it needed
+        // JSON_TABLE/JSON_ARRAYAGG, unavailable on this environment's MariaDB).
+        // Runs after every .sql file so `form_fields` always already exists.
+        CustomFormFieldsBackfill::run($pdo);
+
         return array_map('basename', $files);
     }
 
@@ -40,8 +46,29 @@ final class Migrator
     {
         $sql = (string) file_get_contents($file);
         foreach (self::statements($sql) as $statement) {
-            $pdo->exec($statement);
+            try {
+                $pdo->exec($statement);
+            } catch (\PDOException $e) {
+                // Without this, a broken statement aborts the whole migration
+                // run silently mid-file (no ledger, no per-file try/catch
+                // upstream) and every caller sees only the raw driver message,
+                // with no clue which file/statement caused it — exactly what
+                // let migration 041's JSON_TABLE statement block 042 for a
+                // long time before anyone noticed (E1.14 verification fix).
+                throw new \RuntimeException(sprintf(
+                    'Migration failed in %s: %s (statement: %s)',
+                    basename($file),
+                    $e->getMessage(),
+                    self::truncate($statement)
+                ), 0, $e);
+            }
         }
+    }
+
+    private static function truncate(string $statement, int $maxLength = 300): string
+    {
+        $statement = preg_replace('/\s+/', ' ', trim($statement)) ?? $statement;
+        return strlen($statement) > $maxLength ? substr($statement, 0, $maxLength) . '…' : $statement;
     }
 
     /**

@@ -14,6 +14,8 @@ use ZmierzymyCzas\Domain\Cms\InfoPageRepository;
 use ZmierzymyCzas\Domain\Cms\PartnerRepository;
 use ZmierzymyCzas\Domain\Events\EventBackgroundRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
+use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
+use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Payments\Http\CurlHttpClient;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowConfig;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowGateway;
@@ -145,6 +147,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $certificates = new CertificateRepository($pdo);
     $competitors = new CompetitorRepository($pdo);
     $care = new CareRepository($pdo);
+    // E1.13: "Pozycja formularza" — jeden byt dla pól systemowych i własnych.
+    // ensureSystemCatalog() jest wywoływane per-request (a nie tylko w migracji)
+    // żeby wydarzenia utworzone po migracji 041 (w tym w testach, które nie
+    // uruchamiają migratora ponownie) też dostały swoje 13 pozycji.
+    $formFields = new FormFieldRepository($pdo);
+    $formFieldAnswers = new FormFieldAnswerRepository($pdo);
     $uploadDir = (string) Env::get('APP_UPLOAD_DIR', 'public/uploads');
     if (!preg_match('/^(?:[a-z]:[\/\\\\]|\/|\\\\\\\\)/i', $uploadDir)) {
         $uploadDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . $uploadDir;
@@ -841,6 +849,106 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 || (isset($displayOptions['hideUnpaid']) && !(bool) $displayOptions['hideUnpaid'] && !isset($displayOptions['showParticipants']));
             return JsonResponder::ok($response, $registrations->publicStartList($args['eventId'], $showAll));
         });
+
+        // E1.13: "Pozycja formularza" (model-formularza-zapisow.md §1-§9).
+        // Public read (no auth) is the form/list renderer's source — it needs
+        // the same ordered list an organizer edits, just without hidden
+        // internals. Manage endpoints require $eventManagerRoles, mirroring
+        // the mail-templates group above.
+        $api->get('/events/{eventId}/form-fields/public', function (Request $request, Response $response, array $args) use ($formFields) {
+            $fields = $formFields->ensureSystemCatalog((string) $args['eventId']);
+            $visible = array_values(array_filter($fields, static fn (array $f): bool => $f['state'] !== 'hidden'));
+            return JsonResponder::ok($response, $visible);
+        });
+        $api->get('/events/{eventId}/form-fields', function (Request $request, Response $response, array $args) use ($events, $formFields, $canManageEvent) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            return JsonResponder::ok($response, $formFields->ensureSystemCatalog((string) $args['eventId']));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->post('/events/{eventId}/form-fields', function (Request $request, Response $response, array $args) use ($events, $formFields, $canManageEvent, $body) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            try {
+                $created = $formFields->createCustom((string) $args['eventId'], $body($request));
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
+            return JsonResponder::ok($response, $created, 'Form field created', 201);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->patch('/events/{eventId}/form-fields/{fieldId}', function (Request $request, Response $response, array $args) use ($events, $formFields, $canManageEvent, $body) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $payload = $body($request);
+            try {
+                $field = $formFields->find((string) $args['fieldId']);
+                if ($field === null || $field['eventId'] !== $args['eventId']) {
+                    return JsonResponder::error($response, 'not_found', 'Nie znaleziono pozycji formularza.', 404);
+                }
+                if (array_key_exists('state', $payload)) {
+                    $field = $formFields->updateState((string) $args['fieldId'], (string) $payload['state']);
+                }
+                if (array_key_exists('label', $payload) || array_key_exists('tooltip', $payload)) {
+                    $field = $formFields->updateLabelAndTooltip(
+                        (string) $args['fieldId'],
+                        array_key_exists('label', $payload) ? $payload['label'] : ($field['labelOverride'] ?? null),
+                        array_key_exists('tooltip', $payload) ? $payload['tooltip'] : ($field['tooltipOverride'] ?? null)
+                    );
+                }
+                if (array_key_exists('publicListVisible', $payload)) {
+                    $field = $formFields->updatePublicListVisibility((string) $args['fieldId'], (bool) $payload['publicListVisible']);
+                }
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
+            return JsonResponder::ok($response, $field);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->delete('/events/{eventId}/form-fields/{fieldId}', function (Request $request, Response $response, array $args) use ($events, $formFields, $canManageEvent) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $deleted = $formFields->deleteCustom((string) $args['fieldId']);
+            if (!$deleted) {
+                return JsonResponder::error($response, 'validation_error', 'Pozycje systemowe można wyłącznie ukryć, nie usunąć.', 422);
+            }
+            return JsonResponder::ok($response, ['deleted' => true]);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->put('/events/{eventId}/form-fields/reorder', function (Request $request, Response $response, array $args) use ($events, $formFields, $canManageEvent, $body) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $formFields->reorder((string) $args['eventId'], (array) ($body($request)['orderedIds'] ?? []));
+            return JsonResponder::ok($response, $formFields->listForEvent((string) $args['eventId']));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        // Odpowiedzi na pola własne — zawsze przypięte do Zapisu (model F1).
+        // Osobny endpoint zamiast wpięcia w POST /registrations: ten ticket
+        // celowo nie przerabia tworzenia Zapisu (poza zakresem — patrz raport
+        // ticketu), to jedynie udowadnia "create, validate, persist an answer"
+        // end-to-end z acceptance criteria.
+        $api->put('/registrations/{registrationId}/form-field-answers/{fieldId}', function (Request $request, Response $response, array $args) use ($formFields, $formFieldAnswers, $body) {
+            try {
+                $saved = $formFieldAnswers->saveAnswer(
+                    $formFields,
+                    (string) $args['fieldId'],
+                    (string) $args['registrationId'],
+                    $body($request)['value'] ?? null
+                );
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
+            return JsonResponder::ok($response, $saved);
+        })->add(new AuthMiddleware($jwt));
+        $api->get('/registrations/{registrationId}/form-field-answers', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $formFieldAnswers->forRegistration((string) $args['registrationId'])))
+            ->add(new AuthMiddleware($jwt));
+
         $api->get('/users/{userId}/registrations', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->byUser($args['userId'])))
             ->add(new AuthMiddleware($jwt));
         $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $competitors, $care, $body) {

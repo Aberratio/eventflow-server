@@ -56,7 +56,11 @@
             "php -l src/Domain/Mailer/CriticalMails/MailTemplateRepository.php",
             "php -l src/Domain/Mailer/CriticalMails/CriticalMailer.php",
             "php -l src/Domain/Mailer/CentralMailer/CentralMailerOutboxRepository.php",
-            "php -l src/Domain/Mailer/CentralMailer/CentralMailerOutboxService.php"
+            "php -l src/Domain/Mailer/CentralMailer/CentralMailerOutboxService.php",
+            "php -l src/Domain/FormFields/FormFieldCatalog.php",
+            "php -l src/Domain/FormFields/FormFieldType.php",
+            "php -l src/Domain/FormFields/FormFieldRepository.php",
+            "php -l src/Domain/FormFields/FormFieldAnswerRepository.php"
         ],
         "seed:fresh": "php bin/seed.php --fresh",
         "seed:purge": "php bin/seed.php --purge",

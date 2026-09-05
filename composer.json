@@ -49,7 +49,14 @@
             "php -l src/Http/routes.php",
             "php -l database/seeders/generate_events.php",
             "php -l src/Database/ShopFixtureImporter.php",
-            "php -l src/Database/SeriesLinker.php"
+            "php -l src/Database/SeriesLinker.php",
+            "php -l src/Domain/Challenges/ChallengeRepository.php",
+            "php -l src/Domain/Mailer/CriticalMails/MailCatalog.php",
+            "php -l src/Domain/Mailer/CriticalMails/MailRenderer.php",
+            "php -l src/Domain/Mailer/CriticalMails/MailTemplateRepository.php",
+            "php -l src/Domain/Mailer/CriticalMails/CriticalMailer.php",
+            "php -l src/Domain/Mailer/CentralMailer/CentralMailerOutboxRepository.php",
+            "php -l src/Domain/Mailer/CentralMailer/CentralMailerOutboxService.php"
         ],
         "seed:fresh": "php bin/seed.php --fresh",
         "seed:purge": "php bin/seed.php --purge",

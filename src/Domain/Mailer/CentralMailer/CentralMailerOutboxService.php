@@ -90,6 +90,21 @@ final class CentralMailerOutboxService
     }
 
     /**
+     * E1.10 §8 mass-send progress: queued/sent/failed counts for one mail type
+     * within one Wydarzenie (its `contextId`), so an organizer sending tickets
+     * to 500+ recipients sees a progress readout instead of silence during the
+     * ~75-90 minutes the shared 100/15min budget takes (kontrakt-central-mailer.md
+     * §7). No queue-worker/cron here (this repo has none) — the caller is
+     * expected to poll this on demand, same lazy-check shape as reconcile().
+     *
+     * @return array{total: int, queued: int, sent: int, failed: int, other: int}
+     */
+    public function progressForContext(string $contextId, string $sourceEntityType): array
+    {
+        return $this->outbox->countByContext($contextId, $sourceEntityType);
+    }
+
+    /**
      * Polls Central Mailer for every outbox row still awaiting a terminal
      * status and writes back whatever it reports (§6.4 point 3 — Central Mailer
      * has no webhooks, only polling). This repo has no cron infrastructure

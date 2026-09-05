@@ -258,6 +258,65 @@ final class FormFieldRepositoryTest extends TestCase
         self::assertNotEmpty($entry['userName'] ?? '');
     }
 
+    /**
+     * E1.13 verification fix: the acceptance criterion ("public start-list
+     * column derivation follows form-item order + visibility flag,
+     * confidential fields always excluded") must be reachable through the
+     * real endpoint path, not just FormFieldRepository::publicListColumns()
+     * in isolation (see the other tests above). This calls exactly the
+     * method routes.php's `GET /events/{eventId}/start-list` calls —
+     * RegistrationRepository::publicStartList() — and asserts its output now
+     * carries the ordered, visibility-filtered, confidentiality-excluded
+     * form-field values.
+     */
+    public function testPublicStartListWiresFormFieldVisibilityAndConfidentialityThroughTheRealEndpointPath(): void
+    {
+        $this->fields->ensureSystemCatalog($this->eventId);
+        $phone = $this->findByKey('phone');
+        $this->fields->updateState($phone['id'], 'shown');
+        $this->fields->updatePublicListVisibility($phone['id'], true);
+
+        $visibleCustom = $this->fields->createCustom($this->eventId, [
+            'label' => 'Rozmiar koszulki',
+            'fieldType' => FormFieldType::SHORT_TEXT,
+            'state' => 'shown',
+            'publicListVisible' => true,
+        ]);
+        $confidentialCustom = $this->fields->createCustom($this->eventId, [
+            'label' => 'PESEL',
+            'fieldType' => FormFieldType::SHORT_TEXT,
+            'state' => 'shown',
+            'isConfidential' => true,
+        ]);
+        $hiddenCustom = $this->fields->createCustom($this->eventId, [
+            'label' => 'Uwagi wewnętrzne',
+            'fieldType' => FormFieldType::SHORT_TEXT,
+            'state' => 'shown',
+            // publicListVisible left at default (Nie) — must not appear either.
+        ]);
+
+        $registrationId = $this->createRegistration();
+        $this->answers->saveAnswer($this->fields, $visibleCustom['id'], $registrationId, 'XL');
+
+        $startList = $this->registrations->publicStartList($this->eventId, true);
+        $entry = current(array_filter($startList, static fn (array $r): bool => $r['id'] === $registrationId));
+        self::assertNotFalse($entry, 'Registration should appear on the public start list.');
+        self::assertArrayHasKey('formFields', $entry);
+
+        $keys = array_column($entry['formFields'], 'fieldKey');
+        self::assertContains('phone', $keys, 'A publicListVisible system field must appear.');
+        self::assertContains($visibleCustom['fieldKey'], $keys, 'A publicListVisible custom field must appear.');
+        self::assertNotContains($confidentialCustom['fieldKey'], $keys, 'Confidential fields must never reach the public start list.');
+        self::assertNotContains($hiddenCustom['fieldKey'], $keys, 'Fields not opted into the public list must be excluded.');
+
+        // Order must follow form-item order (sort_order), same as publicListColumns().
+        $expectedKeys = array_column($this->fields->publicListColumns($this->eventId), 'fieldKey');
+        self::assertSame($expectedKeys, $keys);
+
+        $valuesByKey = array_column($entry['formFields'], 'value', 'fieldKey');
+        self::assertSame('XL', $valuesByKey[$visibleCustom['fieldKey']]);
+    }
+
     private function findByKey(string $key): array
     {
         foreach ($this->fields->listForEvent($this->eventId) as $field) {

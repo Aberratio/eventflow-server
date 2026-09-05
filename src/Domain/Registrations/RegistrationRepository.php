@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Registrations;
 
+use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
+use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
+use ZmierzymyCzas\Domain\FormFields\FormFieldCatalog;
+use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
 use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
 use ZmierzymyCzas\Domain\Repository;
@@ -165,7 +169,101 @@ SQL;
             );
         }
         $stmt->execute(['eventId' => $eventId]);
-        return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
+        $registrations = array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
+
+        return $this->attachPublicFormFields($eventId, $registrations);
+    }
+
+    /**
+     * E1.13 verification fix: wires FormFieldRepository::publicListColumns()
+     * (form-item order + public_list_visible flag + unconditional
+     * is_confidential exclusion) into the real public start-list path — it
+     * was previously only exercised by FormFieldRepositoryTest in isolation,
+     * never by any endpoint. Adds a `formFields` array to every registration
+     * row: exactly the columns publicListColumns() says belong on the public
+     * list, in that order, each resolved to whatever value already exists
+     * for it today (a custom field's stored answer, or a system field's
+     * value on this registration/its linked competitor).
+     *
+     * Deliberately does NOT invent storage for a system key that has none in
+     * this schema today — country/city/postal_code/voivodeship/address/
+     * anonymization are seeded into the catalog (FormFieldCatalog) but have
+     * no actual column anywhere (grepped before writing this: no migration
+     * ever added them to `competitors`) — those simply resolve to null here,
+     * same as an unanswered custom field would. Closing that pre-existing gap
+     * is out of scope for this fix.
+     *
+     * @param array<int, array<string, mixed>> $registrations
+     * @return array<int, array<string, mixed>>
+     */
+    private function attachPublicFormFields(string $eventId, array $registrations): array
+    {
+        if ($registrations === []) {
+            return $registrations;
+        }
+
+        $columns = (new FormFieldRepository($this->pdo))->publicListColumns($eventId);
+        if ($columns === []) {
+            return array_map(static fn (array $r): array => [...$r, 'formFields' => []], $registrations);
+        }
+
+        $answerRepository = new FormFieldAnswerRepository($this->pdo);
+        $competitorRepository = new CompetitorRepository($this->pdo);
+        $competitorCache = [];
+
+        return array_map(function (array $registration) use ($columns, $answerRepository, $competitorRepository, &$competitorCache): array {
+            $competitor = null;
+            $competitorId = $registration['competitorId'] ?? null;
+            if ($competitorId !== null) {
+                if (!array_key_exists($competitorId, $competitorCache)) {
+                    $competitorCache[$competitorId] = $competitorRepository->find((string) $competitorId);
+                }
+                $competitor = $competitorCache[$competitorId];
+            }
+
+            $answersByFieldId = [];
+            foreach ($answerRepository->forRegistration((string) $registration['id']) as $answer) {
+                $answersByFieldId[$answer['formFieldId']] = $answer['valueText'] ?? $answer['valueJson'] ?? null;
+            }
+
+            $registration['formFields'] = array_map(
+                fn (array $field): array => [
+                    'fieldKey' => $field['fieldKey'],
+                    'label' => $field['labelOverride'] ?? (FormFieldCatalog::find($field['fieldKey'])['label'] ?? $field['fieldKey']),
+                    'value' => $this->resolvePublicFieldValue($field, $registration, $competitor, $answersByFieldId),
+                ],
+                $columns
+            );
+
+            return $registration;
+        }, $registrations);
+    }
+
+    /**
+     * @param array<string, mixed> $field
+     * @param array<string, mixed> $registration
+     * @param array<string, mixed>|null $competitor
+     * @param array<string, mixed> $answersByFieldId
+     */
+    private function resolvePublicFieldValue(array $field, array $registration, ?array $competitor, array $answersByFieldId): mixed
+    {
+        if ($field['kind'] === 'custom') {
+            return $answersByFieldId[$field['id']] ?? null;
+        }
+
+        return match ($field['fieldKey']) {
+            'contact_email' => $registration['userEmail'] ?? null,
+            'first_name' => $competitor['firstName'] ?? null,
+            'last_name' => $competitor['lastName'] ?? null,
+            'birth_date' => $competitor['birthDate'] ?? null,
+            'gender' => $competitor['gender'] ?? null,
+            'phone' => $competitor['phone'] ?? null,
+            'club' => $competitor['club'] ?? null,
+            // country/city/postal_code/voivodeship/address/anonymization: no
+            // storage column exists for these anywhere yet — see this
+            // method's caller's docblock.
+            default => null,
+        };
     }
 
     /** @return array<int, array<string, mixed>> */

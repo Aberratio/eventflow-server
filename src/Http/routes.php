@@ -1155,6 +1155,68 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
+        // E1.14 (spec 10 pkt 2, "korekta wsteczna ze śladem"): the only way to
+        // change a finished Event's frozen form-field snapshot — organizer (own
+        // Wydarzenie) or admin/moderator, same $canManageEvent gate as mark-paid
+        // above. Body is a flat fieldKey => new value map, mirroring
+        // updatePaymentDetails()'s "body is the payload" shape. Rejects (409)
+        // when the Zapis's Event isn't `finished` yet — correcting the live
+        // Competitor/Registration record directly is how that case is already
+        // handled (RegistrationRepository::correctFormSnapshot() deliberately
+        // builds no parallel path for it). $logActivity below is the actual
+        // "ślad w rejestrze" the spec requires: one entry per correction call,
+        // carrying every changed field's old and new value inline in the
+        // description, the same "encode the diff into free text" convention
+        // already used by user_role_changed/event_visibility_changed above (this
+        // repo's activity_logs has no separate structured-diff column).
+        $api->patch('/registrations/{id}/form-snapshot', function (Request $request, Response $response, array $args) use ($registrations, $events, $canManageEvent, $logActivity, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $registration = $registrations->find($args['id']);
+            if (!$registration) {
+                return JsonResponder::error($response, 'not_found', 'Registration not found', 404);
+            }
+            if (!$canManageEvent($events->find((string) $registration['eventId']), $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $updates = (array) $body($request);
+            if ($updates === []) {
+                return JsonResponder::error($response, 'form_snapshot_correction_empty', 'Podaj przynajmniej jedną wartość do skorygowania.', 422);
+            }
+            try {
+                $result = $registrations->correctFormSnapshot($args['id'], $updates);
+            } catch (RuntimeException $e) {
+                $errors = [
+                    'registration_not_found' => ['not_found', 'Registration not found', 404],
+                    'registration_form_snapshot_not_finished' => ['registration_form_snapshot_not_finished', 'Korekta snapshotu formularza jest możliwa tylko dla zakończonego Wydarzenia.', 409],
+                ];
+                if (isset($errors[$e->getMessage()])) {
+                    [$code, $message, $status] = $errors[$e->getMessage()];
+                    return JsonResponder::error($response, $code, $message, $status);
+                }
+                throw $e;
+            }
+
+            $summary = [];
+            foreach ($result['changes'] as $fieldKey => $change) {
+                $summary[] = sprintf(
+                    '%s: %s -> %s',
+                    $fieldKey,
+                    json_encode($change['old'], JSON_UNESCAPED_UNICODE),
+                    json_encode($change['new'], JSON_UNESCAPED_UNICODE)
+                );
+            }
+            $logActivity(
+                $auth,
+                'registration_form_snapshot_corrected',
+                'Korekta wsteczna snapshotu formularza Zapisu: ' . implode('; ', $summary),
+                'registration',
+                (string) $args['id'],
+                (string) ($registration['userName'] ?? '')
+            );
+
+            return JsonResponder::ok($response, ['formFields' => $registrations->formSnapshotFor($args['id'])]);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
         // E1.6: Tpay webhook. Never behind AuthMiddleware — Tpay's servers call
         // this, not a logged-in user, so there is no JWT to check; the signature
         // verification below is what stands in for authentication here. Every

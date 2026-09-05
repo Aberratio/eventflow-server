@@ -175,6 +175,20 @@ SQL;
     }
 
     /**
+     * E1.14 out-of-scope seam: the spec's "wyniki, certyfikaty i eksporty
+     * czytają już jego [snapshotu]" names three subsystems that would need to
+     * switch from live to frozen reads once an Event finishes. Grepped before
+     * writing this ticket's code: `src/Domain/Results` and
+     * `src/Domain/Certificate` have zero references to form fields/answers
+     * today, and there is no export subsystem anywhere in this codebase —
+     * none of the three read registration form data at all yet, so there is
+     * nothing to wire this snapshot into there. Same
+     * documented-seam-not-invented-feature stance as E1.5's
+     * `initiateGatewayRefund()`/E1.10's mail seams: whenever any of the three
+     * is actually built, it should read `formSnapshotFor()` (finished Events)
+     * the same way `publicStartList()` does below, not re-derive its own live
+     * resolution.
+     *
      * E1.13 verification fix: wires FormFieldRepository::publicListColumns()
      * (form-item order + public_list_visible flag + unconditional
      * is_confidential exclusion) into the real public start-list path — it
@@ -193,6 +207,15 @@ SQL;
      * same as an unanswered custom field would. Closing that pre-existing gap
      * is out of scope for this fix.
      *
+     * E1.14: this is now the fork point between "live" and "frozen" — before
+     * an Event is `finished`, values keep coming straight from the live
+     * Competitor/Registration record (attachFrozenFormFields() below is never
+     * consulted, so a post-registration typo fix on the Competitor keeps
+     * showing up here exactly as before this ticket); once `finished`, every
+     * Zapis instead serves its snapshot (see attachFrozenFormFields()'s own
+     * docblock for why "first read after finish" stands in for "the moment of
+     * finish" in this no-cron codebase).
+     *
      * @param array<int, array<string, mixed>> $registrations
      * @return array<int, array<string, mixed>>
      */
@@ -207,6 +230,41 @@ SQL;
             return array_map(static fn (array $r): array => [...$r, 'formFields' => []], $registrations);
         }
 
+        if ($this->eventIsFinished($eventId)) {
+            return $this->attachFrozenFormFields($registrations, $columns);
+        }
+
+        return $this->resolveLiveFormFields($registrations, $columns);
+    }
+
+    /**
+     * `events.publication_status` for one Wydarzenie, read directly (same
+     * "cross-table read without a repository dependency" style as
+     * paymentGatewayProviderFor()/paymentConfigType() above) — never `'finished'`
+     * is treated as "not yet finished" for a missing/unknown row, same
+     * conservative default as everywhere else in this class.
+     */
+    private function eventIsFinished(string $eventId): bool
+    {
+        $stmt = $this->pdo->prepare('SELECT publication_status FROM events WHERE id = :id');
+        $stmt->execute(['id' => $eventId]);
+        return $stmt->fetchColumn() === 'finished';
+    }
+
+    /**
+     * Live resolution, shared by two callers: the pre-finish read path
+     * (attachPublicFormFields(), unchanged behavior) and the finished-Event
+     * lazy-capture path (attachFrozenFormFields(), E1.14) — the snapshot that
+     * ticket freezes is always exactly what this method would have returned
+     * live at the moment it is first called after finish. Refactored out of
+     * attachPublicFormFields() rather than duplicated, per the ticket.
+     *
+     * @param array<int, array<string, mixed>> $registrations
+     * @param array<int, array<string, mixed>> $columns
+     * @return array<int, array<string, mixed>>
+     */
+    private function resolveLiveFormFields(array $registrations, array $columns): array
+    {
         $answerRepository = new FormFieldAnswerRepository($this->pdo);
         $competitorRepository = new CompetitorRepository($this->pdo);
         $competitorCache = [];
@@ -237,6 +295,183 @@ SQL;
 
             return $registration;
         }, $registrations);
+    }
+
+    /**
+     * Freezes and serves the finished-Event snapshot (spec 10 pkt 2, "przy
+     * przejściu Wydarzenia w stan zakończony Zapis utrwala snapshot"). This
+     * codebase has no cron (see EventRepository::lazilyFinishPastEvents()'s own
+     * docblock) — the Event's row already flips to `finished` lazily, on the
+     * first read after its date passes, before this ever runs (every caller of
+     * publicStartList() reads the Event first — see routes.php's start-list
+     * handler, which calls `$events->find()` before `$registrations->
+     * publicStartList()`). This mirrors that same lazy-on-read shape one level
+     * down: the FIRST read of a given Registration's form fields after its
+     * Event is `finished` computes the payload once (resolveLiveFormFields(),
+     * shared with the pre-finish path) and freezes it
+     * (captureFormSnapshotIfMissing() — guarded so it can never overwrite an
+     * already-captured snapshot, "stamped once" per the ticket); every later
+     * read — including one where the underlying Competitor was edited
+     * afterward — serves that same frozen JSON, never recomputed. The only
+     * thing that can ever change a captured snapshot afterward is the explicit,
+     * audited correction endpoint (correctFormSnapshot()).
+     *
+     * @param array<int, array<string, mixed>> $registrations
+     * @param array<int, array<string, mixed>> $columns
+     * @return array<int, array<string, mixed>>
+     */
+    private function attachFrozenFormFields(array $registrations, array $columns): array
+    {
+        $ids = array_column($registrations, 'id');
+        $snapshots = $this->fetchFormSnapshots($ids);
+
+        $uncaptured = array_values(array_filter(
+            $registrations,
+            static fn (array $r): bool => !array_key_exists($r['id'], $snapshots)
+        ));
+        if ($uncaptured !== []) {
+            foreach ($this->resolveLiveFormFields($uncaptured, $columns) as $resolved) {
+                $this->captureFormSnapshotIfMissing((string) $resolved['id'], $resolved['formFields']);
+                $snapshots[$resolved['id']] = $resolved['formFields'];
+            }
+        }
+
+        return array_map(
+            static fn (array $r): array => [...$r, 'formFields' => $snapshots[$r['id']] ?? []],
+            $registrations
+        );
+    }
+
+    /**
+     * @param array<int, string> $ids
+     * @return array<string, array<int, array<string, mixed>>> keyed by registration id — only ids that already have a captured snapshot are present
+     */
+    private function fetchFormSnapshots(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($ids), '?'));
+        $stmt = $this->pdo->prepare(
+            "SELECT id, form_data_snapshot AS formDataSnapshot FROM registrations
+             WHERE id IN ({$placeholders}) AND form_data_snapshot IS NOT NULL"
+        );
+        $stmt->execute(array_values($ids));
+
+        $snapshots = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $snapshots[$row['id']] = json_decode((string) $row['formDataSnapshot'], true) ?: [];
+        }
+
+        return $snapshots;
+    }
+
+    /**
+     * Guarded by `form_snapshot_captured_at IS NULL` — the "stamped once, not
+     * recomputed again afterward" half of the ticket's requirement. A
+     * retroactive correction (correctFormSnapshot()) writes
+     * `form_data_snapshot` directly and deliberately does NOT re-null this
+     * column, so a later lazy read here can never clobber a correction with a
+     * freshly-recomputed live value.
+     *
+     * @param array<int, array<string, mixed>> $formFields
+     */
+    private function captureFormSnapshotIfMissing(string $registrationId, array $formFields): void
+    {
+        $this->pdo->prepare(
+            'UPDATE registrations
+             SET form_data_snapshot = :snapshot, form_snapshot_captured_at = :capturedAt
+             WHERE id = :id AND form_snapshot_captured_at IS NULL'
+        )->execute([
+            'snapshot' => json_encode($formFields, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'capturedAt' => date(DATE_ATOM),
+            'id' => $registrationId,
+        ]);
+    }
+
+    /**
+     * Retroactive correction ("korekta wsteczna ze śladem", spec 10 pkt 2) —
+     * the ONLY way to change a finished Event's frozen form-field snapshot.
+     * Correcting the live Competitor/Registration record directly is how a
+     * pre-finish typo is already fixed today (attachPublicFormFields() reads
+     * it live in that case) — this method deliberately does NOT build a
+     * parallel path for that case, and rejects outright when the Event isn't
+     * `finished` yet (registration_form_snapshot_not_finished below).
+     *
+     * Merges `$updates` (fieldKey => new value) into the existing frozen
+     * payload under a row lock, preserving every entry the call doesn't touch,
+     * and adding a fresh entry (label defaults to the key itself) for a
+     * fieldKey that wasn't part of the snapshot captured at finish — this is a
+     * generic "fix this Zapis's frozen form data" tool, not limited to
+     * whatever happened to be public-list-visible at the moment of finish.
+     *
+     * Returns the per-field old/new values (restricted to the fieldKeys in
+     * $updates) so the caller (routes.php, per this codebase's established
+     * convention — see $logActivity's own doc comment) can write an
+     * activity-log entry precise enough to reconstruct who changed what, from
+     * what value, to what value, and when — the actual "ślad w rejestrze" the
+     * spec requires. This method itself never touches activity_logs.
+     *
+     * @param array<string, mixed> $updates fieldKey => new value
+     * @return array{changes: array<string, array{old: mixed, new: mixed}>}
+     */
+    public function correctFormSnapshot(string $registrationId, array $updates): array
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $stmt = $this->pdo->prepare(
+                'SELECT r.form_data_snapshot AS formDataSnapshot, e.publication_status AS publicationStatus
+                 FROM registrations r INNER JOIN events e ON e.id = r.event_id
+                 WHERE r.id = :id FOR UPDATE'
+            );
+            $stmt->execute(['id' => $registrationId]);
+            $row = $stmt->fetch();
+            if ($row === false) {
+                throw new \RuntimeException('registration_not_found');
+            }
+            if ((string) $row['publicationStatus'] !== 'finished') {
+                throw new \RuntimeException('registration_form_snapshot_not_finished');
+            }
+
+            $current = $row['formDataSnapshot'] !== null ? (json_decode((string) $row['formDataSnapshot'], true) ?: []) : [];
+            $byKey = [];
+            foreach ($current as $entry) {
+                $byKey[(string) $entry['fieldKey']] = $entry;
+            }
+
+            $changes = [];
+            foreach ($updates as $fieldKey => $value) {
+                $fieldKey = (string) $fieldKey;
+                $changes[$fieldKey] = ['old' => $byKey[$fieldKey]['value'] ?? null, 'new' => $value];
+                $byKey[$fieldKey] = [
+                    'fieldKey' => $fieldKey,
+                    'label' => $byKey[$fieldKey]['label'] ?? $fieldKey,
+                    'value' => $value,
+                ];
+            }
+
+            $this->pdo->prepare('UPDATE registrations SET form_data_snapshot = :snapshot WHERE id = :id')
+                ->execute([
+                    'snapshot' => json_encode(array_values($byKey), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    'id' => $registrationId,
+                ]);
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
+        return ['changes' => $changes];
+    }
+
+    /** @return array<int, array<string, mixed>> current frozen snapshot entries for one Zapis, [] if never captured */
+    public function formSnapshotFor(string $registrationId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT form_data_snapshot AS formDataSnapshot FROM registrations WHERE id = :id');
+        $stmt->execute(['id' => $registrationId]);
+        $raw = $stmt->fetchColumn();
+        return is_string($raw) && $raw !== '' ? (json_decode($raw, true) ?: []) : [];
     }
 
     /**

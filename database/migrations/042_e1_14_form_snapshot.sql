@@ -1,0 +1,34 @@
+-- E1.14: Formularz — snapshot danych przy zakończeniu Wydarzenia + korekta
+-- wsteczna ze śladem.
+--
+-- Rozstrzygnięcie: zc-second-brain/specyfikacje/zmierzymy-czas/issues/
+-- 10-konfigurowalny-formularz-zapisow.md (Answer, pkt 2):
+-- "Dane żyją do zakończenia Wydarzenia, potem zamarzają. Do dnia zakończenia
+-- lista startowa czyta żywe atrybuty Zawodnika (poprawki literówek działają
+-- naturalnie); przy przejściu Wydarzenia w stan zakończony Zapis utrwala
+-- snapshot i wyniki, certyfikaty i eksporty czytają już jego. Korekta wsteczna
+-- zostaje możliwa, ale jako jawna operacja ze śladem w rejestrze (09)."
+--
+-- `form_data_snapshot` trzyma dokładnie ten sam kształt, jaki
+-- RegistrationRepository::attachPublicFormFields() liczy dziś na żywo — lista
+-- {fieldKey, label, value} w kolejności formularza (FormFieldRepository::
+-- publicListColumns()). Zapisywana raz, przy pierwszym odczycie Zapisu po
+-- przejściu jego Wydarzenia w stan `finished` (ten kodebase nie ma crona —
+-- patrz EventRepository::lazilyFinishPastEvents() — więc "moment zakończenia"
+-- to zawsze "pierwszy odczyt po zakończeniu", tak samo jak w tamtej metodzie).
+-- `form_snapshot_captured_at` istnieje wyłącznie jako strażnik "już zamrożone,
+-- nigdy nie licz ponownie" (RegistrationRepository::captureFormSnapshotIfMissing())
+-- — sama wartość nie jest nigdzie odczytywana poza tym warunkiem.
+--
+-- Korekta wsteczna (PATCH /registrations/{id}/form-snapshot,
+-- RegistrationRepository::correctFormSnapshot()) nadpisuje form_data_snapshot
+-- bezpośrednio i świadomie NIE zeruje form_snapshot_captured_at — ślad "kto/co/
+-- kiedy" żyje w activity_logs.description (E0.8), tak jak każda inna korekta
+-- w tym repo (mark-paid, refund-approve), nie w osobnej kolumnie audytowej tutaj.
+--
+-- Typ kolumny czasu — VARCHAR(64), nie TIMESTAMP — mirror istniejącej konwencji
+-- tej tabeli dla znaczników czasu zapisywanych przez `date(DATE_ATOM)`
+-- (checked_in_at w 028, payment_expires_at w 034), nie nowy wybór.
+ALTER TABLE registrations
+  ADD COLUMN IF NOT EXISTS form_data_snapshot JSON NULL AFTER checked_in_at,
+  ADD COLUMN IF NOT EXISTS form_snapshot_captured_at VARCHAR(64) NULL AFTER form_data_snapshot;

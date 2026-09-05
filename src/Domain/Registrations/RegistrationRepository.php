@@ -86,7 +86,7 @@ final class RegistrationRepository extends Repository
 id, event_id AS eventId, event_name AS eventName, user_id AS userId, competitor_id AS competitorId,
 user_name AS userName,
 user_email AS userEmail, distance_id AS distanceId, distance_name AS distanceName, category,
-registered_at AS registeredAt, status, bib_number AS bibNumber, team_name AS teamName, team_id AS teamId,
+registered_at AS registeredAt, status, bib_number AS bibNumber, qr_code AS qrCode, team_name AS teamName, team_id AS teamId,
 discount_code AS discountCode, removed_at AS removedAt, checked_in_at AS checkedInAt,
 registered_by_id AS registeredById
 SQL;
@@ -95,7 +95,7 @@ SQL;
 r.id, r.event_id AS eventId, r.event_name AS eventName, r.user_id AS userId, r.competitor_id AS competitorId,
 r.user_name AS userName,
 r.user_email AS userEmail, r.distance_id AS distanceId, r.distance_name AS distanceName, r.category,
-r.registered_at AS registeredAt, r.status, r.bib_number AS bibNumber, r.team_name AS teamName, r.team_id AS teamId,
+r.registered_at AS registeredAt, r.status, r.bib_number AS bibNumber, r.qr_code AS qrCode, r.team_name AS teamName, r.team_id AS teamId,
 r.discount_code AS discountCode, r.removed_at AS removedAt, r.checked_in_at AS checkedInAt,
 r.registered_by_id AS registeredById
 SQL;
@@ -262,6 +262,10 @@ SQL;
                 'category' => $data['category'],
                 'registered_at' => date(DATE_ATOM),
                 'status' => $startFeePaid ? 'confirmed' : 'pending',
+                // E1.11: kod startowy — generowany zawsze, tu, przez platformę (nigdy przez
+                // BZ, patrz generateStartCode()'s docblock), więc nigdy nie ma Zapisu bez
+                // kodu i nie ma osobnej operacji "wygeneruj kody" po stronie organizatora.
+                'qr_code' => $this->generateStartCode(),
                 'team_name' => $data['teamName'] ?? null,
                 'team_id' => $data['teamId'] ?? null,
                 'registered_by_id' => $data['registeredById'] ?? null,
@@ -355,6 +359,29 @@ SQL;
      * change to pick between gatewayWindowMinutes/transferWindowDays.
      */
     private const DEFAULT_GATEWAY_WINDOW_MINUTES = 45;
+
+    /**
+     * E1.11 (spec 11, "Kod startowy"): the platform-generated QR token that belongs to
+     * this Zapis, not to any account/Zawodnik — `zqr_` (kod tożsamości, Zawodnik-owned)
+     * is a different token entirely and is E1.12's job, not this one's. Bit-for-bit the
+     * same format Biuro Zawodów already generates itself today
+     * (`biuro_zawodow-api/src/QrCodeService.php`: `pqr_` + 48 hex chars from
+     * `random_bytes(24)`, regex `^pqr_[a-f0-9]{48}$`) — kept identical on purpose so BZ's
+     * existing validation and offline scanner client need zero changes; the only thing
+     * that changes is *who* generates it (the platform, here, always — never BZ, and
+     * never a separate "generate codes" step an organizer could forget to run).
+     *
+     * Carries no status of its own (no active/used/cancelled column) — its validity is
+     * entirely derived from `registrations.status` elsewhere (an expired/cancelled/removed
+     * Zapis simply has a dead code, nothing to unset here). Distance changes never touch
+     * this — same Zapis, same code; only a reassignment of the Zapis to a different person
+     * would rotate it (no such mechanism exists in this codebase today — see the ticket's
+     * own note — so there is nothing to hook rotation into yet).
+     */
+    private function generateStartCode(): string
+    {
+        return 'pqr_' . bin2hex(random_bytes(24));
+    }
 
     /**
      * Locks the Dystans row (and its parent Event, via the JOIN) for the rest of

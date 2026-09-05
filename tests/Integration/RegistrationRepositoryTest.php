@@ -187,6 +187,50 @@ final class RegistrationRepositoryTest extends TestCase
         self::assertSame('cancelled', $tickets[0]['status']);
     }
 
+    /**
+     * E1.11: every Zapis gets a `pqr_`-prefixed, 48-hex-char start code automatically —
+     * no separate "generate codes" step, no null. Persisted (not just computed at read
+     * time, unlike E1.8's transferTitle) — find() must return the same code create() did.
+     */
+    public function testCreateGeneratesPersistedStartCode(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-startcode']));
+        $registration = $this->registrations->create($this->registrationPayload($event, '', 'phpunit-startcode-user'));
+
+        self::assertMatchesRegularExpression('/^pqr_[a-f0-9]{48}$/', (string) $registration['qrCode']);
+
+        $found = $this->registrations->find($registration['id']);
+        self::assertSame($registration['qrCode'], $found['qrCode']);
+    }
+
+    /** Two Zapisy never collide on the same start code — each gets its own random token. */
+    public function testCreateGeneratesDistinctStartCodesPerRegistration(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-startcode-distinct']));
+        $first = $this->registrations->create($this->registrationPayload($event, '', 'phpunit-startcode-user-1'));
+        $second = $this->registrations->create($this->registrationPayload($event, '', 'phpunit-startcode-user-2'));
+
+        self::assertNotSame($first['qrCode'], $second['qrCode']);
+    }
+
+    /**
+     * E1.11: distance change (E1.8/E1.2 territory — same Zapis, just a different Dystans)
+     * must NOT rotate the start code — only a reassignment of the Zapis to a different
+     * person would (no such mechanism exists in this codebase yet, so nothing to test for
+     * rotation here — see the ticket's own note). `update()` doesn't expose a distance
+     * change today, so this asserts the weaker but still meaningful guarantee: an
+     * unrelated status update on the same Zapis leaves the start code untouched.
+     */
+    public function testUnrelatedUpdateDoesNotRotateStartCode(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-startcode-stable']));
+        $registration = $this->registrations->create($this->registrationPayload($event, '', 'phpunit-startcode-stable-user'));
+
+        $updated = $this->registrations->update($registration['id'], ['bibNumber' => '101']);
+
+        self::assertSame($registration['qrCode'], $updated['qrCode']);
+    }
+
     /** @param array<string, mixed> $overrides */
     private function payload(array $overrides = []): array
     {

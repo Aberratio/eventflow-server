@@ -19,7 +19,8 @@ final class CareRepository extends Repository
         $stmt = $this->pdo->prepare(
             'SELECT cr.id, cr.zawodnik_id AS competitorId, cr.created_at AS createdAt,
                     c.first_name AS firstName, c.last_name AS lastName, c.birth_date AS birthDate,
-                    c.gender, c.email, c.phone, c.club, c.user_id AS competitorUserId
+                    c.gender, c.email, c.phone, c.club, c.identity_code AS identityCode,
+                    c.user_id AS competitorUserId
              FROM care_relations cr
              JOIN competitors c ON c.id = cr.zawodnik_id
              WHERE cr.konto_id = :kontoId

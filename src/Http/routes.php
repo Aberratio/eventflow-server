@@ -2157,6 +2157,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $myProfile = $competitors->findByUserId($userId);
 
             return JsonResponder::ok($response, [
+                // E1.12: własny profil Zawodnika (z identityCode) — każde Konto uczestnika
+                // dostaje go automatycznie przy rejestracji (UserRepository::create() woła
+                // ensureForUser()), więc to prawie zawsze nie-null; klient pokazuje tu "swój"
+                // kod tożsamości obok kodów Zawodników z myCompetitors (spec 11 §5.1: "mama
+                // przełącza między swoim kodem, kodem Zosi i Antka").
+                'myProfile' => $myProfile,
                 'myCompetitors' => $care->listMyCompetitors($userId),
                 'caregivers' => $myProfile !== null ? $care->listCaregivers((string) $myProfile['id']) : [],
             ]);
@@ -2242,6 +2248,30 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
 
             return JsonResponder::ok($response, null, 'Opieka została cofnięta.');
+        })->add(new AuthMiddleware($jwt));
+
+        // E1.12 ("Kod tożsamości QR"): rotacja na żądanie — Zawodnik sam (jeśli ma
+        // własne Konto, czyli competitor.user_id === wywołujący), albo Konto
+        // sprawujące nad nim Opiekę, może unieważnić stary `zqr_` i dostać nowy.
+        // Reużywamy `$care->canRegister()` zamiast wynajdywać nowe sprawdzenie —
+        // to dokładnie ta sama relacja (Opieka LUB własny profil), która już dziś
+        // decyduje, kto wolno zapisać Zawodnika na zawody; rotacja kodu to kolejna
+        // operacja w imieniu Zawodnika, więc ten sam krąg uprawnionych pasuje.
+        $api->post('/competitors/{id}/rotate-identity-code', function (Request $request, Response $response, array $args) use ($competitors, $care): Response {
+            $auth = (array) $request->getAttribute('auth');
+            $kontoId = (string) ($auth['sub'] ?? '');
+            $id = (string) ($args['id'] ?? '');
+
+            if ($competitors->find($id) === null) {
+                return JsonResponder::error($response, 'not_found', 'Zawodnik nie istnieje.', 404);
+            }
+
+            if (!$care->canRegister($kontoId, $id)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz Opieki nad tym Zawodnikiem.', 403);
+            }
+
+            $updated = $competitors->regenerateIdentityCode($id);
+            return JsonResponder::ok($response, $updated, 'Kod tożsamości został wygenerowany na nowo.');
         })->add(new AuthMiddleware($jwt));
 
         // E1.10 §5 (model szablonów) — minimal server-side CRUD, no frontend in

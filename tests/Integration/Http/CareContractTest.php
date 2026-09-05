@@ -50,8 +50,11 @@ final class CareContractTest extends HttpTestCase
         $this->pdo->prepare(
             "DELETE c FROM competitors c JOIN users u ON u.id = c.user_id WHERE u.email LIKE :email"
         )->execute(['email' => $this->prefix . '-%@example.test']);
-        $this->pdo->prepare('DELETE FROM competitors WHERE first_name = :first AND last_name = :last')
-            ->execute(['first' => 'Zosia', 'last' => $this->prefix]);
+        // last_name is the random per-test prefix for every standalone ward this file
+        // creates (Zosia in the E0.1 tests, plus E1.12's Rotacja/Cudzy wards) — matching
+        // on it alone (not also first_name) catches all of them without over-deleting.
+        $this->pdo->prepare('DELETE FROM competitors WHERE last_name = :last')
+            ->execute(['last' => $this->prefix]);
         $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')->execute(['email' => $this->prefix . '-%@example.test']);
     }
 
@@ -183,5 +186,80 @@ final class CareContractTest extends HttpTestCase
 
         self::assertSame(403, $response->getStatusCode());
         self::assertSame('not_authorized_to_register', $this->json($response)['error']['code']);
+    }
+
+    /**
+     * E1.12: rotacja na żądanie — Konto sprawujące Opiekę nad Zawodnikiem (tu:
+     * parent1 dodał dziecko pod swoją opiekę) może wygenerować mu nowy kod
+     * tożsamości, unieważniając stary od razu (nadpisanie, bez historii).
+     */
+    public function testGuardianCanRotateWardsIdentityCode(): void
+    {
+        $add = $this->json($this->request(
+            'POST',
+            '/api/v1/care',
+            ['firstName' => 'Rotacja', 'lastName' => $this->prefix, 'birthDate' => '2016-01-01'],
+            $this->bearer($this->parent1['id'], 'participant', $this->parent1['email'])
+        ))['data'];
+        $competitorId = $add['competitor']['id'];
+        $oldCode = $add['competitor']['identityCode'];
+        self::assertMatchesRegularExpression('/^zqr_[a-f0-9]{48}$/', (string) $oldCode);
+
+        $rotate = $this->request(
+            'POST',
+            '/api/v1/competitors/' . $competitorId . '/rotate-identity-code',
+            [],
+            $this->bearer($this->parent1['id'], 'participant', $this->parent1['email'])
+        );
+
+        self::assertSame(200, $rotate->getStatusCode());
+        $rotated = $this->json($rotate)['data'];
+        self::assertMatchesRegularExpression('/^zqr_[a-f0-9]{48}$/', (string) $rotated['identityCode']);
+        self::assertNotSame($oldCode, $rotated['identityCode']);
+    }
+
+    /** A Konto with no Opieka over the Zawodnik (and not the Zawodnik itself) may not rotate their code. */
+    public function testStrangerCannotRotateSomeoneElsesIdentityCode(): void
+    {
+        $add = $this->json($this->request(
+            'POST',
+            '/api/v1/care',
+            ['firstName' => 'Cudzy', 'lastName' => $this->prefix, 'birthDate' => '2016-01-01'],
+            $this->bearer($this->parent1['id'], 'participant', $this->parent1['email'])
+        ))['data'];
+        $competitorId = $add['competitor']['id'];
+
+        $forbidden = $this->request(
+            'POST',
+            '/api/v1/competitors/' . $competitorId . '/rotate-identity-code',
+            [],
+            $this->bearer($this->parent2['id'], 'participant', $this->parent2['email'])
+        );
+
+        self::assertSame(403, $forbidden->getStatusCode());
+    }
+
+    /** The Zawodnik itself (own Konto, own profile) can rotate its own identity code too, no Opieka needed. */
+    public function testCompetitorWithOwnAccountCanRotateOwnIdentityCode(): void
+    {
+        $care = $this->request(
+            'GET',
+            '/api/v1/care',
+            [],
+            $this->bearer($this->parent1['id'], 'participant', $this->parent1['email'])
+        );
+        $myProfile = $this->json($care)['data']['myProfile'];
+        self::assertNotNull($myProfile);
+        self::assertMatchesRegularExpression('/^zqr_[a-f0-9]{48}$/', (string) $myProfile['identityCode']);
+
+        $rotate = $this->request(
+            'POST',
+            '/api/v1/competitors/' . $myProfile['id'] . '/rotate-identity-code',
+            [],
+            $this->bearer($this->parent1['id'], 'participant', $this->parent1['email'])
+        );
+
+        self::assertSame(200, $rotate->getStatusCode());
+        self::assertNotSame($myProfile['identityCode'], $this->json($rotate)['data']['identityCode']);
     }
 }

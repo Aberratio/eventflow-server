@@ -146,59 +146,22 @@ WHERE f.field_key = 'club'
   AND JSON_EXTRACT(e.registration_form_config, '$.collectClub') = true;
 
 -- Backfill: migracja pól własnych z `events.registration_form_config.customFields`
--- (trzy typy: text|select|checkbox) do `form_fields` (kind = custom). Kolejność
--- zachowana z tablicy JSON (sort_order = 100 + indeks, żeby zawsze lądowały po
--- 13 pozycjach systemowych — wcześniejsza kolejność względna między własnymi
--- polami się liczyła, względna wobec systemowych nie była nigdzie zdefiniowana).
--- Mapowanie typu: text -> short_text (jedyny typ tekstowy w starym modelu, bez
--- rozróżnienia krótki/długi — zachowujemy jako short_text, organizator może
--- ręcznie przełączyć na long_text później), select -> single_choice (opcje bez
--- ceny, cena to nowy atrybut tego ticketu — domyślnie 0, seam #2), checkbox ->
--- consent. `required` z JSON mapuje na stan `required`, inaczej `shown` (pole
--- było już w formularzu, samo istnienie w customFields = widoczne).
-INSERT INTO form_fields (
-  id, event_id, kind, field_key, storage_location, state, sort_order,
-  label_override, public_list_visible, field_type, validation_config, options, is_confidential
-)
-SELECT
-  UUID(),
-  e.id,
-  'custom',
-  CONCAT('custom_', jt.legacy_id),
-  'registration',
-  CASE WHEN jt.required = 1 THEN 'required' ELSE 'shown' END,
-  100 + jt.idx,
-  jt.label,
-  0,
-  CASE jt.type
-    WHEN 'text' THEN 'short_text'
-    WHEN 'select' THEN 'single_choice'
-    WHEN 'checkbox' THEN 'consent'
-    ELSE 'short_text'
-  END,
-  NULL,
-  CASE
-    WHEN jt.type = 'select' AND jt.options_json IS NOT NULL THEN
-      (SELECT JSON_ARRAYAGG(JSON_OBJECT('key', opt.option_value, 'label', opt.option_value, 'price', 0))
-       FROM JSON_TABLE(jt.options_json, '$[*]' COLUMNS (option_value VARCHAR(255) PATH '$')) AS opt)
-    ELSE NULL
-  END,
-  0
-FROM events e
-JOIN JSON_TABLE(
-  e.registration_form_config,
-  '$.customFields[*]'
-  COLUMNS (
-    idx FOR ORDINALITY,
-    legacy_id VARCHAR(80) PATH '$.id',
-    label VARCHAR(255) PATH '$.label',
-    type VARCHAR(20) PATH '$.type',
-    required TINYINT(1) PATH '$.required',
-    options_json JSON PATH '$.options'
-  )
-) AS jt ON true
-WHERE e.registration_form_config IS NOT NULL
-  AND JSON_EXTRACT(e.registration_form_config, '$.customFields') IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM form_fields f WHERE f.event_id = e.id AND f.field_key = CONCAT('custom_', jt.legacy_id)
-  );
+-- (trzy typy: text|select|checkbox) do `form_fields` (kind = custom).
+--
+-- E1.14 verification fix (ten fragment, mimo że dotyczy migracji 041, jest
+-- naprawiany w ramach E1.14 — patrz commit message tego ticketu): ten backfill
+-- pierwotnie żył tutaj jako pojedynczy INSERT ... JOIN JSON_TABLE(...) z
+-- zagnieżdżonym JSON_ARRAYAGG(JSON_OBJECT(...)). Oba wymagają MariaDB, którego
+-- ta instalacja nie ma: JSON_TABLE dopiero od 10.6.0, JSON_ARRAYAGG dopiero od
+-- 10.5.0, a `SELECT VERSION()` tu zwraca 10.4.32 — więc ten statement nigdy nie
+-- parsował się na tej bazie (błąd składni), co ubijało CAŁY przebieg migracji
+-- (Migrator::applyFile() nie ma obsługi błędów per-statement), blokując także
+-- 042 (E1.14 samo) na zawsze. Przeniesione do PHP:
+-- `ZmierzymyCzas\Database\CustomFormFieldsBackfill::run()`, wołane z
+-- `Migrator::applyAll()` po zastosowaniu wszystkich plików .sql. Ta sama
+-- semantyka (kolejność z tablicy JSON, sort_order = 100 + indeks, mapowanie
+-- typu text->short_text/select->single_choice/checkbox->consent, `required`
+-- z JSON -> stan `required` inaczej `shown`, opcje jako string[] -> [{key,
+-- label, price:0}]) i ta sama idempotencja (pomija field_key już istniejący na
+-- danym evencie), tylko przez zwykłe json_decode() + parametryzowane INSERTy
+-- zamiast JSON_TABLE/JSON_ARRAYAGG — działa niezależnie od wersji MariaDB/MySQL.

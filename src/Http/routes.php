@@ -1498,6 +1498,32 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->get('/users/{userId}/personal-records', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->personalRecords($args['userId'])));
+        // E2.4 (spec 14 sekcja 3): rekord zyciowy per etykieta/dlugosc dystansu,
+        // tylko starty na zywo - patrz docblock
+        // ResultRepository::lifetimeRecordsForCompetitor() dla pelnego
+        // uzasadnienia zapytania. Autoryzacja mirrors
+        // /competitors/{id}/rotate-identity-code powyzej: sam Zawodnik (jesli
+        // ma wlasne Konto), Konto sprawujace nad nim Opieke
+        // (CareRepository::canRegister()), albo personel (admin/superadmin/
+        // moderator) - dokladnie ten sam krag co juz decyduje, kto smie
+        // dzialac w imieniu danego Zawodnika, plus staff dla wgladu
+        // organizacyjnego/moderacyjnego.
+        $api->get('/competitors/{id}/records', function (Request $request, Response $response, array $args) use ($competitors, $care, $results, $isStaffRole): Response {
+            $auth = (array) $request->getAttribute('auth');
+            $kontoId = (string) ($auth['sub'] ?? '');
+            $role = (string) ($auth['role'] ?? '');
+            $id = (string) ($args['id'] ?? '');
+
+            if ($competitors->find($id) === null) {
+                return JsonResponder::error($response, 'not_found', 'Zawodnik nie istnieje.', 404);
+            }
+
+            if (!$isStaffRole($role) && !$care->canRegister($kontoId, $id)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wglądu w rekordy tego Zawodnika.', 403);
+            }
+
+            return JsonResponder::ok($response, $results->lifetimeRecordsForCompetitor($id));
+        })->add(new AuthMiddleware($jwt));
         $api->get('/events/{eventId}/team-results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->teamResults($args['eventId'])));
         $api->get('/events/{eventId}/result-documents', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->documents($args['eventId'])));
         $api->post('/events/{eventId}/result-documents', function (Request $request, Response $response, array $args) use ($events, $results, $body, $canUploadResults) {

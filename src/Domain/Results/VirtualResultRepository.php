@@ -215,6 +215,12 @@ SQL);
             'position' => 0,
             'category_position' => 0,
             'status' => 'finished',
+            // E2.4 (spec 14 sekcja 3): "Tylko wyniki ze startu na zywo bija
+            // rekord - wynik wirtualny ... jest wykluczony, nawet po
+            // weryfikacji organizatora." Ten wiersz jest materializacja
+            // zatwierdzonego zgloszenia wirtualnego (nie pomiaru na zywo),
+            // wiec musi nie brac udzialu w ResultRepository::lifetimeRecordsForCompetitor().
+            'is_virtual' => 1,
             'gender' => $registration['gender'] ?? null,
             'birth_year' => $registration['birthYear'] ?? null,
         ]);

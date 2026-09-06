@@ -1,0 +1,25 @@
+-- E2.4: Rekordy zyciowe per etykieta dystansu, tylko starty na zywo.
+--
+-- Rozstrzygniecie: zc-second-brain/specyfikacje/.../14-wyniki-live-rekordy.md,
+-- sekcja 3. "Tylko wyniki ze startu na zywo bija rekord - wynik wirtualny
+-- ... jest wykluczony, nawet po weryfikacji organizatora."
+--
+-- Luka, ktora ta migracja zamyka: VirtualResultRepository::upsertOfficialResult()
+-- (zbudowane wczesniej, przed tym ticketem - patrz historia gita) juz od dawna
+-- materializuje zatwierdzone zgloszenia wirtualne do tabeli `results` jeden do
+-- jednego z wynikiem live-timed - ten sam status ('finished'), te same kolumny,
+-- zaden znacznik pochodzenia. Bez tej kolumny zapytanie o rekord zyciowy nie ma
+-- jak odroznic "przebieglem 21km na zawodach z pomiarem czasu" od "zglosilem
+-- samodzielnie 21km", wiec wymagane wykluczenie byloby fizycznie niewykonalne.
+--
+-- `is_virtual` zyje na kazdym wierszu `results` (ten sam wzorzec denormalizacji
+-- co juz obecne tam distance_id/distance_name/publication_status) - ustawiane
+-- raz przy tworzeniu wiersza (albo przez ResultImportRepository/ResultRepository
+-- dla startu na zywo -> 0/domyslne, albo przez VirtualResultRepository dla
+-- zatwierdzonego zgloszenia -> 1), nigdy nie zmieniane pozniej.
+--
+-- Migracje nie maja ledgera i uruchamiaja sie przy kazdym starcie (patrz
+-- Migrator.php) - ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtorzenia.
+
+ALTER TABLE results
+  ADD COLUMN IF NOT EXISTS is_virtual TINYINT(1) NOT NULL DEFAULT 0 AFTER status;

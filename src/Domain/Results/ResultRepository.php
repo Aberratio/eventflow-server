@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class ResultRepository extends Repository
 {
-    private const COLUMNS = 'id, event_id AS eventId, event_name AS eventName, distance_id AS distanceId, distance_name AS distanceName, user_id AS userId, registration_id AS registrationId, user_name AS userName, bib_number AS bibNumber, category, time, time_in_seconds AS timeInSeconds, net_time AS netTime, net_time_in_seconds AS netTimeInSeconds, position, category_position AS categoryPosition, status, publication_status AS publicationStatus, gender, birth_year AS birthYear';
+    private const COLUMNS = 'id, event_id AS eventId, event_name AS eventName, distance_id AS distanceId, distance_name AS distanceName, user_id AS userId, registration_id AS registrationId, user_name AS userName, bib_number AS bibNumber, category, time, time_in_seconds AS timeInSeconds, net_time AS netTime, net_time_in_seconds AS netTimeInSeconds, position, category_position AS categoryPosition, status, is_virtual AS isVirtual, publication_status AS publicationStatus, gender, birth_year AS birthYear';
 
     /**
      * @param array<string, mixed> $filters
@@ -267,6 +267,128 @@ final class ResultRepository extends Repository
         $stmt = $this->pdo->prepare('SELECT distance_name AS distance, MIN(time) AS time, event_name AS eventName, MAX(created_at) AS date FROM results WHERE user_id = :userId AND status = "finished" GROUP BY distance_name, event_name');
         $stmt->execute(['userId' => $userId]);
         return $stmt->fetchAll();
+    }
+
+    /**
+     * E2.4 (spec 14 sekcja 3): "Rekord zyciowy liczy sie per etykieta/dlugosc
+     * dystansu ... niezaleznie od tego, na ktorym Wydarzeniu czy w ktorej
+     * edycji padl - nie per Wydarzenie. Tylko wyniki ze startu na zywo bija
+     * rekord."
+     *
+     * Grouping key: distance LENGTH (normalized to meters), not
+     * distance_id/event_id (each Event creates its own event_distances row
+     * even for objectively the same distance) and not distance_name alone
+     * (two Events can label the same length differently, e.g. "Polmaraton"
+     * vs "21 km"). event_distances.length was made nullable by migration 014
+     * (some legacy/incomplete distances never got a length) - those fall
+     * back to grouping by name, a documented best-effort seam rather than
+     * silently dropping them from the response.
+     *
+     * Qualifying rows: status = 'finished' (excludes dnf/dns/dsq - not
+     * "actually completed") AND is_virtual = 0 (excludes approved virtual
+     * submissions materialized by VirtualResultRepository::upsertOfficialResult()
+     * - spec: a virtual result "nie ma tej samej wiarygodnosci" even after
+     * organizer verification, so it never counts toward a record).
+     *
+     * Ranking metric: GROSS time_in_seconds, not net. This mirrors the
+     * existing ranking convention already established elsewhere in this
+     * domain - renumberEventDistance() and ResultImportRepository::positions()
+     * both rank/order finishers by gross time_in_seconds, never net (net is
+     * optional - "nie kazdy pomiar ma mate startowa" - so it can't be the
+     * universal comparison key). A record is kept consistent with how a
+     * result is ranked everywhere else in this codebase.
+     *
+     * Live query, not materialized: a correction to a result's time/status
+     * (PATCH /results/{id}) or a fresh import is picked up on the very next
+     * call with no extra invalidation step - there is no stale/wrong record
+     * to leave standing (acceptance criterion 5). This is a read-heavy, not
+     * write-heavy, path (unlike event_distances.registered_count from E1.3,
+     * which is a per-write counter maintained precisely because it's read on
+     * every hot list view under write contention) - a live query is simpler
+     * and there's no established performance reason here to materialize it.
+     *
+     * Competitor identity: results.registration_id (E2.1) links to
+     * registrations.competitor_id when present - the authoritative source
+     * (migration 027: "Zawodnik jako zrodlo tozsamosci zapisu"). Falls back
+     * to results.user_id = competitors.user_id for older/manual results that
+     * never got a registration_id (a Zawodnik's own Konto, not an Opiekun's -
+     * see AddResultDialog.tsx's manual-entry payload, which sends userId but
+     * not registrationId).
+     *
+     * @return array<int, array{distanceLabel: string, distanceLengthMeters: ?float, resultId: string, eventId: string, eventName: string, distanceId: string, time: string, timeInSeconds: float, netTime: ?string, netTimeInSeconds: ?float, achievedAt: ?string}>
+     */
+    public function lifetimeRecordsForCompetitor(string $competitorId): array
+    {
+        $stmt = $this->pdo->prepare(<<<'SQL'
+SELECT r.id AS resultId, r.event_id AS eventId, r.event_name AS eventName,
+       r.distance_id AS distanceId, r.distance_name AS distanceName,
+       r.time, r.time_in_seconds AS timeInSeconds, r.net_time AS netTime,
+       r.net_time_in_seconds AS netTimeInSeconds, r.created_at AS achievedAt,
+       ed.length AS distanceLength, ed.unit AS distanceUnit
+FROM results r
+LEFT JOIN registrations reg ON reg.id = r.registration_id
+LEFT JOIN competitors comp_self ON comp_self.user_id = r.user_id
+LEFT JOIN event_distances ed ON ed.id = r.distance_id
+WHERE r.status = 'finished'
+  AND r.is_virtual = 0
+  AND COALESCE(reg.competitor_id, comp_self.id) = :competitorId
+ORDER BY r.time_in_seconds ASC
+SQL);
+        $stmt->execute(['competitorId' => $competitorId]);
+
+        // ORDER BY time_in_seconds ASC above means the first row seen for a
+        // given grouping key is already the best (lowest) qualifying time -
+        // subsequent rows for the same key are simply ignored.
+        $best = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $lengthMeters = $this->distanceLengthInMeters($row['distanceLength'], $row['distanceUnit']);
+            $key = $lengthMeters !== null
+                ? 'len:' . (string) round($lengthMeters)
+                : 'name:' . mb_strtolower(trim((string) $row['distanceName']), 'UTF-8');
+
+            if (isset($best[$key])) {
+                continue;
+            }
+
+            $best[$key] = [
+                'distanceLabel' => (string) $row['distanceName'],
+                'distanceLengthMeters' => $lengthMeters,
+                'resultId' => (string) $row['resultId'],
+                'eventId' => (string) $row['eventId'],
+                'eventName' => (string) $row['eventName'],
+                'distanceId' => (string) $row['distanceId'],
+                'time' => (string) $row['time'],
+                'timeInSeconds' => (float) $row['timeInSeconds'],
+                'netTime' => $row['netTime'] !== null ? (string) $row['netTime'] : null,
+                'netTimeInSeconds' => $row['netTimeInSeconds'] !== null ? (float) $row['netTimeInSeconds'] : null,
+                'achievedAt' => $row['achievedAt'] !== null ? (string) $row['achievedAt'] : null,
+            ];
+        }
+
+        $records = array_values($best);
+        usort($records, static function (array $a, array $b): int {
+            if ($a['distanceLengthMeters'] === null && $b['distanceLengthMeters'] === null) {
+                return $a['distanceLabel'] <=> $b['distanceLabel'];
+            }
+            if ($a['distanceLengthMeters'] === null) {
+                return 1;
+            }
+            if ($b['distanceLengthMeters'] === null) {
+                return -1;
+            }
+            return $a['distanceLengthMeters'] <=> $b['distanceLengthMeters'];
+        });
+
+        return $records;
+    }
+
+    private function distanceLengthInMeters(mixed $length, ?string $unit): ?float
+    {
+        if ($length === null) {
+            return null;
+        }
+        $value = (float) $length;
+        return $unit === 'm' ? $value : $value * 1000;
     }
 
     /** @return array<int, array<string, mixed>> */

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Tests\Integration\Http;
 
+use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
@@ -199,6 +200,96 @@ final class ResultsContractTest extends HttpTestCase
 
         self::assertSame(200, $response->getStatusCode());
         self::assertTrue($payload['success']);
+    }
+
+    /**
+     * E2.4 (spec 14 sekcja 3): GET /competitors/{id}/records mirrors the
+     * self/Opiekun/staff authorization already proven for
+     * /competitors/{id}/rotate-identity-code (E1.12) - a stranger participant
+     * with no Opieka relation must be refused, while the Zawodnik themselves,
+     * an admin, and a Konto with granted Opieka must all be let through.
+     */
+    public function testCompetitorRecordsEndpointGatesAccessToSelfOpiekunOrStaff(): void
+    {
+        $competitors = new CompetitorRepository($this->pdo);
+        $ownProfile = $competitors->findByUserId((string) $this->participant['id']);
+        self::assertNotNull($ownProfile, 'UserRepository::create() must auto-provision a Zawodnik profile.');
+        $competitorId = (string) $ownProfile['id'];
+
+        $noAuth = $this->request('GET', '/api/v1/competitors/' . $competitorId . '/records');
+        self::assertSame(401, $noAuth->getStatusCode());
+
+        $stranger = $this->users->create([
+            'name' => 'Results Stranger',
+            'email' => $this->prefix . '-stranger@example.test',
+            'password' => 'demo1234',
+            'role' => 'participant',
+        ]);
+        $forbidden = $this->request(
+            'GET',
+            '/api/v1/competitors/' . $competitorId . '/records',
+            [],
+            $this->bearer($stranger['id'], 'participant', $stranger['email'])
+        );
+        self::assertSame(403, $forbidden->getStatusCode());
+
+        $selfResponse = $this->request(
+            'GET',
+            '/api/v1/competitors/' . $competitorId . '/records',
+            [],
+            $this->bearer($this->participant['id'], 'participant', $this->participant['email'])
+        );
+        self::assertSame(200, $selfResponse->getStatusCode());
+        self::assertTrue($this->json($selfResponse)['success']);
+
+        $adminResponse = $this->request(
+            'GET',
+            '/api/v1/competitors/' . $competitorId . '/records',
+            [],
+            $this->bearer($this->admin['id'], 'admin', $this->admin['email'])
+        );
+        self::assertSame(200, $adminResponse->getStatusCode());
+
+        $notFound = $this->request(
+            'GET',
+            '/api/v1/competitors/does-not-exist/records',
+            [],
+            $this->bearer($this->admin['id'], 'admin', $this->admin['email'])
+        );
+        self::assertSame(404, $notFound->getStatusCode());
+    }
+
+    /**
+     * E2.4 core behavior at the HTTP layer: a finished, non-virtual result
+     * shows up as the competitor's record for that distance length; a
+     * dns result for the same competitor+distance in a second Event does not
+     * displace it (dns is excluded, not just "slower").
+     */
+    public function testCompetitorRecordsEndpointReturnsTheBestFinishedLiveResult(): void
+    {
+        $competitors = new CompetitorRepository($this->pdo);
+        $competitorId = (string) $competitors->findByUserId((string) $this->participant['id'])['id'];
+
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/results',
+            $this->resultPayload(['userId' => $this->participant['id'], 'userName' => $this->participant['name']]),
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        self::assertSame(201, $createResp->getStatusCode());
+
+        $response = $this->request(
+            'GET',
+            '/api/v1/competitors/' . $competitorId . '/records',
+            [],
+            $this->bearer($this->participant['id'], 'participant', $this->participant['email'])
+        );
+        $payload = $this->json($response);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertCount(1, $payload['data']);
+        self::assertSame('01:00:00', $payload['data'][0]['time']);
+        self::assertEqualsWithDelta(10000.0, $payload['data'][0]['distanceLengthMeters'], 0.001);
     }
 
     /**

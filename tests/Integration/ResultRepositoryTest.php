@@ -8,6 +8,7 @@ use PDO;
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Database\Migrator;
+use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
@@ -29,8 +30,11 @@ final class ResultRepositoryTest extends TestCase
     private RegistrationRepository $registrations;
     private ResultRepository $results;
     private UserRepository $users;
+    private CompetitorRepository $competitors;
     private string $prefix;
     private array $event;
+    /** @var array<int, string> */
+    private array $createdCompetitorIds = [];
 
     protected function setUp(): void
     {
@@ -45,6 +49,7 @@ final class ResultRepositoryTest extends TestCase
             $this->registrations = new RegistrationRepository($this->pdo);
             $this->results = new ResultRepository($this->pdo);
             $this->users = new UserRepository($this->pdo);
+            $this->competitors = new CompetitorRepository($this->pdo);
             $this->event = $this->events->create($this->eventPayload());
         } catch (\Throwable $e) {
             self::markTestSkipped('Database is not available for result repository tests: ' . $e->getMessage());
@@ -58,6 +63,9 @@ final class ResultRepositoryTest extends TestCase
         }
 
         $this->deletePhpUnitData();
+        foreach ($this->createdCompetitorIds as $competitorId) {
+            $this->pdo->prepare('DELETE FROM competitors WHERE id = :id')->execute(['id' => $competitorId]);
+        }
     }
 
     public function testManualCreateWithDnsStatusIsForcedToPositionZeroRegardlessOfPayload(): void
@@ -276,6 +284,247 @@ final class ResultRepositoryTest extends TestCase
         self::assertSame('official', $updated['publicationStatus']);
     }
 
+    /**
+     * E2.4 (spec 14 sekcja 3): a competitor's lifetime record for a distance
+     * length only counts status='finished' rows - dnf/dns/dsq are not "an
+     * actually completed" live-timed start, even though dnf can carry a
+     * partial time (spec 14 sekcja 1).
+     */
+    public function testLifetimeRecordExcludesDnfDnsDsqResults(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Rekord Bez Ukonczenia');
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+
+        $this->results->create($this->resultPayload($account, [
+            'registrationId' => $registrationId,
+            'status' => 'dnf',
+            'time' => '0:10:00',
+            'timeInSeconds' => 600,
+        ]));
+
+        $records = $this->results->lifetimeRecordsForCompetitor($competitorId);
+
+        self::assertSame([], $records, 'A dnf result must not produce a lifetime record.');
+    }
+
+    /**
+     * E2.4 (spec 14 sekcja 3): "wynik wirtualny ... jest wykluczony, nawet po
+     * weryfikacji organizatora" - a result materialized from an approved
+     * virtual submission (is_virtual = 1, see VirtualResultRepository) must
+     * never win a record, even when it is the only/fastest qualifying-looking
+     * row.
+     */
+    public function testLifetimeRecordExcludesVirtualResults(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Rekord Wirtualny Wykluczony');
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+
+        $created = $this->results->create($this->resultPayload($account, [
+            'registrationId' => $registrationId,
+            'time' => '0:20:00',
+            'timeInSeconds' => 1200,
+        ]));
+        $this->pdo->prepare('UPDATE results SET is_virtual = 1 WHERE id = :id')->execute(['id' => $created['id']]);
+
+        $records = $this->results->lifetimeRecordsForCompetitor($competitorId);
+
+        self::assertSame([], $records, 'A virtual-origin result must not produce a lifetime record.');
+    }
+
+    /**
+     * E2.4 core acceptance criterion: the record groups by distance LENGTH,
+     * not by event_id/distance_id - two different Events, each with their own
+     * event_distances row but the same length, must be treated as "the same
+     * distance" for record purposes, and the lower gross time (regardless of
+     * which Event it was run at) wins.
+     */
+    public function testLifetimeRecordGroupsAcrossDifferentEventsByDistanceLengthAndKeepsTheFastestTime(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Rekord Ponad Wydarzeniami');
+
+        $firstRegistrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+        $slower = $this->results->create($this->resultPayload($account, [
+            'registrationId' => $firstRegistrationId,
+            'time' => '1:00:00',
+            'timeInSeconds' => 3600,
+        ]));
+
+        // Second Event, own event_distances row, same length (10 km) but a
+        // deliberately different label - proves the grouping key is length,
+        // not distance_name/distance_id/event_id.
+        $secondEvent = $this->events->create($this->eventPayload([
+            'slug' => $this->prefix . '-second-event',
+            'distances' => [[
+                'id' => $this->prefix . '-10k-relabeled',
+                'name' => 'Bieg na 10 kilometrow',
+                'length' => 10,
+                'unit' => 'km',
+                'categories' => ['Open'],
+                'ageCategories' => [],
+                'specialCategories' => [],
+                'limit' => 100,
+                'registeredCount' => 0,
+                'price' => 80,
+                'routeFiles' => [],
+            ]],
+        ]));
+        $secondRegistrationId = $this->insertRegistration((string) $secondEvent['id'], (string) $secondEvent['distances'][0]['id'], $competitorId, $account);
+        $faster = $this->results->create(array_merge($this->resultPayload($account, [
+            'registrationId' => $secondRegistrationId,
+            'time' => '0:45:00',
+            'timeInSeconds' => 2700,
+        ]), [
+            'eventId' => $secondEvent['id'],
+            'eventName' => $secondEvent['name'],
+            'distanceId' => $secondEvent['distances'][0]['id'],
+            'distanceName' => $secondEvent['distances'][0]['name'],
+        ]));
+
+        $records = $this->results->lifetimeRecordsForCompetitor($competitorId);
+
+        self::assertCount(1, $records, 'Same-length distances across two Events must collapse into a single record.');
+        self::assertSame((string) $faster['id'], $records[0]['resultId']);
+        self::assertSame(2700.0, $records[0]['timeInSeconds']);
+        self::assertSame((string) $secondEvent['id'], $records[0]['eventId']);
+        self::assertEqualsWithDelta(10000.0, $records[0]['distanceLengthMeters'], 0.001);
+        // The slower run at the first Event must not linger anywhere in the
+        // result set.
+        foreach ($records as $record) {
+            self::assertNotSame((string) $slower['id'], $record['resultId']);
+        }
+    }
+
+    /**
+     * E2.4: event_distances.length is nullable (migration 014) for
+     * legacy/incomplete distances - those fall back to grouping by
+     * distance_name rather than being silently dropped.
+     */
+    public function testLifetimeRecordFallsBackToNameGroupingWhenDistanceLengthIsNull(): void
+    {
+        $this->pdo->prepare('UPDATE event_distances SET length = NULL WHERE id = :id')
+            ->execute(['id' => $this->event['distances'][0]['id']]);
+
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Rekord Bez Dlugosci');
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+        $created = $this->results->create($this->resultPayload($account, [
+            'registrationId' => $registrationId,
+            'time' => '0:50:00',
+            'timeInSeconds' => 3000,
+        ]));
+
+        $records = $this->results->lifetimeRecordsForCompetitor($competitorId);
+
+        self::assertCount(1, $records);
+        self::assertSame((string) $created['id'], $records[0]['resultId']);
+        self::assertNull($records[0]['distanceLengthMeters']);
+        self::assertSame($this->event['distances'][0]['name'], $records[0]['distanceLabel']);
+    }
+
+    /**
+     * E2.4 acceptance criterion 5: a correction to a result's time (PATCH
+     * /results/{id} -> update()) must be reflected in the record because it
+     * is a live query, not a stored/cached column - no separate
+     * invalidation/recompute step exists or is needed.
+     */
+    public function testLifetimeRecordReflectsATimeCorrectionWithNoSeparateRecomputeStep(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Rekord Po Korekcie');
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+        $created = $this->results->create($this->resultPayload($account, [
+            'registrationId' => $registrationId,
+            'time' => '1:00:00',
+            'timeInSeconds' => 3600,
+        ]));
+
+        self::assertSame(3600.0, $this->results->lifetimeRecordsForCompetitor($competitorId)[0]['timeInSeconds']);
+
+        $this->results->update((string) $created['id'], ['time' => '0:55:00', 'timeInSeconds' => 3300]);
+
+        $records = $this->results->lifetimeRecordsForCompetitor($competitorId);
+        self::assertSame(3300.0, $records[0]['timeInSeconds'], 'A corrected time must be picked up immediately - the record is a live query.');
+    }
+
+    /**
+     * E2.4: competitor identity resolution falls back to results.user_id =
+     * competitors.user_id (a Zawodnik's own Konto) when a result has no
+     * registration_id at all - e.g. an older/manual entry, per
+     * ResultRepository::lifetimeRecordsForCompetitor()'s docblock.
+     */
+    public function testLifetimeRecordFallsBackToUserIdWhenResultHasNoRegistrationId(): void
+    {
+        $participant = $this->createParticipant('Rekord Bez Zapisu');
+        $competitor = $this->competitors->ensureForUser($participant);
+        $this->createdCompetitorIds[] = (string) $competitor['id'];
+
+        // No 'registrationId' key at all - mirrors AddResultDialog.tsx's manual
+        // entry payload, which never sends one.
+        $created = $this->results->create($this->resultPayload($participant, [
+            'time' => '0:44:00',
+            'timeInSeconds' => 2640,
+        ]));
+        self::assertNull($created['registrationId']);
+
+        $records = $this->results->lifetimeRecordsForCompetitor((string) $competitor['id']);
+
+        self::assertCount(1, $records);
+        self::assertSame((string) $created['id'], $records[0]['resultId']);
+    }
+
+    /**
+     * Creates a real Konto (so results.user_id/user_name have a genuine owner,
+     * matching how `AddResultDialog.tsx`/CSV import always populate them) plus
+     * its auto-provisioned Zawodnik profile (CompetitorRepository::ensureForUser(),
+     * the same one-per-Konto backfill migration 027 established).
+     *
+     * @return array{0: array{id: string, name: string}, 1: string} [account shaped like createParticipant()'s return, competitorId]
+     */
+    private function createCompetitorWithAccount(string $name): array
+    {
+        $account = $this->createParticipant($name);
+        $competitor = $this->competitors->ensureForUser($account);
+        $this->createdCompetitorIds[] = (string) $competitor['id'];
+
+        return [$account, (string) $competitor['id']];
+    }
+
+    /**
+     * Registrations carry the authoritative competitor_id link (migration 027)
+     * that results.registration_id points to. RegistrationRepository::create()
+     * pulls in pricing/capacity machinery this test suite doesn't need to
+     * exercise, so this inserts the minimal valid row directly - the same
+     * shortcut ResultsContractTest already takes for schema not exposed
+     * through a repository method.
+     *
+     * @param array{id: string, name: string} $account
+     */
+    private function insertRegistration(string $eventId, string $distanceId, string $competitorId, array $account): string
+    {
+        $id = $this->prefix . '-reg-' . bin2hex(random_bytes(4));
+        $this->pdo->prepare(
+            'INSERT INTO registrations (id, event_id, event_name, user_id, competitor_id, user_name, user_email, distance_id, distance_name, category, registered_at, status, qr_code)
+             VALUES (:id, :eventId, :eventName, :userId, :competitorId, :userName, :userEmail, :distanceId, :distanceName, :category, :registeredAt, :status, :qrCode)'
+        )->execute([
+            'id' => $id,
+            'eventId' => $eventId,
+            'eventName' => $this->event['name'],
+            'userId' => $account['id'],
+            'competitorId' => $competitorId,
+            'userName' => $account['name'],
+            'userEmail' => $this->prefix . '@example.test',
+            'distanceId' => $distanceId,
+            'distanceName' => $this->event['distances'][0]['name'],
+            'category' => 'Open',
+            'registeredAt' => date(DATE_ATOM),
+            'status' => 'confirmed',
+            // qr_code has a UNIQUE index (E1.11) - the column defaults to ''
+            // when omitted, which collides across more than one row inserted
+            // by this helper within the same test.
+            'qrCode' => 'phpres_' . bin2hex(random_bytes(16)),
+        ]);
+
+        return $id;
+    }
+
     /** @param array<string, mixed> $overrides @return array<string, mixed> */
     private function resultPayload(array $participant, array $overrides = []): array
     {
@@ -307,10 +556,10 @@ final class ResultRepositoryTest extends TestCase
         ]);
     }
 
-    /** @return array<string, mixed> */
-    private function eventPayload(): array
+    /** @param array<string, mixed> $overrides @return array<string, mixed> */
+    private function eventPayload(array $overrides = []): array
     {
-        return [
+        return array_merge([
             'name' => 'PHPUnit Result Event',
             'slug' => $this->prefix . '-event',
             'discipline' => 'running',
@@ -340,7 +589,7 @@ final class ResultRepositoryTest extends TestCase
                     'routeFiles' => [],
                 ],
             ],
-        ];
+        ], $overrides);
     }
 
     private function deletePhpUnitData(): void

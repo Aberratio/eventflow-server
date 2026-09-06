@@ -23,9 +23,9 @@ use ZmierzymyCzas\Support\Env;
  *  - columns = form fields for the Distance's Event + numer startowy +
  *    status płatności;
  *  - NO monetary/price/amount field ever appears (spec: "bez kwot");
- *  - confidential fields ARE included (organizer-facing export — verified
- *    against the existing organizer participant-list endpoint, see
- *    FormFieldRepository::exportColumns()'s docblock);
+ *  - `is_confidential` fields are EXCLUDED, the same as the public start
+ *    list (see FormFieldRepository::exportColumns()'s docblock) — a
+ *    non-confidential field with the same "shown" state still appears;
  *  - the live/frozen fork mirrors eventIsFinished(), same as
  *    attachPublicFormFields()/publicStartList().
  */
@@ -111,7 +111,7 @@ final class StartListExportTest extends TestCase
         }
     }
 
-    public function testConfidentialFieldsAreIncludedInTheOrganizerExport(): void
+    public function testConfidentialFieldsAreExcludedFromTheOrganizerExportButOtherFieldsStillAppear(): void
     {
         $confidential = $this->fields->createCustom($this->eventId, [
             'label' => 'Uwagi medyczne',
@@ -119,14 +119,24 @@ final class StartListExportTest extends TestCase
             'state' => 'shown',
             'isConfidential' => true,
         ]);
+        $nonConfidential = $this->fields->createCustom($this->eventId, [
+            'label' => 'Klub',
+            'fieldType' => FormFieldType::SHORT_TEXT,
+            'state' => 'shown',
+            'isConfidential' => false,
+        ]);
         [$registrationId] = $this->createRegistrationWithCompetitor('PHPUnit StartListExport Confidential', null);
-        $this->fields->reorder($this->eventId, [$confidential['id']]);
-        (new \ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository($this->pdo))->saveAnswer($this->fields, $confidential['id'], $registrationId, 'Alergia na pyłki');
+        $this->fields->reorder($this->eventId, [$confidential['id'], $nonConfidential['id']]);
+        $answers = new \ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository($this->pdo);
+        $answers->saveAnswer($this->fields, $confidential['id'], $registrationId, 'Alergia na pyłki');
+        $answers->saveAnswer($this->fields, $nonConfidential['id'], $registrationId, 'AZS');
 
         $export = $this->registrations->startListExportRows($this->eventId, $this->distanceId);
 
-        self::assertContains('Uwagi medyczne', array_column($export['columns'], 'label'), 'Confidential fields must appear in the organizer export — see FormFieldRepository::exportColumns() docblock for the verified decision.');
-        self::assertSame('Alergia na pyłki', $export['rows'][0][$confidential['fieldKey']]);
+        self::assertNotContains('Uwagi medyczne', array_column($export['columns'], 'label'), 'Confidential fields must never appear in the organizer export — same exclusion as the public start list.');
+        self::assertArrayNotHasKey($confidential['fieldKey'], $export['rows'][0]);
+        self::assertContains('Klub', array_column($export['columns'], 'label'), 'A non-confidential field in the same "shown" state must still appear.');
+        self::assertSame('AZS', $export['rows'][0][$nonConfidential['fieldKey']]);
     }
 
     public function testHiddenFieldsAreExcludedFromExportColumns(): void

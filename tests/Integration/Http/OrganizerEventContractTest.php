@@ -387,6 +387,82 @@ final class OrganizerEventContractTest extends HttpTestCase
     }
 
     /**
+     * E1.1 permission matrix: a soft-deleted event (`deletedAt` set) becomes
+     * invisible to everyone except superadmin — even its own owning organizer
+     * and a plain admin lose read access (`canViewEvent`/`canManageEvent` in
+     * routes.php both special-case `deletedAt !== null`). Nothing in the test
+     * suite previously exercised this branch at all.
+     */
+    public function testDeletedEventIsInvisibleToEveryoneExceptSuperadmin(): void
+    {
+        $superadmin = $this->users->create([
+            'name' => 'Org Superadmin',
+            'email' => $this->prefix . '-superadmin@example.test',
+            'password' => 'demo1234',
+            'role' => 'superadmin',
+        ]);
+
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-deleted']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+
+        $deleteResp = $this->request(
+            'DELETE',
+            '/api/v1/events/' . $eventId,
+            [],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(200, $deleteResp->getStatusCode());
+
+        // Owner: could manage it before deletion, cannot even see it exists now
+        // (the read endpoint reports a deleted event the same as a nonexistent
+        // one, deliberately not leaking that it once existed).
+        $ownerResp = $this->request(
+            'GET',
+            '/api/v1/events/' . $eventId,
+            [],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(404, $ownerResp->getStatusCode());
+        self::assertSame('not_found', $this->json($ownerResp)['error']['code']);
+
+        // Plain admin: also locked out, deletion is superadmin-only territory.
+        $adminResp = $this->request(
+            'GET',
+            '/api/v1/events/' . $eventId,
+            [],
+            $this->bearer($this->admin['id'], 'admin', $this->admin['email'])
+        );
+        self::assertSame(404, $adminResp->getStatusCode());
+
+        // Superadmin: still sees it, deletedAt included in the payload.
+        $superResp = $this->request(
+            'GET',
+            '/api/v1/events/' . $eventId,
+            [],
+            $this->bearer($superadmin['id'], 'superadmin', $superadmin['email'])
+        );
+        $superPayload = $this->json($superResp);
+        self::assertSame(200, $superResp->getStatusCode());
+        self::assertSame($eventId, $superPayload['data']['id']);
+        self::assertNotNull($superPayload['data']['deletedAt']);
+
+        // The owner also loses manage rights: a second delete attempt is forbidden,
+        // not the 409 "already gone" business error a still-visible event would get.
+        $secondDeleteResp = $this->request(
+            'DELETE',
+            '/api/v1/events/' . $eventId,
+            [],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(403, $secondDeleteResp->getStatusCode());
+    }
+
+    /**
      * E1.1 dropped the free-text `status` column entirely (see
      * 031_e11_event_lifecycle.sql), so there is no ENUM to patch in place any more — the
      * schema this test needs only exists once every migration has actually run. Calling

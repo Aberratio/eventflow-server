@@ -131,6 +131,42 @@ final class CareContractTest extends HttpTestCase
         self::assertSame('Care Parent', $list['myCompetitors'][0]['firstName']);
     }
 
+    /** Granting the same Opieka twice by e-mail is rejected, not silently duplicated (care_relations has a unique (konto_id, zawodnik_id) constraint backing this up at the DB level). */
+    public function testGrantingCareByEmailTwiceIsRejectedAsAlreadyAuthorized(): void
+    {
+        $first = $this->request(
+            'POST',
+            '/api/v1/care',
+            ['email' => $this->parent2['email']],
+            $this->bearer($this->parent1['id'], 'participant', $this->parent1['email'])
+        );
+        self::assertSame(201, $first->getStatusCode());
+
+        $second = $this->request(
+            'POST',
+            '/api/v1/care',
+            ['email' => $this->parent2['email']],
+            $this->bearer($this->parent1['id'], 'participant', $this->parent1['email'])
+        );
+
+        self::assertSame(409, $second->getStatusCode());
+        self::assertSame('already_authorized', $this->json($second)['error']['code']);
+    }
+
+    /** A Konto cannot authorize itself to manage its own competitor profile — that access already exists implicitly. */
+    public function testCannotGrantCareToOwnEmail(): void
+    {
+        $response = $this->request(
+            'POST',
+            '/api/v1/care',
+            ['email' => $this->parent1['email']],
+            $this->bearer($this->parent1['id'], 'participant', $this->parent1['email'])
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('validation_error', $this->json($response)['error']['code']);
+    }
+
     public function testRevokeRequiresBeingCaregiverOrTheCompetitorThemselves(): void
     {
         $grant = $this->json($this->request(

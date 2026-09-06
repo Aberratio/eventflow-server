@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class ResultRepository extends Repository
 {
-    private const COLUMNS = 'id, event_id AS eventId, event_name AS eventName, distance_id AS distanceId, distance_name AS distanceName, user_id AS userId, registration_id AS registrationId, user_name AS userName, bib_number AS bibNumber, category, time, time_in_seconds AS timeInSeconds, position, category_position AS categoryPosition, status, gender, birth_year AS birthYear';
+    private const COLUMNS = 'id, event_id AS eventId, event_name AS eventName, distance_id AS distanceId, distance_name AS distanceName, user_id AS userId, registration_id AS registrationId, user_name AS userName, bib_number AS bibNumber, category, time, time_in_seconds AS timeInSeconds, net_time AS netTime, net_time_in_seconds AS netTimeInSeconds, position, category_position AS categoryPosition, status, gender, birth_year AS birthYear';
 
     /**
      * @param array<string, mixed> $filters
@@ -73,7 +73,44 @@ final class ResultRepository extends Repository
     {
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM results WHERE id = :id');
         $stmt->execute(['id' => $id]);
-        return $stmt->fetch() ?: null;
+        $row = $stmt->fetch();
+        if (!$row) {
+            return null;
+        }
+        $row['splits'] = $this->splitsFor($id);
+        return $row;
+    }
+
+    /**
+     * Miedzyczasy (punkty kontrolne): opcjonalna lista par nazwa+czas -
+     * spec 14 sekcja 2. Nie sa wymagane do publikacji podstawowego wyniku, wiec
+     * zyja w osobnej tabeli zamiast kolumny na `results`.
+     *
+     * @return array<int, array{id: string, label: string, timeSeconds: float}>
+     */
+    public function splitsFor(string $resultId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT id, label, time_seconds AS timeSeconds FROM result_splits WHERE result_id = :resultId ORDER BY sort_order ASC');
+        $stmt->execute(['resultId' => $resultId]);
+        return array_map(static function (array $row): array {
+            $row['timeSeconds'] = (float) $row['timeSeconds'];
+            return $row;
+        }, $stmt->fetchAll());
+    }
+
+    /** @param array<int, array{label: string, timeSeconds: float}> $splits */
+    public function replaceSplits(string $resultId, array $splits): void
+    {
+        $this->pdo->prepare('DELETE FROM result_splits WHERE result_id = :resultId')->execute(['resultId' => $resultId]);
+        foreach (array_values($splits) as $index => $split) {
+            $this->insert('result_splits', [
+                'id' => $this->id(),
+                'result_id' => $resultId,
+                'label' => (string) $split['label'],
+                'time_seconds' => (float) $split['timeSeconds'],
+                'sort_order' => $index,
+            ]);
+        }
     }
 
     /** @param array<string, mixed> $data */
@@ -81,6 +118,9 @@ final class ResultRepository extends Repository
     {
         $id = $this->id();
         $this->insert('results', $this->map($id, $data));
+        if (array_key_exists('splits', $data) && is_array($data['splits'])) {
+            $this->replaceSplits($id, $data['splits']);
+        }
         return $this->find($id);
     }
 
@@ -89,7 +129,12 @@ final class ResultRepository extends Repository
     {
         $mapped = $this->map($id, $data, false);
         unset($mapped['id']);
-        $this->updateById('results', $id, $mapped);
+        if ($mapped !== []) {
+            $this->updateById('results', $id, $mapped);
+        }
+        if (array_key_exists('splits', $data) && is_array($data['splits'])) {
+            $this->replaceSplits($id, $data['splits']);
+        }
         return $this->find($id);
     }
 
@@ -165,6 +210,8 @@ final class ResultRepository extends Repository
             'category' => 'category',
             'time' => 'time',
             'timeInSeconds' => 'time_in_seconds',
+            'netTime' => 'net_time',
+            'netTimeInSeconds' => 'net_time_in_seconds',
             'position' => 'position',
             'categoryPosition' => 'category_position',
             'status' => 'status',

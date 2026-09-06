@@ -7,6 +7,8 @@ namespace ZmierzymyCzas\Tests\Integration;
 use PDO;
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Database\Connection;
+use ZmierzymyCzas\Database\Migrator;
+use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Results\ResultImportRepository;
@@ -19,6 +21,7 @@ final class ResultImportRepositoryTest extends TestCase
     private PDO $pdo;
     private EventRepository $events;
     private RegistrationRepository $registrations;
+    private CompetitorRepository $competitors;
     private ResultImportRepository $imports;
     private ResultRepository $results;
     private UserRepository $users;
@@ -31,11 +34,12 @@ final class ResultImportRepositoryTest extends TestCase
 
         try {
             $this->pdo = Connection::fromEnv();
-            $this->applyImportMigration();
+            Migrator::applyAll($this->pdo);
             $this->deletePhpUnitData();
             $this->events = new EventRepository($this->pdo);
             $this->registrations = new RegistrationRepository($this->pdo);
-            $this->imports = new ResultImportRepository($this->pdo);
+            $this->competitors = new CompetitorRepository($this->pdo);
+            $this->imports = new ResultImportRepository($this->pdo, $this->registrations, $this->competitors);
             $this->results = new ResultRepository($this->pdo);
             $this->users = new UserRepository($this->pdo);
         } catch (\Throwable $e) {
@@ -141,13 +145,155 @@ PDF;
         self::assertSame('Jan Kowalski', $batch['rows'][0]['mappedData']['fullName']);
     }
 
-    private function applyImportMigration(): void
+    /**
+     * Spec 14 sekcja 1: real-world sample from przyklady/import-wynikow -
+     * DNF row (empty czas, status DNF) must import as a visible-but-unranked
+     * result, not be dropped or rejected.
+     */
+    public function testRealSampleCsvImportsDnfRowWithStatusAndNoRankingPosition(): void
     {
-        $migration = __DIR__ . '/../../database/migrations/016_result_imports.sql';
-        $sql = (string) file_get_contents($migration);
-        foreach (array_filter(array_map('trim', explode(';', $sql))) as $statement) {
-            $this->pdo->exec($statement);
-        }
+        $event = $this->events->create($this->eventPayload());
+        $distanceId = (string) $event['distances'][0]['id'];
+
+        $this->createRegistration($event, $this->createParticipant('Jan Kowalski', 'M', 1986), 'M40', '101');
+        $this->createRegistration($event, $this->createParticipant('Anna Nowak', 'K', 1994), 'K30', '102');
+        $this->createRegistration($event, $this->createParticipant('Piotr Zielinski', 'M', 1994), 'M30', '103');
+        $this->createRegistration($event, $this->createParticipant('Marta Wisniewska', 'K', 1984), 'K40', '104');
+
+        $path = dirname(__DIR__, 3) . DIRECTORY_SEPARATOR . 'przyklady' . DIRECTORY_SEPARATOR . 'import-wynikow' . DIRECTORY_SEPARATOR . 'wyniki-10km.csv';
+        self::assertFileExists($path);
+
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', [
+            'path' => $path,
+            'absolutePath' => $path,
+            'url' => '/przyklady/import-wynikow/wyniki-10km.csv',
+            'mimeType' => 'text/csv',
+            'originalName' => 'wyniki-10km.csv',
+        ], 'phpunit-admin');
+
+        self::assertSame(4, $batch['summary']['ready']);
+        $this->imports->commit((string) $batch['id']);
+
+        $results = $this->results->byEvent((string) $event['id'], $distanceId);
+        $dnf = current(array_filter($results, static fn (array $r): bool => $r['bibNumber'] === '104'));
+        self::assertNotFalse($dnf);
+        self::assertSame('dnf', $dnf['status']);
+        self::assertSame('DNF', $dnf['time']);
+        self::assertSame(0, (int) $dnf['position']);
+    }
+
+    public function testDnsAndDsqRowsHaveNoTimeAndAreExcludedFromRanking(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+        $distanceId = (string) $event['distances'][0]['id'];
+        $this->createRegistration($event, $this->createParticipant('Ewa Krol', 'K', 1990), 'K30', '201');
+        $this->createRegistration($event, $this->createParticipant('Tomasz Nowicki', 'M', 1990), 'M30', '202');
+
+        $csv = "numer,uczestnik,czas,kategoria,status\n201,Ewa Krol,,K30,DNS\n202,Tomasz Nowicki,00:30:00,M30,DSQ\n";
+        $file = $this->tempImportFile('csv', $csv);
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $file, 'phpunit-admin');
+
+        self::assertSame(2, $batch['summary']['ready']);
+        $this->imports->commit((string) $batch['id']);
+
+        $results = $this->results->byEvent((string) $event['id'], $distanceId);
+        $dns = current(array_filter($results, static fn (array $r): bool => $r['bibNumber'] === '201'));
+        $dsq = current(array_filter($results, static fn (array $r): bool => $r['bibNumber'] === '202'));
+
+        self::assertSame('dns', $dns['status']);
+        self::assertSame('DNS', $dns['time']);
+        self::assertSame('dsq', $dsq['status']);
+        // DSQ never carries a time even though the file supplied one (spec 14 sekcja 1).
+        self::assertSame('DSQ', $dsq['time']);
+        self::assertSame(0, (int) $dns['position']);
+        self::assertSame(0, (int) $dsq['position']);
+    }
+
+    /**
+     * Spec 14 sekcja 2: gross/net as two separate optional-net fields, hundredth
+     * precision, plus optional splits (miedzyczasy) carried alongside.
+     */
+    public function testGrossNetTimeAndSplitsAreImportedWithHundredthPrecision(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+        $distanceId = (string) $event['distances'][0]['id'];
+        $this->createRegistration($event, $this->createParticipant('Kamil Wojcik', 'M', 1990), 'M30', '301');
+
+        $csv = "numer,uczestnik,czas brutto,czas netto,kategoria,status,miedzyczas 5km\n"
+            . "301,Kamil Wojcik,0:41:10.55,0:40:58.20,M30,finished,0:20:15.10\n";
+        $file = $this->tempImportFile('csv', $csv);
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $file, 'phpunit-admin');
+
+        self::assertSame(1, $batch['summary']['ready']);
+        self::assertSame('0:41:10.55', $batch['rows'][0]['mappedData']['time']);
+        self::assertSame('0:40:58.20', $batch['rows'][0]['mappedData']['netTime']);
+        self::assertSame('miedzyczas 5km', $batch['rows'][0]['mappedData']['splits'][0]['label']);
+        self::assertEqualsWithDelta(1215.10, $batch['rows'][0]['mappedData']['splits'][0]['timeSeconds'], 0.001);
+
+        $committed = $this->imports->commit((string) $batch['id']);
+        self::assertSame('committed', $committed['status']);
+
+        $result = $this->results->find((string) $this->results->byEvent((string) $event['id'], $distanceId)[0]['id']);
+        self::assertSame('0:41:10.55', $result['time']);
+        self::assertEqualsWithDelta(2470.55, (float) $result['timeInSeconds'], 0.001);
+        self::assertSame('0:40:58.20', $result['netTime']);
+        self::assertEqualsWithDelta(2458.20, (float) $result['netTimeInSeconds'], 0.001);
+        self::assertCount(1, $result['splits']);
+        self::assertSame('miedzyczas 5km', $result['splits'][0]['label']);
+        self::assertEqualsWithDelta(1215.10, $result['splits'][0]['timeSeconds'], 0.001);
+    }
+
+    /**
+     * Spec 14 sekcja 1: a participant with no matching Zapis must not become an
+     * orphan result - the organizer's manual-match action forces a Zapis using
+     * the office-only ("dostępny wyłącznie przy zapisie w biurze zawodów")
+     * pricing variant from ticket 07 pkt 13, then the row becomes ready.
+     */
+    public function testUnmatchedRowCanForceCreateOfficeRegistrationAndThenCommits(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+        $distanceId = (string) $event['distances'][0]['id'];
+        // No existing registration at all for this distance - every row starts unmatched.
+
+        $csv = "numer,uczestnik,czas,kategoria,status\n999,Nowy Zawodnik,0:50:00,Open,finished\n";
+        $file = $this->tempImportFile('csv', $csv);
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $file, 'phpunit-admin');
+
+        self::assertSame('needs_match', $batch['rows'][0]['status']);
+        self::assertSame(1, $batch['summary']['needsMatch']);
+
+        $updatedBatch = $this->imports->createRegistrationForRow((string) $batch['rows'][0]['id'], 'phpunit-organizer');
+
+        self::assertSame('ready', $updatedBatch['rows'][0]['status']);
+        self::assertNotNull($updatedBatch['rows'][0]['selectedRegistrationId']);
+        self::assertSame(1, $updatedBatch['summary']['ready']);
+
+        $registration = $this->registrations->find((string) $updatedBatch['rows'][0]['selectedRegistrationId']);
+        self::assertSame('confirmed', $registration['status']);
+        self::assertSame('999', $registration['bibNumber']);
+        self::assertSame('Nowy Zawodnik', $registration['userName']);
+
+        $committed = $this->imports->commit((string) $updatedBatch['id']);
+        self::assertSame('committed', $committed['status']);
+        $results = $this->results->byEvent((string) $event['id'], $distanceId);
+        self::assertCount(1, $results);
+        self::assertSame($registration['id'], $results[0]['registrationId']);
+    }
+
+    public function testForceCreateRegistrationFailsFastWhenDistanceHasNoOfficeVariant(): void
+    {
+        $eventPayload = $this->eventPayload();
+        unset($eventPayload['distances'][0]['pricingVariants']);
+        $event = $this->events->create($eventPayload);
+        $distanceId = (string) $event['distances'][0]['id'];
+
+        $csv = "numer,uczestnik,czas,kategoria,status\n999,Nowy Zawodnik,0:50:00,Open,finished\n";
+        $file = $this->tempImportFile('csv', $csv);
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $file, 'phpunit-admin');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('result_import_office_variant_missing');
+        $this->imports->createRegistrationForRow((string) $batch['rows'][0]['id'], 'phpunit-organizer');
     }
 
     /** @return array<string, mixed> */
@@ -181,6 +327,15 @@ PDF;
                     'registeredCount' => 0,
                     'price' => 80,
                     'routeFiles' => [],
+                    'pricingVariants' => [
+                        [
+                            'id' => $this->prefix . '-office-variant',
+                            'name' => 'Zapis w biurze zawodow',
+                            'price' => 100,
+                            'officeOnly' => true,
+                            'visibleInPublicForm' => false,
+                        ],
+                    ],
                 ],
             ],
         ];
@@ -240,10 +395,24 @@ PDF;
         $stmt = $this->pdo->prepare('SELECT id FROM events WHERE slug LIKE :slugLike');
         $stmt->execute(['slugLike' => $this->prefix . '%']);
         foreach (($stmt->fetchAll(PDO::FETCH_COLUMN) ?: []) as $eventId) {
+            $competitorStmt = $this->pdo->prepare('SELECT competitor_id FROM registrations WHERE event_id = :id AND competitor_id IS NOT NULL');
+            $competitorStmt->execute(['id' => $eventId]);
+            $competitorIds = $competitorStmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
+
+            $resultStmt = $this->pdo->prepare('SELECT id FROM results WHERE event_id = :id');
+            $resultStmt->execute(['id' => $eventId]);
+            foreach (($resultStmt->fetchAll(PDO::FETCH_COLUMN) ?: []) as $resultId) {
+                $this->pdo->prepare('DELETE FROM result_splits WHERE result_id = :id')->execute(['id' => $resultId]);
+            }
+
             $this->pdo->prepare('DELETE FROM result_import_rows WHERE batch_id IN (SELECT id FROM result_import_batches WHERE event_id = :id)')->execute(['id' => $eventId]);
             $this->pdo->prepare('DELETE FROM result_import_batches WHERE event_id = :id')->execute(['id' => $eventId]);
             $this->pdo->prepare('DELETE FROM results WHERE event_id = :id')->execute(['id' => $eventId]);
             $this->pdo->prepare('DELETE FROM registrations WHERE event_id = :id')->execute(['id' => $eventId]);
+            foreach ($competitorIds as $competitorId) {
+                $this->pdo->prepare('DELETE FROM competitors WHERE id = :id')->execute(['id' => $competitorId]);
+            }
+            $this->pdo->prepare('DELETE FROM event_distance_pricing_variants WHERE distance_id IN (SELECT id FROM event_distances WHERE event_id = :id)')->execute(['id' => $eventId]);
             $this->pdo->prepare('DELETE FROM event_distances WHERE event_id = :id')->execute(['id' => $eventId]);
             $this->pdo->prepare('DELETE FROM events WHERE id = :id')->execute(['id' => $eventId]);
         }

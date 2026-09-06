@@ -65,8 +65,26 @@ final class ResultsContractTest extends HttpTestCase
         }
 
         $eventId = (string) $this->activeEvent['id'];
+        $competitorStmt = $this->pdo->prepare('SELECT competitor_id FROM registrations WHERE event_id = :id AND competitor_id IS NOT NULL');
+        $competitorStmt->execute(['id' => $eventId]);
+        $competitorIds = $competitorStmt->fetchAll(\PDO::FETCH_COLUMN) ?: [];
+
+        $resultStmt = $this->pdo->prepare('SELECT id FROM results WHERE event_id = :id');
+        $resultStmt->execute(['id' => $eventId]);
+        foreach ($resultStmt->fetchAll(\PDO::FETCH_COLUMN) ?: [] as $resultId) {
+            $this->pdo->prepare('DELETE FROM result_splits WHERE result_id = :id')->execute(['id' => $resultId]);
+        }
+
+        $this->pdo->prepare('DELETE FROM activity_logs WHERE target_type = :t AND target_id IN (SELECT id FROM results WHERE event_id = :id)')
+            ->execute(['t' => 'result', 'id' => $eventId]);
+        $this->pdo->prepare('DELETE FROM result_import_rows WHERE batch_id IN (SELECT id FROM result_import_batches WHERE event_id = :id)')->execute(['id' => $eventId]);
+        $this->pdo->prepare('DELETE FROM result_import_batches WHERE event_id = :id')->execute(['id' => $eventId]);
         $this->pdo->prepare('DELETE FROM results WHERE event_id = :id')->execute(['id' => $eventId]);
         $this->pdo->prepare('DELETE FROM registrations WHERE event_id = :id')->execute(['id' => $eventId]);
+        foreach ($competitorIds as $competitorId) {
+            $this->pdo->prepare('DELETE FROM competitors WHERE id = :id')->execute(['id' => $competitorId]);
+        }
+        $this->pdo->prepare('DELETE FROM event_distance_pricing_variants WHERE distance_id IN (SELECT id FROM event_distances WHERE event_id = :id)')->execute(['id' => $eventId]);
         $this->pdo->prepare('DELETE FROM event_distances WHERE event_id = :id')->execute(['id' => $eventId]);
         $this->pdo->prepare('DELETE FROM events WHERE id = :id')->execute(['id' => $eventId]);
         $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')->execute(['email' => $this->prefix . '-%@example.test']);
@@ -181,6 +199,108 @@ final class ResultsContractTest extends HttpTestCase
 
         self::assertSame(200, $response->getStatusCode());
         self::assertTrue($payload['success']);
+    }
+
+    /**
+     * Spec 14 sekcja 6: "Korekta jest możliwa zawsze ... ze śladem: kto zmienił,
+     * kiedy, z jakiego na jaki czas". Mirrors the pattern already proven for
+     * registration form-snapshot corrections (RegistrationFormSnapshotContractTest):
+     * assert on the real activity_logs row, not just the HTTP response.
+     */
+    public function testCorrectingAResultsTimeWritesAnActivityLogWithOldAndNewValue(): void
+    {
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/results',
+            $this->resultPayload(),
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        $resultId = $this->json($createResp)['data']['id'];
+
+        $response = $this->request(
+            'PATCH',
+            '/api/v1/results/' . $resultId,
+            ['time' => '00:59:30', 'timeInSeconds' => 3570],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        $payload = $this->json($response);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('00:59:30', $payload['data']['time']);
+
+        $stmt = $this->pdo->prepare("SELECT description FROM activity_logs WHERE action = 'result_updated' AND target_id = :id");
+        $stmt->execute(['id' => $resultId]);
+        $description = $stmt->fetchColumn();
+
+        self::assertNotFalse($description, 'Correcting a result must write an activity_logs entry.');
+        self::assertStringContainsString('01:00:00', (string) $description, 'Entry must carry the OLD time.');
+        self::assertStringContainsString('00:59:30', (string) $description, 'Entry must carry the NEW time.');
+    }
+
+    /**
+     * Spec 14 sekcja 1: the manual-match screen's "no existing Zapis" action -
+     * forces a Zapis via the office-only pricing variant instead of leaving an
+     * orphan result. Exercised at the HTTP layer to also prove authorization.
+     */
+    public function testCreateRegistrationForUnmatchedImportRowRequiresEventManagerRole(): void
+    {
+        $distanceId = (string) $this->activeEvent['distances'][0]['id'];
+        // Ticket 07 pkt 13 / E0.3: an office-only Wariant lives on
+        // event_distance_pricing_variants - inserted directly here rather than
+        // via EventRepository::update() (a full distances replace) to keep this
+        // test focused on the route under test, not the event-editing pipeline.
+        $this->pdo->prepare(
+            'INSERT INTO event_distance_pricing_variants (id, distance_id, name, price, office_only, visible_in_public_form, sort_order)
+             VALUES (:id, :distanceId, :name, :price, 1, 0, 0)'
+        )->execute([
+            'id' => $this->prefix . '-office',
+            'distanceId' => $distanceId,
+            'name' => 'Zapis w biurze zawodow',
+            'price' => 100,
+        ]);
+
+        // The multipart upload route (/events/{id}/distances/{id}/result-imports)
+        // has no HTTP test helper for file uploads in this suite yet - go through
+        // the repository directly to build the batch (already covered end-to-end
+        // by ResultImportRepositoryTest), then exercise the HTTP route under test
+        // (create-registration) for real.
+        $csv = "numer,uczestnik,czas,kategoria,status\n555,Kontraktowy Zawodnik,0:55:00,Open,finished\n";
+        $tmpFile = tempnam(sys_get_temp_dir(), 'phpunit-import') . '.csv';
+        file_put_contents($tmpFile, $csv);
+        $imports = new \ZmierzymyCzas\Domain\Results\ResultImportRepository(
+            $this->pdo,
+            $this->registrations,
+            new \ZmierzymyCzas\Domain\Competitors\CompetitorRepository($this->pdo)
+        );
+        $batch = $imports->create((string) $this->activeEvent['id'], $distanceId, 'replace', [
+            'path' => $tmpFile,
+            'absolutePath' => $tmpFile,
+            'url' => '/tmp/' . basename($tmpFile),
+            'mimeType' => 'text/csv',
+            'originalName' => 'phpunit-import.csv',
+        ], (string) $this->organizer['id']);
+        self::assertSame('needs_match', $batch['rows'][0]['status']);
+        $rowId = $batch['rows'][0]['id'];
+
+        $unauthorized = $this->request(
+            'POST',
+            '/api/v1/result-import-rows/' . $rowId . '/create-registration',
+            [],
+            $this->bearer($this->participant['id'], 'participant', $this->participant['email'])
+        );
+        self::assertSame(403, $unauthorized->getStatusCode());
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/result-import-rows/' . $rowId . '/create-registration',
+            [],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        $payload = $this->json($response);
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('ready', $payload['data']['rows'][0]['status']);
+        self::assertNotNull($payload['data']['rows'][0]['selectedRegistrationId']);
     }
 
     private function resultPayload(array $overrides = []): array

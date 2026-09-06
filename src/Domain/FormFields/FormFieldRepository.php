@@ -41,6 +41,15 @@ final class FormFieldRepository extends Repository
 
     private const JSON_FIELDS = ['validationConfig', 'options'];
 
+    // Same two fields as JSON_FIELDS, but named for the snake_case columns
+    // used in the pre-insert `$data` array below rather than the camelCase
+    // aliases `decode()` sees after a SELECT. `encode()` matches keys
+    // literally, so reusing JSON_FIELDS here silently skipped
+    // `validation_config` (it only ever matched 'options' by coincidence),
+    // leaving raw PHP arrays to hit PDO and violate the column's JSON CHECK
+    // constraint.
+    private const INSERT_JSON_FIELDS = ['validation_config', 'options'];
+
     /**
      * Zapewnia istnienie wszystkich 13 pozycji systemowych dla wydarzenia
      * (idempotentne — migracja 041 już to robi dla wydarzeń istniejących
@@ -87,14 +96,39 @@ final class FormFieldRepository extends Repository
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM form_fields WHERE event_id = :eventId ORDER BY sort_order ASC, created_at ASC');
         $stmt->execute(['eventId' => $eventId]);
         $rows = $stmt->fetchAll();
-        return array_map(fn (array $row): array => $this->decode($row, self::JSON_FIELDS), $rows);
+        return array_map(fn (array $row): array => self::castOptionPrices($this->decode($row, self::JSON_FIELDS)), $rows);
     }
 
     public function find(string $id): ?array
     {
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM form_fields WHERE id = :id');
         $stmt->execute(['id' => $id]);
-        return $this->decode($stmt->fetch(), self::JSON_FIELDS);
+        return self::castOptionPrices($this->decode($stmt->fetch(), self::JSON_FIELDS));
+    }
+
+    /**
+     * A whole-number price (e.g. 25.0) survives normalizeOptions() as a
+     * float, but json_encode()/json_decode() round-trips it through the
+     * `options` JSON column as an int (JSON has no separate float syntax for
+     * whole numbers). Re-cast on the way out so callers always see the float
+     * type normalizeOptions() promised, regardless of whether the value just
+     * came from storage.
+     *
+     * @param array<string, mixed>|null $row
+     * @return array<string, mixed>|null
+     */
+    private static function castOptionPrices(?array $row): ?array
+    {
+        if ($row === null || empty($row['options']) || !is_array($row['options'])) {
+            return $row;
+        }
+        $row['options'] = array_map(static function (array $option): array {
+            if (array_key_exists('price', $option)) {
+                $option['price'] = (float) $option['price'];
+            }
+            return $option;
+        }, $row['options']);
+        return $row;
     }
 
     /**
@@ -138,7 +172,7 @@ final class FormFieldRepository extends Repository
             'validation_config' => $data['validationConfig'] ?? null,
             'options' => $options,
             'is_confidential' => !empty($data['isConfidential']) ? 1 : 0,
-        ], self::JSON_FIELDS));
+        ], self::INSERT_JSON_FIELDS));
 
         return $this->find($id) ?? [];
     }

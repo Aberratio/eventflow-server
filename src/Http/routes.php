@@ -27,6 +27,7 @@ use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotification;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotificationVerifier;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayOAuthClient;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
+use ZmierzymyCzas\Domain\Registrations\StartListExportFormatter;
 use ZmierzymyCzas\Domain\Results\ResultImportRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
 use ZmierzymyCzas\Domain\Results\VirtualResultRepository;
@@ -932,6 +933,70 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             return JsonResponder::ok($response, $formFields->aggregatesForEvent((string) $args['id']));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        // E2.6: organizer-facing start-list export (spec 21 Answer §3) — CSV
+        // (Windows-1250, "realny wymóg polskiego rynku") and XLSX, one
+        // Distance at a time. Same $canManageEvent gate as the rest of this
+        // group ("Eksportować może Zespół Wydarzenia i role administracyjne"),
+        // and — because this hands out personal data — every successful
+        // export leaves an activity-log entry ("każdy eksport zostawia wpis
+        // w rejestrze aktywności"), called only after the file is actually
+        // built so a rejected/failed export never gets logged as if it
+        // succeeded.
+        $api->get('/events/{eventId}/distances/{distanceId}/start-list-export', function (Request $request, Response $response, array $args) use ($events, $registrations, $canManageEvent, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+
+            $format = strtolower((string) ($request->getQueryParams()['format'] ?? 'csv'));
+            if (!in_array($format, ['csv', 'xlsx'], true)) {
+                return JsonResponder::error($response, 'validation_error', 'Nieobsługiwany format eksportu. Dozwolone: csv, xlsx.', 422);
+            }
+
+            $eventId = (string) $args['eventId'];
+            $distanceId = (string) $args['distanceId'];
+            $export = $registrations->startListExportRows($eventId, $distanceId);
+
+            try {
+                $fileContent = $format === 'xlsx'
+                    ? StartListExportFormatter::toXlsx($export['columns'], $export['rows'])
+                    : StartListExportFormatter::toCsv($export['columns'], $export['rows']);
+            } catch (\RuntimeException $e) {
+                if ($e->getMessage() === 'xlsx_not_supported') {
+                    return JsonResponder::error($response, 'xlsx_not_supported', 'Serwer PHP nie obsluguje zapisu XLSX (brak rozszerzenia ZipArchive). Uzyj eksportu CSV.', 500);
+                }
+                throw $e;
+            }
+
+            $matchingDistance = current(array_filter(
+                (array) ($event['distances'] ?? []),
+                static fn (array $d): bool => (string) $d['id'] === $distanceId
+            ));
+            $distanceName = (string) ($matchingDistance['name'] ?? $distanceId);
+            $filenameBase = 'lista-startowa-' . preg_replace('/[^a-z0-9]+/i', '-', $distanceName);
+
+            $logActivity(
+                $auth,
+                'startlist_exported',
+                sprintf('Eksport listy startowej (%s) dla dystansu "%s"', strtoupper($format), $distanceName),
+                'event',
+                $eventId,
+                (string) ($event['name'] ?? '')
+            );
+
+            if ($format === 'xlsx') {
+                $response->getBody()->write($fileContent);
+                return $response
+                    ->withHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                    ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.xlsx"');
+            }
+
+            $response->getBody()->write($fileContent);
+            return $response
+                ->withHeader('Content-Type', 'text/csv; charset=windows-1250')
+                ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.csv"');
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->put('/events/{eventId}/form-fields/reorder', function (Request $request, Response $response, array $args) use ($events, $formFields, $canManageEvent, $body) {
             $event = $events->find((string) $args['eventId']);

@@ -391,6 +391,107 @@ SQL;
     }
 
     /**
+     * E2.6 ("Eksport listy startowej: CSV (Windows-1250) + XLSX", spec 21
+     * Answer §3): organizer-facing export rows for one Distance. Reuses the
+     * exact same live/frozen fork as attachPublicFormFields() —
+     * eventIsFinished() picks resolveLiveFormFields() (pre-finish) or
+     * attachFrozenFormFields() (post-finish, same frozen snapshot the public
+     * start list and the correction endpoint already serve) — but against
+     * FormFieldRepository::exportColumns() instead of publicListColumns():
+     * every non-hidden field, confidential included (see exportColumns()'s
+     * own docblock for the verified reasoning), because this is an
+     * organizer/staff-only export, not the public page.
+     *
+     * Columns = every qualifying form field (in form order) + numer
+     * startowy + status płatności — deliberately never a monetary amount
+     * (spec: "bez kwot", Rozliczenie stays internal per ticket 13); the
+     * payment-status column is the ONLY money-adjacent thing here, and it is
+     * a status label, not a figure.
+     *
+     * Only the Distance's own Zapisy are included, `removed` excluded (an
+     * organizer-deleted Zapis is no longer part of the roster to hand to a
+     * printer or an external tool) — pending/confirmed/cancelled/expired are
+     * all kept, because the spec's own payment-status vocabulary
+     * (opłacone/oczekujące/wygasłe/anulowane/zwrócone) only makes sense if
+     * rows in every one of those states can appear.
+     *
+     * @return array{columns: array<int, array{key: string, label: string}>, rows: array<int, array<string, mixed>>}
+     */
+    public function startListExportRows(string $eventId, string $distanceId): array
+    {
+        $this->lazilyExpireUnpaidRegistrations();
+
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::COLUMNS . " FROM registrations WHERE event_id = :eventId AND distance_id = :distanceId AND status != 'removed' ORDER BY registered_at ASC"
+        );
+        $stmt->execute(['eventId' => $eventId, 'distanceId' => $distanceId]);
+        $registrations = array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
+
+        $formColumns = (new FormFieldRepository($this->pdo))->exportColumns($eventId);
+
+        if ($registrations !== [] && $formColumns !== []) {
+            $registrations = $this->eventIsFinished($eventId)
+                ? $this->attachFrozenFormFields($registrations, $formColumns)
+                : $this->resolveLiveFormFields($registrations, $formColumns);
+        } else {
+            $registrations = array_map(static fn (array $r): array => [...$r, 'formFields' => []], $registrations);
+        }
+
+        $columns = [];
+        foreach ($formColumns as $field) {
+            $columns[] = [
+                'key' => $field['fieldKey'],
+                'label' => $field['labelOverride'] ?? (FormFieldCatalog::find($field['fieldKey'])['label'] ?? $field['fieldKey']),
+            ];
+        }
+        $columns[] = ['key' => 'bibNumber', 'label' => 'Numer startowy'];
+        $columns[] = ['key' => 'paymentStatus', 'label' => 'Status płatności'];
+
+        $rows = [];
+        foreach ($registrations as $registration) {
+            $row = [];
+            foreach ((array) $registration['formFields'] as $formField) {
+                $row[$formField['fieldKey']] = $formField['value'];
+            }
+            $row['bibNumber'] = $registration['bibNumber'] ?? '';
+            $row['paymentStatus'] = $this->exportPaymentStatusLabel($registration);
+            $rows[] = $row;
+        }
+
+        return ['columns' => $columns, 'rows' => $rows];
+    }
+
+    /**
+     * Status-only label (never an amount) for the export's "Status
+     * płatności" column, covering exactly the five values the spec names
+     * (opłacone/oczekujące/wygasłe/anulowane/zwrócone). `registrations.status`
+     * already carries four of them directly; the fifth ("zwrócone") is a
+     * refund cycle layered on top (registration_refunds, E1.5) — a
+     * `confirmed` Zapis with a completed refund cycle is already flipped to
+     * `cancelled` by markRefunded() on a full refund, so checking the refund
+     * row first and falling back to `status` covers both full and (were a
+     * partial refund ever surfaced here) partial cases without
+     * double-reporting a Zapis as both "anulowana" and "zwrócone".
+     *
+     * @param array<string, mixed> $registration
+     */
+    private function exportPaymentStatusLabel(array $registration): string
+    {
+        $refund = $this->refund((string) $registration['id']);
+        if ($refund !== null && $refund['status'] === 'refunded') {
+            return 'Zwrócona';
+        }
+
+        return match ((string) ($registration['status'] ?? '')) {
+            'confirmed' => 'Opłacona',
+            'pending' => 'Oczekująca',
+            'expired' => 'Wygasła',
+            'cancelled' => 'Anulowana',
+            default => (string) ($registration['status'] ?? ''),
+        };
+    }
+
+    /**
      * Retroactive correction ("korekta wsteczna ze śladem", spec 10 pkt 2) —
      * the ONLY way to change a finished Event's frozen form-field snapshot.
      * Correcting the live Competitor/Registration record directly is how a

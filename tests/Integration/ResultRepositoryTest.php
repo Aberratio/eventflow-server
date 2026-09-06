@@ -211,6 +211,71 @@ final class ResultRepositoryTest extends TestCase
         self::assertSame(1, (int) $refreshedSecond['categoryPosition']);
     }
 
+    /**
+     * E2.3 (spec 14 sekcja 6): a freshly created result is "wstepne" without
+     * any organizer action - publication is never the starting state.
+     */
+    public function testNewlyCreatedResultDefaultsToPreliminaryPublicationStatus(): void
+    {
+        $participant = $this->createParticipant('Preliminary Domyslnie');
+
+        $created = $this->results->create($this->resultPayload($participant));
+
+        self::assertSame('preliminary', $created['publicationStatus']);
+    }
+
+    /**
+     * E2.3: markOfficial() operates on the event+distance unit (same
+     * granularity as renumberEventDistance()), not on a single Result -
+     * every finished/dnf/dns/dsq row sharing that event+distance flips to
+     * "official" in one call, and rows in a different distance are left
+     * untouched.
+     */
+    public function testMarkOfficialFlipsEveryResultInTheEventDistanceButNotOtherDistances(): void
+    {
+        $first = $this->createParticipant('Official Pierwszy');
+        $firstResult = $this->results->create($this->resultPayload($first));
+        $second = $this->createParticipant('Official Drugi');
+        $secondResult = $this->results->create($this->resultPayload($second, ['bibNumber' => '2']));
+
+        $otherDistanceId = $this->prefix . '-other-distance';
+        $otherParticipant = $this->createParticipant('Official Inny Dystans');
+        $otherResult = $this->results->create($this->resultPayload($otherParticipant, [
+            'bibNumber' => '3',
+            'distanceId' => $otherDistanceId,
+            'distanceName' => 'Inny dystans',
+        ]));
+
+        $updatedCount = $this->results->markOfficial((string) $this->event['id'], (string) $this->event['distances'][0]['id']);
+
+        self::assertSame(2, $updatedCount);
+        self::assertSame('official', $this->results->find((string) $firstResult['id'])['publicationStatus']);
+        self::assertSame('official', $this->results->find((string) $secondResult['id'])['publicationStatus']);
+        self::assertSame('preliminary', $this->results->find((string) $otherResult['id'])['publicationStatus']);
+    }
+
+    /**
+     * E2.3 (spec 14 sekcja 6): "Korekta jest mozliwa zawsze, takze po
+     * ogloszeniu oficjalnych" - a correction must not silently revert the
+     * set back to preliminary. update() doesn't even know about the column,
+     * so this asserts the observable guarantee: official stays official
+     * across an unrelated field correction.
+     */
+    public function testCorrectingAnOfficialResultDoesNotRevertItToPreliminary(): void
+    {
+        $participant = $this->createParticipant('Korekta Po Oficjalnym');
+        $created = $this->results->create($this->resultPayload($participant));
+        $this->results->markOfficial((string) $this->event['id'], (string) $this->event['distances'][0]['id']);
+        self::assertSame('official', $this->results->find((string) $created['id'])['publicationStatus']);
+
+        $updated = $this->results->update((string) $created['id'], [
+            'time' => '0:59:00',
+            'timeInSeconds' => 3540,
+        ]);
+
+        self::assertSame('official', $updated['publicationStatus']);
+    }
+
     /** @param array<string, mixed> $overrides @return array<string, mixed> */
     private function resultPayload(array $participant, array $overrides = []): array
     {

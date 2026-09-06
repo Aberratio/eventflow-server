@@ -1452,6 +1452,37 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        // E2.3 (spec 14 sekcja 6): "Organizator publikuje wyniki wstepne od
+        // razu po imporcie/recznym wpisaniu ... Po weryfikacji ...
+        // organizator oznacza wyniki jako oficjalne." Granulacja per
+        // event+distance (klasyfikacja) - patrz docblock
+        // ResultRepository::markOfficial() dla pelnego uzasadnienia. Ten sam
+        // $canUploadResults co reszta mutacji /results/* (organizator/
+        // admin/moderator danego wydarzenia, tylko dla published/finished
+        // eventow), nie surowe $canManageEvent.
+        $api->post('/events/{eventId}/distances/{distanceId}/results/publish-official', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults, $logActivity) {
+            $event = $events->find((string) $args['eventId']);
+            $auth = (array) $request->getAttribute('auth');
+            if (!$canUploadResults($event, $auth)) {
+                return JsonResponder::error($response, 'result_event_not_open', 'Results can be published only for active or past events you manage.', 403);
+            }
+            $updatedCount = $results->markOfficial((string) $args['eventId'], (string) $args['distanceId']);
+            $logActivity(
+                $auth,
+                'results_published_official',
+                sprintf('Oznaczono wyniki jako oficjalne (dystans %s, %d wynikow)', (string) $args['distanceId'], $updatedCount),
+                'event_distance',
+                (string) $args['distanceId'],
+                (string) ($event['name'] ?? '')
+            );
+            return JsonResponder::ok($response, [
+                'eventId' => (string) $args['eventId'],
+                'distanceId' => (string) $args['distanceId'],
+                'publicationStatus' => 'official',
+                'updatedCount' => $updatedCount,
+            ]);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
         $api->delete('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults, $logActivity) {
             $result = $results->find((string) $args['id']);
             if (!$result) {

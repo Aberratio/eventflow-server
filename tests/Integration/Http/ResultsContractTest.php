@@ -238,6 +238,67 @@ final class ResultsContractTest extends HttpTestCase
     }
 
     /**
+     * E2.3 (spec 14 sekcja 6): the "mark official" mutation - $canUploadResults
+     * gate (same as every other /results/* mutation), operates on the whole
+     * event+distance, and leaves the result individually correctable
+     * afterwards without reverting the set to preliminary.
+     */
+    public function testMarkOfficialRequiresEventManagerRoleAndFlipsPublicationStatus(): void
+    {
+        $distanceId = (string) $this->activeEvent['distances'][0]['id'];
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/results',
+            $this->resultPayload(),
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        $resultId = $this->json($createResp)['data']['id'];
+        self::assertSame('preliminary', $this->json($createResp)['data']['publicationStatus']);
+
+        $publishUrl = '/api/v1/events/' . $this->activeEvent['id'] . '/distances/' . $distanceId . '/results/publish-official';
+
+        $unauthorized = $this->request(
+            'POST',
+            $publishUrl,
+            [],
+            $this->bearer($this->participant['id'], 'participant', $this->participant['email'])
+        );
+        self::assertSame(403, $unauthorized->getStatusCode());
+
+        $response = $this->request(
+            'POST',
+            $publishUrl,
+            [],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        $payload = $this->json($response);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('official', $payload['data']['publicationStatus']);
+        self::assertSame(1, $payload['data']['updatedCount']);
+
+        // No GET /results/{id} route exists - re-fetch via the event listing
+        // instead, which already exposes the publication status per row.
+        $eventResults = $this->json($this->request('GET', '/api/v1/events/' . $this->activeEvent['id'] . '/results'));
+        $refreshed = current(array_filter($eventResults['data'], fn (array $row) => $row['id'] === $resultId));
+        self::assertSame('official', $refreshed['publicationStatus']);
+
+        $stmt = $this->pdo->prepare("SELECT description FROM activity_logs WHERE action = 'results_published_official' AND target_id = :id");
+        $stmt->execute(['id' => $distanceId]);
+        self::assertNotFalse($stmt->fetchColumn(), 'Marking results official must write an activity_logs entry.');
+
+        // Correcting the now-official result must not revert it to preliminary.
+        $patchResp = $this->request(
+            'PATCH',
+            '/api/v1/results/' . $resultId,
+            ['time' => '00:58:00', 'timeInSeconds' => 3480],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        self::assertSame(200, $patchResp->getStatusCode());
+        self::assertSame('official', $this->json($patchResp)['data']['publicationStatus']);
+    }
+
+    /**
      * Spec 14 sekcja 1: the manual-match screen's "no existing Zapis" action -
      * forces a Zapis via the office-only pricing variant instead of leaving an
      * orphan result. Exercised at the HTTP layer to also prove authorization.

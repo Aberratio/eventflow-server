@@ -249,6 +249,32 @@ final class FormFieldRepository extends Repository
     }
 
     /**
+     * E2.6: organizer-facing start-list export columns — every non-`hidden`
+     * Pozycja formularza (system + custom) in form order. Deliberately
+     * broader than publicListColumns() above in two ways: it does NOT
+     * require `publicListVisible` (that flag only ever governs the public
+     * start list page) and it does NOT exclude `is_confidential` fields.
+     * The confidential inclusion is a verified decision, not an oversight —
+     * RegistrationRepository::byEvent() (the existing organizer
+     * participant-list endpoint backing ParticipantsTab) already returns
+     * every Zapis with zero form-field filtering at all, confidential or
+     * not, so the organizer already sees confidential answers today; this
+     * export mirrors that existing exposure rather than inventing a new,
+     * stricter rule for one endpoint only. A `hidden` field carries no
+     * collected answers for this Wydarzenie at all, so it is left out the
+     * same way it would show nothing anyway.
+     *
+     * @return array<int, array<string, mixed>> w kolejności formularza
+     */
+    public function exportColumns(string $eventId): array
+    {
+        return array_values(array_filter(
+            $this->listForEvent($eventId),
+            static fn (array $field): bool => ($field['state'] ?? '') !== FormFieldCatalog::STATE_HIDDEN
+        ));
+    }
+
+    /**
      * E2.5: automatic answer-count aggregation for every choice-type custom
      * field (single_choice/multi_choice/consent) of an event — no organizer
      * opt-in flag (model answer §1: "bez osobnej flagi 'zestawialne'"). Only

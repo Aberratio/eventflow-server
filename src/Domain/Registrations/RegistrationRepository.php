@@ -398,9 +398,12 @@ SQL;
      * attachFrozenFormFields() (post-finish, same frozen snapshot the public
      * start list and the correction endpoint already serve) — but against
      * FormFieldRepository::exportColumns() instead of publicListColumns():
-     * every non-hidden field, confidential included (see exportColumns()'s
-     * own docblock for the verified reasoning), because this is an
-     * organizer/staff-only export, not the public page.
+     * every non-hidden, non-confidential field (exportColumns() excludes
+     * `is_confidential` fields the same way publicListColumns() does — see
+     * that method's docblock), because unlike the public start list this
+     * export doesn't also require `publicListVisible`, an organizer/staff
+     * export being a broader audience than the public page in that one way
+     * only.
      *
      * Columns = every qualifying form field (in form order) + numer
      * startowy + status płatności — deliberately never a monetary amount

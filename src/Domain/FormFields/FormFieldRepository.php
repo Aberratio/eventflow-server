@@ -21,10 +21,11 @@ use ZmierzymyCzas\Domain\Repository;
  *     ale żadna metoda tej klasy ani RegistrationRepository nie sumuje jej do
  *     Rozliczenia. Miejsce, w którym wpięcie by nastąpiło, jest oznaczone
  *     w RegistrationRepository (grep "E1.13 seam").
- *  3. Pole poufne (§4.2) — `is_confidential` blokuje TYLKO widoczność na
- *     publicznej liście (`publicListColumns()` poniżej). Wykluczenie
- *     z domyślnego eksportu, ograniczenie odczytu do Zespołu i automatyczne
- *     kasowanie po zakończeniu Wydarzenia NIE są tu zbudowane.
+ *  3. Pole poufne (§4.2) — `is_confidential` blokuje widoczność zarówno na
+ *     publicznej liście (`publicListColumns()` poniżej), jak i w eksporcie
+ *     organizatora (`exportColumns()` poniżej). Ograniczenie odczytu do
+ *     Zespołu (bez Moderatora, ticket 10 §9) i automatyczne kasowanie po
+ *     zakończeniu Wydarzenia NIE są tu zbudowane.
  *  4. Anonimizacja (§8/F4) — `anonymization` to zwykła systemowa pozycja ze
  *     stanem Nie/Pokaż, przechowywana jak każda inna. Nic w tej klasie ani
  *     gdziekolwiek indziej nie czyta jej wartości, żeby zamaskować nazwisko
@@ -249,20 +250,20 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * E2.6: organizer-facing start-list export columns — every non-`hidden`
-     * Pozycja formularza (system + custom) in form order. Deliberately
-     * broader than publicListColumns() above in two ways: it does NOT
-     * require `publicListVisible` (that flag only ever governs the public
-     * start list page) and it does NOT exclude `is_confidential` fields.
-     * The confidential inclusion is a verified decision, not an oversight —
-     * RegistrationRepository::byEvent() (the existing organizer
-     * participant-list endpoint backing ParticipantsTab) already returns
-     * every Zapis with zero form-field filtering at all, confidential or
-     * not, so the organizer already sees confidential answers today; this
-     * export mirrors that existing exposure rather than inventing a new,
-     * stricter rule for one endpoint only. A `hidden` field carries no
-     * collected answers for this Wydarzenie at all, so it is left out the
-     * same way it would show nothing anyway.
+     * E2.6: organizer-facing start-list export columns — every non-`hidden`,
+     * non-`is_confidential` Pozycja formularza (system + custom) in form
+     * order. Broader than publicListColumns() above in one way only: it does
+     * NOT require `publicListVisible` (that flag only ever governs the
+     * public start list page's opt-in, an unrelated gate for this
+     * organizer-only export). It still excludes confidential fields, the
+     * same as publicListColumns() — an earlier version of this docblock
+     * claimed the organizer already sees confidential answers today via
+     * RegistrationRepository::byEvent()/ParticipantsTab.tsx; that claim was
+     * false (byEvent() never attaches form-field answers at all) and this
+     * export would otherwise have been a new personal-data exposure, so the
+     * exclusion was added instead. A `hidden` field carries no collected
+     * answers for this Wydarzenie at all, so it is left out the same way it
+     * would show nothing anyway.
      *
      * @return array<int, array<string, mixed>> w kolejności formularza
      */
@@ -271,6 +272,7 @@ final class FormFieldRepository extends Repository
         return array_values(array_filter(
             $this->listForEvent($eventId),
             static fn (array $field): bool => ($field['state'] ?? '') !== FormFieldCatalog::STATE_HIDDEN
+                && empty($field['isConfidential'])
         ));
     }
 

@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class ResultRepository extends Repository
 {
-    private const COLUMNS = 'id, event_id AS eventId, event_name AS eventName, distance_id AS distanceId, distance_name AS distanceName, user_id AS userId, registration_id AS registrationId, user_name AS userName, bib_number AS bibNumber, category, time, time_in_seconds AS timeInSeconds, net_time AS netTime, net_time_in_seconds AS netTimeInSeconds, position, category_position AS categoryPosition, status, gender, birth_year AS birthYear';
+    private const COLUMNS = 'id, event_id AS eventId, event_name AS eventName, distance_id AS distanceId, distance_name AS distanceName, user_id AS userId, registration_id AS registrationId, user_name AS userName, bib_number AS bibNumber, category, time, time_in_seconds AS timeInSeconds, net_time AS netTime, net_time_in_seconds AS netTimeInSeconds, position, category_position AS categoryPosition, status, publication_status AS publicationStatus, gender, birth_year AS birthYear';
 
     /**
      * @param array<string, mixed> $filters
@@ -212,6 +212,48 @@ final class ResultRepository extends Repository
                 'category_position' => $categoryPositions[$category],
             ]);
         }
+    }
+
+    /**
+     * E2.3 (spec 14 sekcja 6): "Organizator publikuje wyniki wstepne od razu
+     * po imporcie/recznym wpisaniu ... Po weryfikacji ... organizator
+     * oznacza wyniki jako oficjalne."
+     *
+     * Granulacja: per event+distance (klasyfikacja), NIE per pojedynczy
+     * Result ani per cale Wydarzenie. Rozumowanie: `renumberEventDistance()`
+     * powyzej i `ResultImportRepository::positions()` juz traktuja
+     * event+distance jako jednostke, w ktorej wyniki tworza jedna spojna
+     * tabele klasyfikacji - organizator zatwierdza "wyniki 10 km", nie
+     * pojedynczego zawodnika (za drobnoziarniste - reklamacje dotycza
+     * pojedynczych wpisow, ale publikacja to decyzja o calej tabeli) ani cale
+     * Wydarzenie (za grube - wydarzenie z kilkoma dystansami może miec
+     * niezalezne tempo weryfikacji reklamacji na mecie dla kazdego z nich,
+     * np. 5 km gotowe do ogloszenia oficjalnych zanim komisja skonczy
+     * sprawdzac 10 km).
+     *
+     * Ta "oficjalnosc" nie jest osobna tabela event+distance -> status, tylko
+     * kolumna na kazdym wierszu `results` (ten sam wzorzec denormalizacji co
+     * juz obecne na tej tabeli distance_id/distance_name) - unika JOINa przy
+     * kazdym odczycie (GET /results, /events/{id}/results) kosztem
+     * masowego UPDATE tutaj, ktory i tak jest rzadka, recznie wywolywana
+     * akcja organizatora.
+     *
+     * Korekta pojedynczego wyniku (PATCH /results/{id} -> update() powyzej)
+     * celowo NIE dotyka tej kolumny - `map()` jej nie zna, wiec
+     * publication_status przetrwa kazda korekte bez zmian, zgodnie ze
+     * specyfikacja: "Korekta jest mozliwa zawsze, takze po ogloszeniu
+     * oficjalnych" - oficjalnosc nie jest cofana ani odzyskiwana przy kazdej
+     * zmianie, tylko trwa, dopoki organizator jej jawnie nie zmieni.
+     *
+     * @return int liczba zaktualizowanych wierszy (0, gdy event+distance nie ma jeszcze zadnych wynikow)
+     */
+    public function markOfficial(string $eventId, string $distanceId): int
+    {
+        $stmt = $this->pdo->prepare(
+            'UPDATE results SET publication_status = "official" WHERE event_id = :eventId AND distance_id = :distanceId'
+        );
+        $stmt->execute(['eventId' => $eventId, 'distanceId' => $distanceId]);
+        return $stmt->rowCount();
     }
 
     public function delete(string $id): void

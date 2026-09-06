@@ -106,8 +106,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             );
         }
     };
+    $competitors = new CompetitorRepository($pdo);
     $results = new ResultRepository($pdo);
-    $resultImports = new ResultImportRepository($pdo);
+    // E2.1: needs Registrations/Competitors to force-create a Zapis (Wariant
+    // "biuro zawodow", ticket 07 pkt 13) for a participant the CSV names but
+    // who has no existing Zapis - see createRegistrationForRow()'s docblock.
+    $resultImports = new ResultImportRepository($pdo, $registrations, $competitors);
     $virtualResults = new VirtualResultRepository($pdo);
     $series = new SeriesRepository($pdo);
     $shop = new ShopRepository($pdo);
@@ -145,7 +149,6 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $insurance = new InsuranceRepository($pdo);
     $orders = new OrderRepository($pdo);
     $certificates = new CertificateRepository($pdo);
-    $competitors = new CompetitorRepository($pdo);
     $care = new CareRepository($pdo);
     // E1.13: "Pozycja formularza" — jeden byt dla pól systemowych i własnych.
     // ensureSystemCatalog() jest wywoływane per-request (a nie tylko w migracji)
@@ -1430,7 +1433,22 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be edited only for active or past events you manage.', 403);
             }
             $updated = $results->update($args['id'], $body($request));
-            $logActivity($auth, 'result_updated', 'Zaktualizowano wynik', 'result', (string) $args['id'], (string) ($updated['userName'] ?? $result['userName'] ?? ''));
+            // Spec 14 sekcja 6: "Korekta jest możliwa zawsze ... ze śladem: kto
+            // zmienił, kiedy, z jakiego na jaki czas" - ten sam "zakoduj diff w
+            // opisie" wzorzec co korekta snapshotu formularza (patrz
+            // /registrations/{id}/form-snapshot powyzej), bo activity_logs nie
+            // ma osobnej kolumny na structured diff.
+            $trackedFields = ['time' => 'czas brutto', 'timeInSeconds' => 'czas brutto (s)', 'netTime' => 'czas netto', 'netTimeInSeconds' => 'czas netto (s)', 'status' => 'status'];
+            $changes = [];
+            foreach ($trackedFields as $field => $label) {
+                $before = $result[$field] ?? null;
+                $after = $updated[$field] ?? null;
+                if ($before !== $after) {
+                    $changes[] = sprintf('%s: %s -> %s', $label, json_encode($before, JSON_UNESCAPED_UNICODE), json_encode($after, JSON_UNESCAPED_UNICODE));
+                }
+            }
+            $description = $changes === [] ? 'Zaktualizowano wynik' : 'Skorygowano wynik (' . implode(', ', $changes) . ')';
+            $logActivity($auth, 'result_updated', $description, 'result', (string) $args['id'], (string) ($updated['userName'] ?? $result['userName'] ?? ''));
             return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
@@ -1541,6 +1559,37 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             } catch (RuntimeException $e) {
                 $status = $e->getMessage() === 'not_found' ? 404 : 422;
                 return JsonResponder::error($response, $e->getMessage(), 'Nie udalo sie zaktualizowac wiersza importu.', $status);
+            }
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        // E2.1 (spec 14 sekcja 1): "Uczestnik bez Zapisu w systemie ... wymusza
+        // utworzenie Zapisu" - jedyna operacja z ekranu recznego dopasowania,
+        // ktora nie tylko wybiera istniejacego kandydata, ale tworzy nowy Zapis
+        // Wariantem biura zawodow. Osobny endpoint od PATCH .../result-import-rows/{id}
+        // bo semantyka jest "utworz i przypisz", nie "zmien pole".
+        $api->post('/result-import-rows/{id}/create-registration', function (Request $request, Response $response, array $args) use ($events, $resultImports, $canUploadResults, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            try {
+                $existingBatch = $resultImports->batchForRow((string) $args['id']);
+                if (!$existingBatch) {
+                    return JsonResponder::error($response, 'not_found', 'Import row not found', 404);
+                }
+                if (!$canUploadResults($events->find((string) $existingBatch['eventId']), $auth)) {
+                    return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
+                }
+                $batch = $resultImports->createRegistrationForRow((string) $args['id'], (string) ($auth['sub'] ?? ''));
+                $logActivity($auth, 'result_import_registration_created', 'Utworzono Zapis dla niesparowanego wiersza importu wynikow', 'result_import_row', (string) $args['id'], '');
+                return JsonResponder::ok($response, $batch, 'Zapis utworzony', 201);
+            } catch (RuntimeException $e) {
+                $messages = [
+                    'not_found' => 'Import row not found',
+                    'result_import_row_missing_name' => 'Wiersz nie zawiera imienia i nazwiska - nie mozna utworzyc Zapisu.',
+                    'result_import_office_variant_missing' => 'Dystans nie ma Wariantu opłaty oznaczonego jako "dostępny wyłącznie przy zapisie w biurze zawodów". Dodaj go w ustawieniach Dystansu przed dopasowaniem.',
+                    'result_import_registration_creation_unsupported' => 'Ta operacja nie jest tu dostępna.',
+                    'validation_error' => 'Nie znaleziono wydarzenia albo dystansu dla importu.',
+                ];
+                $status = $e->getMessage() === 'not_found' ? 404 : 422;
+                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udalo sie utworzyc Zapisu.', $status);
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 

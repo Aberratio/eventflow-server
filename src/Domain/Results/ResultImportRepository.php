@@ -4,13 +4,27 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Results;
 
+use PDO;
 use RuntimeException;
 use SimpleXMLElement;
 use ZipArchive;
+use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
+use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Repository;
 
 final class ResultImportRepository extends Repository
 {
+    public function __construct(
+        PDO $pdo,
+        // Naming note: kept distinct from the private registrations() helper
+        // below (raw candidate-matching query) to avoid a property/method
+        // name collision on the same identifier.
+        private readonly ?RegistrationRepository $registrationRepository = null,
+        private readonly ?CompetitorRepository $competitorRepository = null,
+    ) {
+        parent::__construct($pdo);
+    }
+
     private const BATCH_COLUMNS = <<<'SQL'
 id, event_id AS eventId, distance_id AS distanceId, mode, status, file_name AS fileName,
 file_path AS filePath, file_url AS fileUrl, file_mime_type AS fileMimeType, sheet_name AS sheetName,
@@ -159,7 +173,7 @@ SQL;
         $mapping = is_array($batch['mapping']) ? $batch['mapping'] : [];
         $registrations = $this->registrations((string) $batch['eventId'], (string) $batch['distanceId']);
         $mapped = is_array($row['mappedData']) ? $row['mappedData'] : $this->mapRaw($row['rawData'], $mapping);
-        foreach (['bibNumber', 'time', 'status', 'position', 'category', 'gender', 'birthYear', 'firstName', 'lastName', 'fullName', 'club'] as $field) {
+        foreach (['bibNumber', 'time', 'netTime', 'status', 'position', 'category', 'gender', 'birthYear', 'firstName', 'lastName', 'fullName', 'club'] as $field) {
             if (array_key_exists($field, $data)) {
                 $mapped[$field] = $data[$field];
             }
@@ -233,8 +247,14 @@ SQL;
                     ]);
                 }
 
+                // Spec 14 sekcja 1: DNF moze niesc czas do momentu przerwania, jesli
+                // pomiar go dal - tylko DNS/DSQ nigdy nie maja czasu. "finished" i
+                // "dnf" oba moga wiec zapisac realny mapped['time']; positions()
+                // wyzej juz wyklucza dnf/dns/dsq z klasyfikacji miejsc.
+                $hasTime = in_array($mapped['status'], ['finished', 'dnf'], true) && $mapped['time'] !== '';
+                $resultId = $this->id();
                 $this->insert('results', [
-                    'id' => $this->id(),
+                    'id' => $resultId,
                     'event_id' => $batch['eventId'],
                     'event_name' => $event['name'],
                     'distance_id' => $batch['distanceId'],
@@ -244,8 +264,10 @@ SQL;
                     'user_name' => $registration['userName'],
                     'bib_number' => $mapped['bibNumber'] !== '' ? $mapped['bibNumber'] : ($registration['bibNumber'] ?? ''),
                     'category' => $mapped['category'] !== '' ? $mapped['category'] : $registration['category'],
-                    'time' => $mapped['status'] === 'finished' ? $mapped['time'] : strtoupper((string) $mapped['status']),
-                    'time_in_seconds' => $mapped['status'] === 'finished' ? (int) $mapped['timeInSeconds'] : 0,
+                    'time' => $hasTime ? $mapped['time'] : strtoupper((string) $mapped['status']),
+                    'time_in_seconds' => $hasTime ? (float) $mapped['timeInSeconds'] : 0,
+                    'net_time' => $hasTime && ($mapped['netTime'] ?? '') !== '' ? $mapped['netTime'] : null,
+                    'net_time_in_seconds' => $hasTime && $mapped['netTimeInSeconds'] !== null ? (float) $mapped['netTimeInSeconds'] : null,
                     'position' => $mapped['status'] === 'finished' ? (int) $positionData['position'] : 0,
                     'category_position' => $mapped['status'] === 'finished' ? (int) $positionData['categoryPosition'] : 0,
                     'status' => $mapped['status'],
@@ -254,6 +276,16 @@ SQL;
                     'source_import_batch_id' => $batchId,
                     'source_import_row_id' => $rowId,
                 ]);
+
+                foreach (array_values((array) ($mapped['splits'] ?? [])) as $index => $split) {
+                    $this->insert('result_splits', [
+                        'id' => $this->id(),
+                        'result_id' => $resultId,
+                        'label' => (string) $split['label'],
+                        'time_seconds' => (float) $split['timeSeconds'],
+                        'sort_order' => $index,
+                    ]);
+                }
 
                 $this->updateById('result_import_rows', $rowId, ['status' => 'committed', 'updated_at' => date(DATE_ATOM)]);
             }
@@ -654,7 +686,16 @@ SQL);
                 $target = 'firstName';
             } elseif (str_contains($key, 'nazwisko') || str_contains($key, 'lastname')) {
                 $target = 'lastName';
-            } elseif (str_contains($key, 'czas') || str_contains($key, 'time')) {
+            } elseif (str_contains($key, 'miedzyczas') || str_contains($key, 'punktkontrolny') || str_contains($key, 'split') || str_contains($key, 'checkpoint')) {
+                // Spec 14 sekcja 2: miedzyczasy sa opcjonalna lista par
+                // nazwa+czas, nie pojedynczym polem - zbierane osobno ponizej,
+                // nie przez zwykle mapowanie 1:1.
+                $mapping['splits'] ??= [];
+                $mapping['splits'][] = $header;
+                continue;
+            } elseif (str_contains($key, 'netto')) {
+                $target = 'netTime';
+            } elseif (str_contains($key, 'brutto') || str_contains($key, 'czas') || str_contains($key, 'time')) {
                 $target = 'time';
             } elseif (str_contains($key, 'status')) {
                 $target = 'status';
@@ -686,6 +727,8 @@ SQL);
             'bibNumber' => '',
             'time' => '',
             'timeInSeconds' => null,
+            'netTime' => '',
+            'netTimeInSeconds' => null,
             'status' => '',
             'position' => '',
             'category' => '',
@@ -701,6 +744,17 @@ SQL);
         }
         if ($mapped['fullName'] === '') {
             $mapped['fullName'] = trim($mapped['firstName'] . ' ' . $mapped['lastName']);
+        }
+        $mapped['splits'] = [];
+        foreach ((array) ($mapping['splits'] ?? []) as $splitColumn) {
+            if (!array_key_exists($splitColumn, $raw)) {
+                continue;
+            }
+            $value = trim((string) $raw[$splitColumn]);
+            if ($value === '') {
+                continue;
+            }
+            $mapped['splits'][] = ['label' => (string) $splitColumn, 'rawTime' => $value];
         }
         return $mapped;
     }
@@ -725,6 +779,37 @@ SQL);
         if ($time['error'] !== null) {
             $errors[] = $time['error'];
         }
+
+        // Netto jest opcjonalne (nie kazdy pomiar ma mate startowa) - brak albo
+        // niepoprawny format to ostrzezenie, nigdy blad blokujacy wiersz.
+        $netRaw = trim((string) ($mapped['netTime'] ?? ''));
+        if ($netRaw === '') {
+            $mapped['netTime'] = '';
+            $mapped['netTimeInSeconds'] = null;
+        } else {
+            $parsedNet = $this->parseDuration($netRaw);
+            if ($parsedNet === null) {
+                $mapped['netTime'] = '';
+                $mapped['netTimeInSeconds'] = null;
+                $warnings[] = 'net_time_invalid';
+            } else {
+                $mapped['netTime'] = $parsedNet['formatted'];
+                $mapped['netTimeInSeconds'] = $parsedNet['seconds'];
+            }
+        }
+
+        // Miedzyczasy sa opcjonalne i nigdy nie blokuja wiersza - punkt kontrolny
+        // z niepoprawnym czasem jest po prostu pomijany, z ostrzezeniem.
+        $splits = [];
+        foreach ((array) ($mapped['splits'] ?? []) as $split) {
+            $parsedSplit = $this->parseDuration((string) ($split['rawTime'] ?? ''));
+            if ($parsedSplit === null) {
+                $warnings[] = 'split_time_invalid';
+                continue;
+            }
+            $splits[] = ['label' => (string) $split['label'], 'timeSeconds' => $parsedSplit['seconds']];
+        }
+        $mapped['splits'] = $splits;
 
         $match = $selected
             ? ['status' => 'ready', 'selected' => $selected, 'candidates' => [$selected]]
@@ -754,38 +839,89 @@ SQL);
         ];
     }
 
-    /** @return array{time: string, seconds: ?int, status: string, error: ?string} */
+    /**
+     * DNF/DNS/DSQ (spec 14 sekcja 1) sa wartosciami statusu wyniku, nie brakiem
+     * wiersza: DNF niesie czas do momentu przerwania jesli pomiar go dal (lub
+     * pusty), DNS i DSQ nigdy nie maja czasu. Rozpoznaje status zarowno z
+     * osobnej kolumny "status", jak i wtedy, gdy plik wpisuje go wprost w
+     * kolumnie czasu (real-world przyklad w przyklady/import-wynikow).
+     *
+     * @return array{time: string, seconds: ?float, status: string, error: ?string}
+     */
     private function parseTimeAndStatus(string $rawTime, string $rawStatus): array
     {
         $status = strtolower(trim($rawStatus));
         $time = trim($rawTime);
         $normalizedStatus = match (true) {
             in_array($status, ['dnf', 'zszedl', 'zszedł', 'nie ukonczyl', 'nie ukończył'], true) => 'dnf',
+            in_array($status, ['dns', 'nie wystartowal', 'nie wystartował', 'nie wystartowala', 'nie wystartowała', 'nz'], true) => 'dns',
             in_array($status, ['dsq', 'dq', 'dyskwalifikacja'], true) => 'dsq',
             in_array($status, ['finished', 'finish', 'ukonczyl', 'ukończył', ''], true) => 'finished',
             default => 'finished',
         };
-        if (in_array(strtolower($time), ['dnf', 'dsq'], true)) {
-            return ['time' => strtoupper($time), 'seconds' => 0, 'status' => strtolower($time), 'error' => null];
+        if (in_array(strtoupper($time), ['DNF', 'DNS', 'DSQ'], true)) {
+            $normalizedStatus = strtolower($time);
+            $time = '';
         }
-        if ($normalizedStatus !== 'finished') {
-            return ['time' => strtoupper($normalizedStatus), 'seconds' => 0, 'status' => $normalizedStatus, 'error' => null];
+
+        if ($normalizedStatus === 'dns' || $normalizedStatus === 'dsq') {
+            // DNS/DSQ nigdy nie maja czasu, nawet jesli plik pomiaru jakis podal.
+            return ['time' => '', 'seconds' => null, 'status' => $normalizedStatus, 'error' => null];
         }
+
+        if ($normalizedStatus === 'dnf') {
+            if ($time === '') {
+                return ['time' => '', 'seconds' => null, 'status' => 'dnf', 'error' => null];
+            }
+            $parsed = $this->parseDuration($time);
+            if ($parsed === null) {
+                return ['time' => $time, 'seconds' => null, 'status' => 'dnf', 'error' => 'time_invalid'];
+            }
+            return ['time' => $parsed['formatted'], 'seconds' => $parsed['seconds'], 'status' => 'dnf', 'error' => null];
+        }
+
         if ($time === '') {
             return ['time' => '', 'seconds' => null, 'status' => 'finished', 'error' => 'time_missing'];
         }
-        if (!preg_match('/^\d{1,2}:\d{2}(?::\d{2})?$/', $time)) {
+        $parsed = $this->parseDuration($time);
+        if ($parsed === null) {
             return ['time' => $time, 'seconds' => null, 'status' => 'finished', 'error' => 'time_invalid'];
         }
-        $parts = array_map('intval', explode(':', $time));
-        if (count($parts) === 2) {
-            [$m, $s] = $parts;
-            $seconds = $m * 60 + $s;
-            return ['time' => sprintf('%d:%02d', $m, $s), 'seconds' => $seconds, 'status' => 'finished', 'error' => null];
+        return ['time' => $parsed['formatted'], 'seconds' => $parsed['seconds'], 'status' => 'finished', 'error' => null];
+    }
+
+    /**
+     * Parsuje "M:SS", "H:MM:SS" albo te same z setnymi sekundy
+     * ("H:MM:SS.ss", separator kropka lub przecinek) - spec 14 sekcja 2,
+     * "dokladnosc do setnej sekundy".
+     *
+     * @return array{formatted: string, seconds: float}|null
+     */
+    private function parseDuration(string $time): ?array
+    {
+        if (!preg_match('/^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[.,](\d{1,2}))?$/', trim($time), $matches)) {
+            return null;
         }
-        [$h, $m, $s] = $parts;
-        $seconds = $h * 3600 + $m * 60 + $s;
-        return ['time' => sprintf('%d:%02d:%02d', $h, $m, $s), 'seconds' => $seconds, 'status' => 'finished', 'error' => null];
+        $hasHourSegment = ($matches[3] ?? '') !== '';
+        if ($hasHourSegment) {
+            $hours = (int) $matches[1];
+            $minutes = (int) $matches[2];
+            $seconds = (int) $matches[3];
+        } else {
+            $hours = 0;
+            $minutes = (int) $matches[1];
+            $seconds = (int) $matches[2];
+        }
+        $centis = ($matches[4] ?? '') !== '' ? (int) str_pad($matches[4], 2, '0') : 0;
+        $totalSeconds = round($hours * 3600 + $minutes * 60 + $seconds + $centis / 100, 2);
+        // Mirror the input's own H:MM:SS vs M:SS shape (even an explicit "00:"
+        // hour segment) rather than collapsing on hours === 0 - a file that
+        // wrote "00:41:10" gets "0:41:10" back, not "41:10".
+        $formatted = $hasHourSegment ? sprintf('%d:%02d:%02d', $hours, $minutes, $seconds) : sprintf('%d:%02d', $minutes, $seconds);
+        if ($centis > 0) {
+            $formatted .= sprintf('.%02d', $centis);
+        }
+        return ['formatted' => $formatted, 'seconds' => $totalSeconds];
     }
 
     /** @param array<string, mixed> $mapped @param array<int, array<string, mixed>> $registrations */
@@ -896,9 +1032,121 @@ SQL);
     /** @return array<string, mixed>|null */
     private function distance(string $id): ?array
     {
-        $stmt = $this->pdo->prepare('SELECT id, name FROM event_distances WHERE id = :id');
+        $stmt = $this->pdo->prepare('SELECT id, name, categories FROM event_distances WHERE id = :id');
         $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            return null;
+        }
+        $decoded = $row['categories'] ? json_decode((string) $row['categories'], true) : [];
+        $row['categories'] = is_array($decoded) ? $decoded : [];
+        return $row;
+    }
+
+    /**
+     * Ticket 07 pkt 13 / E0.3: Wariant opłaty oznaczony jako dostepny wylacznie
+     * przy zapisie w biurze zawodow. Reuse zamiast wynajdywania nowej flagi -
+     * patrz migration 029_pricing_model_migration.sql.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function officePricingVariant(string $distanceId): ?array
+    {
+        $stmt = $this->pdo->prepare('SELECT id, name, price FROM event_distance_pricing_variants WHERE distance_id = :distanceId AND office_only = 1 ORDER BY sort_order ASC LIMIT 1');
+        $stmt->execute(['distanceId' => $distanceId]);
         return $stmt->fetch() ?: null;
+    }
+
+    /** @return array{0: string, 1: string} [firstName, lastName] */
+    private function splitName(string $fullName): array
+    {
+        $fullName = trim($fullName);
+        $spacePos = strrpos($fullName, ' ');
+        if ($spacePos === false) {
+            return [$fullName, ''];
+        }
+        return [substr($fullName, 0, $spacePos), substr($fullName, $spacePos + 1)];
+    }
+
+    /**
+     * Spec 14 sekcja 1: "Uczestnik bez Zapisu w systemie ... wymusza utworzenie
+     * Zapisu Wariantem oznaczonym „dostępny wyłącznie przy zapisie w biurze
+     * zawodów", zamiast tworzyć wynik osierocony." Ten sam Wariant co ticket 07
+     * pkt 13 (E0.3) - zadnej nowej flagi. Zawodnik dostaje profil bez Konta
+     * (ten sam wzorzec co "dziecko zarejestrowane przez rodzica" w
+     * CompetitorRepository), a organizator wykonujacy dopasowanie zostaje
+     * registeredById, dokladnie jak przy zapisie robionym przez opiekuna.
+     */
+    public function createRegistrationForRow(string $rowId, string $actorId): array
+    {
+        if ($this->registrationRepository === null || $this->competitorRepository === null) {
+            throw new RuntimeException('result_import_registration_creation_unsupported');
+        }
+
+        $row = $this->row($rowId);
+        if (!$row) {
+            throw new RuntimeException('not_found');
+        }
+        $batch = $this->findBatchOnly((string) $row['batchId']);
+        if (!$batch) {
+            throw new RuntimeException('not_found');
+        }
+
+        $mapping = is_array($batch['mapping']) ? $batch['mapping'] : [];
+        $mapped = is_array($row['mappedData']) ? $row['mappedData'] : $this->mapRaw($row['rawData'], $mapping);
+        $fullName = trim((string) ($mapped['fullName'] ?? ''));
+        if ($fullName === '') {
+            throw new RuntimeException('result_import_row_missing_name');
+        }
+
+        $variant = $this->officePricingVariant((string) $batch['distanceId']);
+        if ($variant === null) {
+            throw new RuntimeException('result_import_office_variant_missing');
+        }
+
+        $distance = $this->distance((string) $batch['distanceId']);
+        if (!$distance) {
+            throw new RuntimeException('validation_error');
+        }
+
+        [$firstName, $lastName] = $this->splitName($fullName);
+        $genderRaw = strtoupper(trim((string) ($mapped['gender'] ?? '')));
+        $competitor = $this->competitorRepository->create([
+            'firstName' => $firstName,
+            'lastName' => $lastName,
+            'gender' => in_array($genderRaw, ['M', 'K'], true) ? $genderRaw : null,
+            'club' => ($mapped['club'] ?? '') !== '' ? $mapped['club'] : null,
+        ], true);
+
+        $category = (string) ($mapped['category'] ?? '');
+        if ($category === '') {
+            $category = (string) ($distance['categories'][0] ?? 'Open');
+        }
+
+        $registration = $this->registrationRepository->create([
+            'eventId' => $batch['eventId'],
+            'userId' => $actorId,
+            'competitorId' => $competitor['id'],
+            'userName' => $fullName,
+            'userEmail' => '',
+            'distanceId' => $batch['distanceId'],
+            'category' => $category,
+            'pricingVariantId' => $variant['id'],
+            'registeredById' => $actorId,
+            'merchandiseOrders' => [],
+            // Uczestnik juz przebiegl dystans (pojawil sie w pliku wynikow) -
+            // Zapis powstaje od razu potwierdzony i oplacony, tak jak kazdy
+            // zapis w biurze zawodow w dniu startu.
+            'paymentDetails' => ['startFeePaid' => true],
+        ]);
+
+        $registrationUpdates = ['status' => 'confirmed'];
+        if (($mapped['bibNumber'] ?? '') !== '') {
+            $registrationUpdates['bibNumber'] = $mapped['bibNumber'];
+        }
+        $this->registrationRepository->update((string) $registration['id'], $registrationUpdates);
+
+        return $this->updateRow($rowId, ['selectedRegistrationId' => $registration['id']]);
     }
 
     /** @return array<string, mixed> */

@@ -1,0 +1,33 @@
+-- E2.7: Wyniki druzynowe - regula agregacji z wynikow indywidualnych,
+-- konfigurowalna per Dystans przy jego tworzeniu (i pozniej edytowalna, tak
+-- samo jak reszta pol sztafetowych z migracji 024 nie jest zablokowana na
+-- create-only).
+--
+-- Rozstrzygniecie: zc-second-brain/specyfikacje/.../14-wyniki-live-rekordy.md,
+-- sekcja 4. "reguła agregacji (suma czasów / czas najlepszego / średnia, w
+-- zależności od formuły konkurencji) jest konfigurowalna per Dystans
+-- drużynowy przy jego tworzeniu."
+--
+-- Zyje na event_distances (ten sam wzorzec co juz obecne tam start_type/
+-- relay_min_team_size/relay_max_team_size/relay_team_completion_deadline z
+-- migracji 024) - jedna regula per Dystans, nie per Wydarzenie ani per
+-- druzyna. Kolumna jest wspolna do calego mechanizmu event_distances -> ten
+-- sam generyczny camelCase<->snake_case mapping w
+-- EventRepository::children()/replaceChildren() juz obsluguje kazda kolumne
+-- tej tabeli bez dedykowanej mapy pol, wiec `teamAggregationRule` na
+-- Dystansie dziala automatycznie przez istniejace
+-- POST/PUT /events (tworzenie/edycja Wydarzenia z lista Dystansow) - zaden
+-- dodatkowy kod mapujacy nie jest tu potrzebny.
+--
+-- NULL (nie ma sensownej wartosci domyslnej) dla dystansow indywidualnych -
+-- ten sam wzorzec nullability co relay_min_team_size/relay_max_team_size.
+-- ResultRepository::teamClassification() domyslnie traktuje NULL jak 'sum'
+-- (patrz jej docblock), zeby dystans sztafetowy utworzony przed tym
+-- rozstrzygnieciem (albo bez jawnie wybranej reguly) mial deterministyczne,
+-- rozsadne zachowanie zamiast bledu/pustej klasyfikacji.
+--
+-- Migracje nie maja ledgera i uruchamiaja sie przy kazdym starcie (patrz
+-- Migrator.php) - ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtorzenia.
+
+ALTER TABLE event_distances
+  ADD COLUMN IF NOT EXISTS team_aggregation_rule ENUM('sum','best','average') NULL AFTER relay_team_completion_deadline;

@@ -293,7 +293,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $formFields, $formFieldAnswers): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {

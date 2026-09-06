@@ -1601,6 +1601,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $results->lifetimeRecordsForCompetitor($id));
         })->add(new AuthMiddleware($jwt));
         $api->get('/events/{eventId}/team-results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->teamResults($args['eventId'])));
+        // E2.7: live-computed team/relay classification for one event+distance -
+        // see ResultRepository::teamClassification()'s docblock for why this is
+        // a separate endpoint from the legacy /team-results above rather than a
+        // replacement of it. Public/unauthenticated, same as the individual
+        // /events/{eventId}/results classification it sits alongside.
+        $api->get('/events/{eventId}/distances/{distanceId}/team-results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->teamClassification($args['eventId'], $args['distanceId'])));
         $api->get('/events/{eventId}/result-documents', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->documents($args['eventId'])));
         $api->post('/events/{eventId}/result-documents', function (Request $request, Response $response, array $args) use ($events, $results, $body, $canUploadResults) {
             $event = $events->find((string) $args['eventId']);

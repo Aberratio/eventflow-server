@@ -391,7 +391,32 @@ SQL);
         return $unit === 'm' ? $value : $value * 1000;
     }
 
-    /** @return array<int, array<string, mixed>> */
+    /**
+     * LEGACY, superseded by teamClassification() below (E2.7) - kept only so
+     * old fixture/seeder data (EventFixtureImporter::importTeamResults(),
+     * database/seeders/001_demo.sql) still round-trips, and so nothing that
+     * still points at `team_results` breaks. Do NOT build new features on
+     * this: `team_results` stores a team result as a manually-entered,
+     * standalone row (see TeamResultsManager.tsx's "Dodaj drużynę" dialog on
+     * the client, and EventFixtureImporter::importTeamResults()) - exactly
+     * the model spec 14 sekcja 4 rejects ("Wynik drużyny/sztafety jest
+     * liczony z wyników indywidualnych członków, nie wpisywany osobno").
+     * TeamResultsManager.tsx's add/delete handlers were never actually wired
+     * to a write endpoint either (ResultsTab.tsx's handleAddTeamResult/
+     * handleDeleteTeamResult only touch local React state - see git history),
+     * so nothing outside fixtures ever persisted a row here through normal
+     * use; this GET was the only route ever exposed for it.
+     *
+     * E2.7 removes TeamResultsManager.tsx from the client results view
+     * entirely (replaced by the live-computed classification table) rather
+     * than leaving two competing "team results" UIs visible to an organizer
+     * side by side. The `team_results` table and this method are left in
+     * place (not dropped) purely to avoid an unrelated destructive migration
+     * and to keep EventFixtureImporter/seeders working unmodified - but they
+     * are now dead code from the product's perspective.
+     *
+     * @return array<int, array<string, mixed>>
+     */
     public function teamResults(string $eventId): array
     {
         $stmt = $this->pdo->prepare('SELECT id, event_id AS eventId, distance_id AS distanceId, distance_name AS distanceName, team_name AS teamName, members, total_time AS totalTime, total_time_in_seconds AS totalTimeInSeconds, position FROM team_results WHERE event_id = :eventId ORDER BY position ASC');
@@ -400,6 +425,141 @@ SQL);
             $row['members'] = $row['members'] ? json_decode((string) $row['members'], true) : [];
             return $row;
         }, $stmt->fetchAll());
+    }
+
+    /**
+     * E2.7 (spec 14 sekcja 4): "Wynik drużyny/sztafety jest liczony z
+     * wyników indywidualnych członków, nie wpisywany osobno ... klasyfikacja
+     * drużynowa to osobna tabela obok klasyfikacji indywidualnej na tym
+     * samym Dystansie, nie osobny byt wyniku." See teamResults() above for
+     * why this replaces (rather than reuses) the legacy `team_results` table.
+     *
+     * Grouping key: registrations.team_id shared by >1 (or even exactly 1 -
+     * nothing here requires more than one member) registrations on this
+     * event+distance - the lightweight grouping the spec/ticket calls for,
+     * not a dedicated "Drużyna" entity (out of scope, stage 7). team_name is
+     * read off whichever member row happens to carry it (they're expected to
+     * agree - RegistrationRepository::create()/update() write the same
+     * teamName to every member of a team at registration time).
+     *
+     * Roster membership: every registration on this event+distance with a
+     * non-null team_id and a status other than cancelled/removed - i.e. the
+     * same "still a real participant" bar `renumberEventDistance()` and
+     * friends implicitly use elsewhere, not narrowed further to `confirmed`
+     * only (a `pending` registration is still a roster member for team-size
+     * purposes; it simply won't have a finished result yet, which the
+     * completeness rule below already accounts for).
+     *
+     * Edge case - partial team (acceptance criterion 5): a team where not
+     * every roster member has a `finished` result yet (no result row at all,
+     * or a dnf/dns/dsq result) is EXCLUDED from the ranking entirely, not
+     * shown with a partial/placeholder value. Reasoning: unlike an
+     * individual classification (where a dnf/dns/dsq row is still shown,
+     * just unranked - spec 14 sekcja 1), there is no meaningful "partial"
+     * aggregate to display for sum/average (missing a member understates the
+     * total) or even best (an incomplete team could still "win" on one fast
+     * member despite not having finished as a team), so surfacing a
+     * misleading number is worse than omitting the row until the team is
+     * complete. This mirrors relay_team_completion_deadline's own framing
+     * (migration 024): a relay team is expected to reach a complete roster
+     * before it's evaluated as a team.
+     *
+     * Edge case - DNF/DNS/DSQ member (acceptance criterion 5): disqualifies
+     * only that member's contribution to the TEAM aggregate (via the
+     * completeness rule above, which excludes the whole team from this
+     * table), never the member's own individual result - their row keeps
+     * its own status/time/history untouched in the individual classification
+     * (E2.2), exactly as spec 14 sekcja 1 already guarantees for individual
+     * results. There is deliberately no partial-credit path (e.g. "drop the
+     * DNF member and aggregate the rest") - the configured rule (sum/best/
+     * average) is defined over "the team's members", and silently
+     * redefining that set per row would make the aggregation rule mean
+     * something different for every incomplete team.
+     *
+     * Aggregation rule: 'sum' (total of all finished members' GROSS
+     * time_in_seconds - net is optional per spec 14 sekcja 2, so it can't be
+     * the universal key, same reasoning as lifetimeRecordsForCompetitor()),
+     * 'best' (the fastest single member time), or 'average' (arithmetic
+     * mean). Falls back to 'sum' when the distance's
+     * event_distances.team_aggregation_rule is NULL (e.g. a relay distance
+     * created before this rule existed, or left unset) rather than throwing
+     * or returning an empty table.
+     *
+     * Live query, not materialized: same reasoning as
+     * lifetimeRecordsForCompetitor() above - this is a read path (E2.4
+     * precedent), so a correction to any member's result (PATCH /results/{id})
+     * or a fresh import is reflected on the very next call, with no
+     * invalidation step to get wrong.
+     *
+     * @return array<int, array{teamId: string, teamName: string, memberCount: int, aggregationRule: string, aggregatedTimeInSeconds: float, position: int}>
+     */
+    public function teamClassification(string $eventId, string $distanceId): array
+    {
+        $ruleStmt = $this->pdo->prepare('SELECT team_aggregation_rule FROM event_distances WHERE id = :distanceId AND event_id = :eventId');
+        $ruleStmt->execute(['distanceId' => $distanceId, 'eventId' => $eventId]);
+        $configuredRule = $ruleStmt->fetchColumn();
+        $rule = in_array($configuredRule, ['sum', 'best', 'average'], true) ? (string) $configuredRule : 'sum';
+
+        $stmt = $this->pdo->prepare(
+            'SELECT reg.team_id AS teamId, reg.team_name AS teamName, res.status AS resultStatus, res.time_in_seconds AS timeInSeconds
+             FROM registrations reg
+             LEFT JOIN results res ON res.registration_id = reg.id
+             WHERE reg.event_id = :eventId AND reg.distance_id = :distanceId
+               AND reg.team_id IS NOT NULL AND reg.status NOT IN ("cancelled", "removed")'
+        );
+        $stmt->execute(['eventId' => $eventId, 'distanceId' => $distanceId]);
+
+        $teams = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $teamId = (string) $row['teamId'];
+            if (!isset($teams[$teamId])) {
+                $teams[$teamId] = [
+                    'teamId' => $teamId,
+                    'teamName' => (string) $row['teamName'],
+                    'memberCount' => 0,
+                    'times' => [],
+                    'complete' => true,
+                ];
+            }
+            $teams[$teamId]['memberCount']++;
+            if ($row['resultStatus'] === 'finished' && $row['timeInSeconds'] !== null) {
+                $teams[$teamId]['times'][] = (float) $row['timeInSeconds'];
+            } else {
+                // Missing result row (no import/manual entry yet) or a
+                // non-finished status (dnf/dns/dsq) - either way this member
+                // has no qualifying time, so the team is not yet complete.
+                $teams[$teamId]['complete'] = false;
+            }
+        }
+
+        $classification = [];
+        foreach ($teams as $team) {
+            if (!$team['complete']) {
+                continue;
+            }
+            $times = $team['times'];
+            $aggregated = match ($rule) {
+                'best' => min($times),
+                'average' => array_sum($times) / count($times),
+                default => array_sum($times),
+            };
+            $classification[] = [
+                'teamId' => $team['teamId'],
+                'teamName' => $team['teamName'],
+                'memberCount' => $team['memberCount'],
+                'aggregationRule' => $rule,
+                'aggregatedTimeInSeconds' => round($aggregated, 2),
+                'position' => 0,
+            ];
+        }
+
+        usort($classification, static fn (array $a, array $b): int => $a['aggregatedTimeInSeconds'] <=> $b['aggregatedTimeInSeconds']);
+        foreach ($classification as $index => &$row) {
+            $row['position'] = $index + 1;
+        }
+        unset($row);
+
+        return $classification;
     }
 
     /** @return array<int, array<string, mixed>> */

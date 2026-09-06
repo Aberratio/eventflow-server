@@ -249,6 +249,111 @@ final class FormFieldRepository extends Repository
     }
 
     /**
+     * E2.5: automatic answer-count aggregation for every choice-type custom
+     * field (single_choice/multi_choice/consent) of an event — no organizer
+     * opt-in flag (model answer §1: "bez osobnej flagi 'zestawialne'"). Only
+     * `kind = 'custom'` fields are considered; system fields never carry
+     * a `fieldType` and are out of scope here (aggregating e.g. "gender" is
+     * a separate, unbuilt cross-section per the spec's §2).
+     *
+     * Counts only "live" registrations, mirroring the repo-wide
+     * NOT_COUNTED_STATUSES idiom (RegistrationRepository) inline rather than
+     * importing it, since it's a private constant there and this is the same
+     * three-status literal already duplicated at every other call site
+     * (EventRepository::capacityByDistance, ResultImportRepository, etc.).
+     *
+     * @return array<int, array{formFieldId: string, fieldKey: string, label: string, fieldType: string, counts: array<int, array{key: string, label: string, count: int}>}>
+     */
+    public function aggregatesForEvent(string $eventId): array
+    {
+        $aggregatableTypes = [FormFieldType::SINGLE_CHOICE, FormFieldType::MULTI_CHOICE, FormFieldType::CONSENT];
+
+        $fields = array_values(array_filter(
+            $this->listForEvent($eventId),
+            static fn (array $f): bool => $f['kind'] === 'custom' && in_array($f['fieldType'], $aggregatableTypes, true)
+        ));
+
+        if ($fields === []) {
+            return [];
+        }
+
+        $result = [];
+        foreach ($fields as $field) {
+            $result[] = [
+                'formFieldId' => $field['id'],
+                'fieldKey' => $field['fieldKey'],
+                'label' => $field['labelOverride'] ?? $field['fieldKey'],
+                'fieldType' => $field['fieldType'],
+                'counts' => $this->countAnswersForField($field),
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param array<string, mixed> $field
+     * @return array<int, array{key: string, label: string, count: int}>
+     */
+    private function countAnswersForField(array $field): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT a.value_text AS valueText, a.value_json AS valueJson '
+            . 'FROM form_field_answers a '
+            . 'INNER JOIN registrations r ON r.id = a.registration_id '
+            . "WHERE a.form_field_id = :formFieldId AND r.status NOT IN ('cancelled', 'removed', 'expired')"
+        );
+        $stmt->execute(['formFieldId' => $field['id']]);
+        $rows = $stmt->fetchAll();
+
+        $type = (string) $field['fieldType'];
+
+        if ($type === FormFieldType::CONSENT) {
+            $yes = 0;
+            $no = 0;
+            foreach ($rows as $row) {
+                if (in_array($row['valueText'], ['1', 'true'], true)) {
+                    $yes++;
+                } else {
+                    $no++;
+                }
+            }
+            return [
+                ['key' => 'yes', 'label' => 'Tak', 'count' => $yes],
+                ['key' => 'no', 'label' => 'Nie', 'count' => $no],
+            ];
+        }
+
+        /** @var array<int, array{key: string, label: string, price: float}> $options */
+        $options = (array) ($field['options'] ?? []);
+        $tally = [];
+        foreach ($options as $option) {
+            $tally[(string) $option['key']] = 0;
+        }
+
+        foreach ($rows as $row) {
+            if ($type === FormFieldType::MULTI_CHOICE) {
+                $selected = $row['valueJson'] !== null && $row['valueJson'] !== ''
+                    ? (array) json_decode((string) $row['valueJson'], true)
+                    : [];
+            } else {
+                $selected = $row['valueText'] !== null && $row['valueText'] !== '' ? [$row['valueText']] : [];
+            }
+            foreach ($selected as $key) {
+                $tally[(string) $key] = ($tally[(string) $key] ?? 0) + 1;
+            }
+        }
+
+        $counts = [];
+        foreach ($options as $option) {
+            $key = (string) $option['key'];
+            $counts[] = ['key' => $key, 'label' => (string) $option['label'], 'count' => $tally[$key] ?? 0];
+        }
+
+        return $counts;
+    }
+
+    /**
      * @param array<int, array<string, mixed>|string> $rawOptions
      * @return array<int, array{key: string, label: string, price: float}>
      */

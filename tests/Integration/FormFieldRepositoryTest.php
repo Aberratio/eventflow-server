@@ -317,6 +317,137 @@ final class FormFieldRepositoryTest extends TestCase
         self::assertSame('XL', $valuesByKey[$visibleCustom['fieldKey']]);
     }
 
+    /**
+     * E2.5: single_choice gets an automatic count per option, zero-count
+     * options included so the organizer sees the full breakdown (e.g. a
+     * t-shirt size nobody picked yet still needs to be ordered as "0").
+     */
+    public function testSingleChoiceAggregateCountsPerOptionIncludingZero(): void
+    {
+        $tshirt = $this->fields->createCustom($this->eventId, [
+            'label' => 'Rozmiar koszulki',
+            'fieldType' => FormFieldType::SINGLE_CHOICE,
+            'options' => [
+                ['key' => 's', 'label' => 'S', 'price' => 0],
+                ['key' => 'm', 'label' => 'M', 'price' => 0],
+                ['key' => 'l', 'label' => 'L', 'price' => 0],
+            ],
+            'state' => 'shown',
+        ]);
+
+        $r1 = $this->createRegistration();
+        $r2 = $this->createRegistration();
+        $r3 = $this->createRegistration();
+        $this->answers->saveAnswer($this->fields, $tshirt['id'], $r1, 'm');
+        $this->answers->saveAnswer($this->fields, $tshirt['id'], $r2, 'm');
+        $this->answers->saveAnswer($this->fields, $tshirt['id'], $r3, 's');
+
+        $aggregates = $this->fields->aggregatesForEvent($this->eventId);
+        $tshirtAggregate = current(array_filter($aggregates, static fn (array $a): bool => $a['formFieldId'] === $tshirt['id']));
+
+        self::assertNotFalse($tshirtAggregate);
+        $countsByKey = array_column($tshirtAggregate['counts'], 'count', 'key');
+        self::assertSame(['s' => 1, 'm' => 2, 'l' => 0], $countsByKey);
+        self::assertSame('Rozmiar koszulki', $tshirtAggregate['label']);
+        self::assertSame(FormFieldType::SINGLE_CHOICE, $tshirtAggregate['fieldType']);
+    }
+
+    /** E2.5: multi_choice lets one registration count toward several options — total can exceed registration count. */
+    public function testMultiChoiceAggregateCountsEachSelectedOption(): void
+    {
+        $meal = $this->fields->createCustom($this->eventId, [
+            'label' => 'Posiłek',
+            'fieldType' => FormFieldType::MULTI_CHOICE,
+            'options' => [
+                ['key' => 'veg', 'label' => 'Wege', 'price' => 0],
+                ['key' => 'meat', 'label' => 'Mięso', 'price' => 0],
+                ['key' => 'gluten_free', 'label' => 'Bezglutenowy', 'price' => 0],
+            ],
+            'state' => 'shown',
+        ]);
+
+        $r1 = $this->createRegistration();
+        $r2 = $this->createRegistration();
+        $this->answers->saveAnswer($this->fields, $meal['id'], $r1, ['veg', 'gluten_free']);
+        $this->answers->saveAnswer($this->fields, $meal['id'], $r2, ['meat']);
+
+        $aggregates = $this->fields->aggregatesForEvent($this->eventId);
+        $mealAggregate = current(array_filter($aggregates, static fn (array $a): bool => $a['formFieldId'] === $meal['id']));
+
+        $countsByKey = array_column($mealAggregate['counts'], 'count', 'key');
+        self::assertSame(['veg' => 1, 'meat' => 1, 'gluten_free' => 1], $countsByKey);
+        self::assertSame(3, array_sum($countsByKey), 'Two registrations, three total selections — multi-select can exceed registration count.');
+    }
+
+    /** E2.5: consent tallies true vs false/unanswered among live registrations. */
+    public function testConsentAggregateCountsYesAndNo(): void
+    {
+        $marketing = $this->fields->createCustom($this->eventId, [
+            'label' => 'Zgoda marketingowa',
+            'fieldType' => FormFieldType::CONSENT,
+            'state' => 'shown',
+        ]);
+
+        $r1 = $this->createRegistration();
+        $r2 = $this->createRegistration();
+        $r3 = $this->createRegistration();
+        $this->answers->saveAnswer($this->fields, $marketing['id'], $r1, true);
+        $this->answers->saveAnswer($this->fields, $marketing['id'], $r2, false);
+        $this->answers->saveAnswer($this->fields, $marketing['id'], $r3, true);
+
+        $aggregates = $this->fields->aggregatesForEvent($this->eventId);
+        $consentAggregate = current(array_filter($aggregates, static fn (array $a): bool => $a['formFieldId'] === $marketing['id']));
+
+        $countsByKey = array_column($consentAggregate['counts'], 'count', 'key');
+        self::assertSame(['yes' => 2, 'no' => 1], $countsByKey);
+    }
+
+    /** E2.5: a cancelled/expired registration's answer must not count toward the tally. */
+    public function testCancelledRegistrationAnswerIsExcludedFromAggregate(): void
+    {
+        $tshirt = $this->fields->createCustom($this->eventId, [
+            'label' => 'Rozmiar koszulki',
+            'fieldType' => FormFieldType::SINGLE_CHOICE,
+            'options' => [
+                ['key' => 's', 'label' => 'S', 'price' => 0],
+                ['key' => 'm', 'label' => 'M', 'price' => 0],
+            ],
+            'state' => 'shown',
+        ]);
+
+        $liveRegistration = $this->createRegistration();
+        $cancelledRegistration = $this->createRegistration();
+        $expiredRegistration = $this->createRegistration();
+        $this->answers->saveAnswer($this->fields, $tshirt['id'], $liveRegistration, 's');
+        $this->answers->saveAnswer($this->fields, $tshirt['id'], $cancelledRegistration, 'm');
+        $this->answers->saveAnswer($this->fields, $tshirt['id'], $expiredRegistration, 'm');
+
+        $this->registrations->cancel($cancelledRegistration);
+        $this->pdo->prepare('UPDATE registrations SET status = :status WHERE id = :id')
+            ->execute(['status' => 'expired', 'id' => $expiredRegistration]);
+
+        $aggregates = $this->fields->aggregatesForEvent($this->eventId);
+        $tshirtAggregate = current(array_filter($aggregates, static fn (array $a): bool => $a['formFieldId'] === $tshirt['id']));
+
+        $countsByKey = array_column($tshirtAggregate['counts'], 'count', 'key');
+        self::assertSame(['s' => 1, 'm' => 0], $countsByKey, 'Cancelled and expired registrations must not count toward the tally.');
+    }
+
+    /** E2.5: only custom choice-type fields are aggregated — system fields and other custom types are excluded. */
+    public function testAggregatesForEventExcludesNonChoiceTypesAndSystemFields(): void
+    {
+        $this->fields->ensureSystemCatalog($this->eventId);
+        $this->fields->createCustom($this->eventId, [
+            'label' => 'Uwagi',
+            'fieldType' => FormFieldType::LONG_TEXT,
+            'state' => 'shown',
+        ]);
+
+        $aggregates = $this->fields->aggregatesForEvent($this->eventId);
+
+        self::assertSame([], $aggregates, 'No choice-type custom field exists yet — aggregate list must be empty.');
+    }
+
     private function findByKey(string $key): array
     {
         foreach ($this->fields->listForEvent($this->eventId) as $field) {

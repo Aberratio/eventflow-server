@@ -113,29 +113,105 @@ final class ResultRepository extends Repository
         }
     }
 
+    /**
+     * Spec 14 sekcja 1: DNF/DNS/DSQ sa statusami wyniku, wylaczonymi z
+     * klasyfikacji miejsc - ResultImportRepository juz to wymusza dla importu
+     * CSV, ale reczny wpis/edycja (POST/PATCH /results) szedl wprost przez
+     * ta klase bez tej samej gwarancji. Egzekwujemy ja tutaj niezaleznie od
+     * tego, co przyszlo w payloadzie (organizator moglby zostawic stare
+     * miejsce przy zmianie statusu na DNS, np.).
+     */
+    private const NON_CLASSIFIED_STATUSES = ['dnf', 'dns', 'dsq'];
+
     /** @param array<string, mixed> $data */
     public function create(array $data): array
     {
         $id = $this->id();
-        $this->insert('results', $this->map($id, $data));
+        $mapped = $this->map($id, $data);
+        $status = (string) ($mapped['status'] ?? 'finished');
+        if (in_array($status, self::NON_CLASSIFIED_STATUSES, true)) {
+            $mapped['position'] = 0;
+            $mapped['category_position'] = 0;
+        }
+        $this->insert('results', $mapped);
         if (array_key_exists('splits', $data) && is_array($data['splits'])) {
             $this->replaceSplits($id, $data['splits']);
         }
+        $this->renumberEventDistance((string) $mapped['event_id'], (string) $mapped['distance_id']);
         return $this->find($id);
     }
 
     /** @param array<string, mixed> $data */
     public function update(string $id, array $data): ?array
     {
+        $current = $this->find($id);
+        if ($current === null) {
+            return null;
+        }
+
         $mapped = $this->map($id, $data, false);
         unset($mapped['id']);
+        $status = (string) ($data['status'] ?? $current['status']);
+        if (in_array($status, self::NON_CLASSIFIED_STATUSES, true)) {
+            $mapped['position'] = 0;
+            $mapped['category_position'] = 0;
+        }
         if ($mapped !== []) {
             $this->updateById('results', $id, $mapped);
         }
         if (array_key_exists('splits', $data) && is_array($data['splits'])) {
             $this->replaceSplits($id, $data['splits']);
         }
+        $eventId = (string) ($data['eventId'] ?? $current['eventId']);
+        $distanceId = (string) ($data['distanceId'] ?? $current['distanceId']);
+        $this->renumberEventDistance($eventId, $distanceId);
+        if ($eventId !== (string) $current['eventId'] || $distanceId !== (string) $current['distanceId']) {
+            // A manual edit that moved the result to another event/distance
+            // (unusual, but the payload technically allows it) leaves its old
+            // siblings with a gap - renumber that group too.
+            $this->renumberEventDistance((string) $current['eventId'], (string) $current['distanceId']);
+        }
         return $this->find($id);
+    }
+
+    /**
+     * Recompute position/categoryPosition for every `finished` result in an
+     * event+distance, ranked by timeInSeconds ascending; category position is
+     * counted the same way, per category. Runs after every manual
+     * create/update so a new/changed result doesn't leave siblings with
+     * stale ranks (e.g. a faster finisher inserted mid-table, or someone
+     * flipped from `finished` to `dns`).
+     *
+     * ResultImportRepository::positions() (the reference algorithm for the
+     * CSV-import commit path) additionally honors an explicit position taken
+     * straight from the freshly-parsed import file for that one pass. That
+     * signal doesn't carry over here: the `position` column already holds
+     * this method's own previous output, so treating it as "explicit intent"
+     * on a later call would let one earlier manual/organizer position lock
+     * in and never get re-ranked by time again. Manual entry
+     * (AddResultDialog.tsx) never lets an organizer set a position anyway -
+     * ranking here is always computed, so pure time-ascending is the correct
+     * rule for this path.
+     */
+    private function renumberEventDistance(string $eventId, string $distanceId): void
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, category FROM results
+             WHERE event_id = :eventId AND distance_id = :distanceId AND status = "finished"
+             ORDER BY time_in_seconds ASC'
+        );
+        $stmt->execute(['eventId' => $eventId, 'distanceId' => $distanceId]);
+        $rows = $stmt->fetchAll();
+
+        $categoryPositions = [];
+        foreach ($rows as $index => $row) {
+            $category = (string) $row['category'];
+            $categoryPositions[$category] = ($categoryPositions[$category] ?? 0) + 1;
+            $this->updateById('results', (string) $row['id'], [
+                'position' => $index + 1,
+                'category_position' => $categoryPositions[$category],
+            ]);
+        }
     }
 
     public function delete(string $id): void

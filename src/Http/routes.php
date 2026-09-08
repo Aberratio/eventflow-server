@@ -257,6 +257,18 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         return $canManageEvent($event, $auth)
             && in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished'], true);
     };
+    // E3.2: the pasted BZ organization token must never reach a non-manager read
+    // (issue 12 §3 — it is a credential-shaped identifier, unlike the rest of the
+    // Event payload which this codebase already returns unfiltered to anonymous
+    // readers). Applied to every read path a participant/guest can hit; manager
+    // reads (organizer-owner or the same $canManageEvent-eligible staff) keep it.
+    $stripBzToken = static function (array $event): array {
+        $event['bzOrganizationToken'] = null;
+        return $event;
+    };
+    $stripBzTokenFromList = static function (array $events) use ($stripBzToken): array {
+        return array_map($stripBzToken, $events);
+    };
     $touchesAdminAccount = static function (?array $existing, array $payload): bool {
         $existingRole = (string) ($existing['role'] ?? '');
         $nextRole = array_key_exists('role', $payload) ? (string) $payload['role'] : '';
@@ -293,7 +305,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
@@ -548,7 +560,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $page['data']);
         });
 
-        $api->get('/events', function (Request $request, Response $response) use ($events, $query, $optionalAuth, $isStaffRole) {
+        $api->get('/events', function (Request $request, Response $response) use ($events, $query, $optionalAuth, $isStaffRole, $stripBzTokenFromList) {
             $filters = $query($request);
             $auth = $optionalAuth($request);
             $role = (string) ($auth['role'] ?? '');
@@ -561,25 +573,31 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 unset($filters['includeDeleted']);
             }
             $page = $events->list($filters);
-            return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
+            // E3.2: staff dashboards may legitimately browse this list (includeUnpublished
+            // above); everyone else hitting this generic listing endpoint is a public/guest
+            // reader, so the BZ token is stripped unless the requester is staff.
+            $data = $isStaffRole($role) ? $page['data'] : $stripBzTokenFromList($page['data']);
+            return JsonResponder::paginated($response, $data, $page['total'], $page['page'], $page['pageSize']);
         });
-        $api->get('/events/featured', fn (Request $request, Response $response) => JsonResponder::ok($response, $events->featured()));
-        $api->get('/events/live', fn (Request $request, Response $response) => JsonResponder::ok($response, $events->live()));
-        $api->get('/events/slug/{slug}', function (Request $request, Response $response, array $args) use ($events, $optionalAuth, $canViewEvent) {
+        $api->get('/events/featured', fn (Request $request, Response $response) => JsonResponder::ok($response, $stripBzTokenFromList($events->featured())));
+        $api->get('/events/live', fn (Request $request, Response $response) => JsonResponder::ok($response, $stripBzTokenFromList($events->live())));
+        $api->get('/events/slug/{slug}', function (Request $request, Response $response, array $args) use ($events, $optionalAuth, $canViewEvent, $canManageEvent, $stripBzToken) {
             $event = $events->findBySlug($args['slug']);
+            $auth = $optionalAuth($request);
             $accessCode = $request->getQueryParams()['accessCode'] ?? null;
-            if (!$canViewEvent($event, $optionalAuth($request), $accessCode !== null ? (string) $accessCode : null)) {
+            if (!$canViewEvent($event, $auth, $accessCode !== null ? (string) $accessCode : null)) {
                 return JsonResponder::error($response, 'not_found', 'Event not found', 404);
             }
-            return JsonResponder::ok($response, $event);
+            return JsonResponder::ok($response, $canManageEvent($event, $auth) ? $event : $stripBzToken($event));
         });
-        $api->get('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $optionalAuth, $canViewEvent) {
+        $api->get('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $optionalAuth, $canViewEvent, $canManageEvent, $stripBzToken) {
             $event = $events->find($args['id']);
+            $auth = $optionalAuth($request);
             $accessCode = $request->getQueryParams()['accessCode'] ?? null;
-            if (!$canViewEvent($event, $optionalAuth($request), $accessCode !== null ? (string) $accessCode : null)) {
+            if (!$canViewEvent($event, $auth, $accessCode !== null ? (string) $accessCode : null)) {
                 return JsonResponder::error($response, 'not_found', 'Event not found', 404);
             }
-            return JsonResponder::ok($response, $event);
+            return JsonResponder::ok($response, $canManageEvent($event, $auth) ? $event : $stripBzToken($event));
         });
         $api->post('/events', function (Request $request, Response $response) use ($events, $users, $body, $isStaffRole, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
@@ -650,6 +668,19 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 unset($payload['organizerId'], $payload['organizerName']);
             } elseif (!$isStaffRole($role)) {
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            // E3.2: enabling Biuro Zawodów requires a non-empty organization token —
+            // either freshly pasted in this same request, or already stored from an
+            // earlier enable (re-enabling after a disable-only PATCH must not force
+            // re-pasting it, since disabling never wipes the stored token). Disabling
+            // is always allowed, no token required.
+            if (array_key_exists('bzIntegrationEnabled', $payload) && (bool) $payload['bzIntegrationEnabled']) {
+                $bzToken = array_key_exists('bzOrganizationToken', $payload)
+                    ? trim((string) $payload['bzOrganizationToken'])
+                    : trim((string) ($event['bzOrganizationToken'] ?? ''));
+                if ($bzToken === '') {
+                    return JsonResponder::error($response, 'validation_error', 'bzOrganizationToken is required to enable Biuro Zawodów integration', 422);
+                }
             }
             $updated = $events->update($args['id'], $payload);
             $logActivity($auth, 'event_updated', 'Zaktualizowano wydarzenie', 'event', (string) $args['id'], (string) ($updated['name'] ?? $event['name'] ?? ''));

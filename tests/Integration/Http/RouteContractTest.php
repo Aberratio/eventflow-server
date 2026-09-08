@@ -130,6 +130,45 @@ final class RouteContractTest extends HttpTestCase
         self::assertSame($this->privateEvent['id'], $staffPayload['data']['id']);
     }
 
+    /**
+     * E3.2 (issue 12 §3): the pasted BZ organization token is credential-shaped and
+     * must never reach a participant/anonymous reader of a published Event, even
+     * though the rest of the Event payload (including bank details inside
+     * paymentConfig) is already returned unfiltered on this same public route —
+     * see routes.php's `$stripBzToken`. Staff (a manager, per $canManageEvent) still
+     * sees it, so the organizer-facing settings tab keeps working.
+     */
+    public function testBzOrganizationTokenIsHiddenFromPublicButVisibleToStaff(): void
+    {
+        $this->events->update((string) $this->activeEvent['id'], [
+            'bzIntegrationEnabled' => true,
+            'bzOrganizationToken' => 'ORG-SECRET-TOKEN',
+        ]);
+
+        $publicById = $this->request('GET', '/api/v1/events/' . $this->activeEvent['id']);
+        $publicByIdPayload = $this->json($publicById);
+        self::assertSame(200, $publicById->getStatusCode());
+        self::assertTrue($publicByIdPayload['data']['bzIntegrationEnabled']);
+        self::assertNull($publicByIdPayload['data']['bzOrganizationToken']);
+
+        $publicBySlug = $this->request('GET', '/api/v1/events/slug/' . $this->activeEvent['slug']);
+        self::assertNull($this->json($publicBySlug)['data']['bzOrganizationToken']);
+
+        $listResponse = $this->request('GET', '/api/v1/events?search=PHPUnit%20Contract');
+        $listPayload = $this->json($listResponse);
+        foreach ($listPayload['data'] as $row) {
+            self::assertNull($row['bzOrganizationToken']);
+        }
+
+        $staffResponse = $this->request(
+            'GET',
+            '/api/v1/events/' . $this->activeEvent['id'],
+            [],
+            $this->bearer($this->admin['id'], 'admin', $this->admin['email'])
+        );
+        self::assertSame('ORG-SECRET-TOKEN', $this->json($staffResponse)['data']['bzOrganizationToken']);
+    }
+
     public function testAuthLoginSuccessAndFailureContracts(): void
     {
         $success = $this->request('POST', '/api/v1/auth/login', [

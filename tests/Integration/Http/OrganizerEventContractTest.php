@@ -328,6 +328,112 @@ final class OrganizerEventContractTest extends HttpTestCase
         self::assertSame('validation_error', $this->json($visibilityResp)['error']['code']);
     }
 
+    /**
+     * E3.2 (issue 12 §3): enabling "Biuro Zawodów" without pasting an organization
+     * token is rejected — the platform never creates a BZ organization itself, so
+     * there is nothing to fall back to.
+     */
+    public function testEnablingBzIntegrationWithoutTokenReturns422(): void
+    {
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-bz-no-token']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+
+        $emptyTokenResp = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $eventId,
+            ['bzIntegrationEnabled' => true, 'bzOrganizationToken' => '   '],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(422, $emptyTokenResp->getStatusCode());
+        self::assertSame('validation_error', $this->json($emptyTokenResp)['error']['code']);
+
+        $missingTokenResp = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $eventId,
+            ['bzIntegrationEnabled' => true],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(422, $missingTokenResp->getStatusCode());
+        self::assertSame('validation_error', $this->json($missingTokenResp)['error']['code']);
+    }
+
+    /**
+     * E3.2: disabling never requires a token, and the token round-trips through the
+     * real HTTP PATCH route (not just the repository) — the exact "generic PATCH
+     * /events/{id}" wiring the ticket asks for.
+     */
+    public function testBzIntegrationTokenRoundTripsAndDisableNeedsNoToken(): void
+    {
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-bz-roundtrip']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+
+        $enableResp = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $eventId,
+            ['bzIntegrationEnabled' => true, 'bzOrganizationToken' => 'ORG-HTTP-1'],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(200, $enableResp->getStatusCode());
+        $enabled = $this->json($enableResp)['data'];
+        self::assertTrue($enabled['bzIntegrationEnabled']);
+        self::assertSame('ORG-HTTP-1', $enabled['bzOrganizationToken']);
+
+        $disableResp = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $eventId,
+            ['bzIntegrationEnabled' => false],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(200, $disableResp->getStatusCode());
+        $disabled = $this->json($disableResp)['data'];
+        self::assertFalse($disabled['bzIntegrationEnabled']);
+        // Preserved, not wiped — re-enabling later shouldn't require re-pasting it.
+        self::assertSame('ORG-HTTP-1', $disabled['bzOrganizationToken']);
+
+        $reEnableResp = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $eventId,
+            ['bzIntegrationEnabled' => true],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        self::assertSame(200, $reEnableResp->getStatusCode());
+        self::assertTrue($this->json($reEnableResp)['data']['bzIntegrationEnabled']);
+    }
+
+    /**
+     * E3.2: only the owning organizer (or admin) may write the BZ config — same
+     * $canManageEvent gate as every other Event-scoped organizer mutation.
+     */
+    public function testOtherOrganizerCannotWriteBzIntegrationConfig(): void
+    {
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-bz-forbidden']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+
+        $response = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $eventId,
+            ['bzIntegrationEnabled' => true, 'bzOrganizationToken' => 'ORG-HACKED'],
+            $this->bearer($this->organizerB['id'], 'organizer', $this->organizerB['email'])
+        );
+        self::assertSame(403, $response->getStatusCode());
+        self::assertSame('forbidden', $this->json($response)['error']['code']);
+    }
+
     public function testAdminCanRejectEventWithReason(): void
     {
         $createResp = $this->request(

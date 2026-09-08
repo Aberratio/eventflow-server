@@ -23,6 +23,21 @@ final class EventRepository extends Repository
     private const DEFAULT_TRANSFER_WINDOW_DAYS = 3;
 
     /**
+     * E3.2: Biuro Zawodów (BZ) integration toggle per Wydarzenie (issue 12 §3). Unlike
+     * `payment_config`, this is a single small toggle+string, not a multi-field JSON
+     * blob — so it lives as two flat columns (047_e3_2_...sql), the same shape as
+     * E1.1's `visibility`/`is_test` rather than a JSON column. The platform never
+     * creates a BZ organization itself: the organizer pastes an existing organization
+     * token/identifier when flipping the switch on. `bz_organization_token` is
+     * intentionally never wiped when disabling — routes.php's generic PATCH only
+     * writes columns present in the request body (see eventData() below), so a
+     * disable-only PATCH leaves the stored token untouched, matching how other
+     * optional per-Event toggles in this codebase preserve their associated value.
+     * The token must never reach a non-manager read — see routes.php's
+     * `$stripBzToken` applied to every public/anonymous Event read path.
+     */
+
+    /**
      * The workflow axis (E1.1). `approved` and `rejected` are legal ENUM values on the
      * column (schema future-proofing, per spec) but the application never actually rests
      * a row there: approve() lands directly on `published`, reject() lands directly on
@@ -54,6 +69,7 @@ organizer_logo_shape AS organizerLogoShape,
 is_virtual AS isVirtual, event_credit_kind AS eventCreditKind, start_date AS startDate, end_date AS endDate, payment_config AS paymentConfig,
 rules_html AS rulesHtml, organizers_html AS organizersHtml,
 insurance_option AS insuranceOption,
+bz_integration_enabled AS bzIntegrationEnabled, bz_organization_token AS bzOrganizationToken,
 enable_merchandise_in_registration AS enableMerchandiseInRegistration,
 final_acceptance_html AS finalAcceptanceHtml,
 require_final_acceptance AS requireFinalAcceptance, is_private AS isPrivate, access_code AS accessCode,
@@ -522,7 +538,7 @@ SQL;
     private function hydrate(array $row): array
     {
         $event = $this->decode($row, self::EVENT_JSON);
-        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'isTest', 'registrationUntilEventStart', 'enableMerchandiseInRegistration'] as $bool) {
+        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'isTest', 'registrationUntilEventStart', 'enableMerchandiseInRegistration', 'bzIntegrationEnabled'] as $bool) {
             $event[$bool] = (bool) ($event[$bool] ?? false);
         }
         $event['distances'] = array_map(
@@ -738,6 +754,8 @@ SQL;
             'organizersHtml' => 'organizers_html',
             'rulesHtml' => 'rules_html',
             'insuranceOption' => 'insurance_option',
+            'bzIntegrationEnabled' => 'bz_integration_enabled',
+            'bzOrganizationToken' => 'bz_organization_token',
             'enableMerchandiseInRegistration' => 'enable_merchandise_in_registration',
             'finalAcceptanceHtml' => 'final_acceptance_html',
             'requireFinalAcceptance' => 'require_final_acceptance',

@@ -469,6 +469,62 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
+     * E3.2: the pasted BZ organization token round-trips through create+update+read
+     * exactly like the other flat per-Event columns (visibility/is_test) — no JSON
+     * encode/decode step to lose or reshape it. Defaults to disabled/no-token for an
+     * event that never touched this feature.
+     */
+    public function testBzIntegrationConfigDefaultsAndRoundTripsThroughCreateAndUpdate(): void
+    {
+        $created = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-bz-default',
+        ]));
+        self::assertFalse($created['bzIntegrationEnabled']);
+        self::assertNull($created['bzOrganizationToken']);
+
+        $enabled = $this->events->update((string) $created['id'], [
+            'bzIntegrationEnabled' => true,
+            'bzOrganizationToken' => 'ORG-ABC-123',
+        ]);
+        self::assertTrue($enabled['bzIntegrationEnabled']);
+        self::assertSame('ORG-ABC-123', $enabled['bzOrganizationToken']);
+
+        $reloaded = $this->events->find((string) $created['id']);
+        self::assertTrue($reloaded['bzIntegrationEnabled']);
+        self::assertSame('ORG-ABC-123', $reloaded['bzOrganizationToken']);
+    }
+
+    /**
+     * E3.2: disabling never wipes the stored token at the repository level either —
+     * the "preserve on disable" contract lives in the partial-update semantics of
+     * eventData() (only columns present in the update payload are written), which
+     * this exercises directly against the repository, not just through the HTTP
+     * layer's validation in routes.php.
+     */
+    public function testBzIntegrationTokenSurvivesDisableWhenOmittedFromUpdate(): void
+    {
+        $created = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-bz-preserve',
+            'bzIntegrationEnabled' => true,
+            'bzOrganizationToken' => 'ORG-KEEP-ME',
+        ]));
+        self::assertTrue($created['bzIntegrationEnabled']);
+        self::assertSame('ORG-KEEP-ME', $created['bzOrganizationToken']);
+
+        $disabled = $this->events->update((string) $created['id'], [
+            'bzIntegrationEnabled' => false,
+        ]);
+        self::assertFalse($disabled['bzIntegrationEnabled']);
+        self::assertSame('ORG-KEEP-ME', $disabled['bzOrganizationToken']);
+
+        $reEnabled = $this->events->update((string) $created['id'], [
+            'bzIntegrationEnabled' => true,
+        ]);
+        self::assertTrue($reEnabled['bzIntegrationEnabled']);
+        self::assertSame('ORG-KEEP-ME', $reEnabled['bzOrganizationToken']);
+    }
+
+    /**
      * @param array<string, mixed> $overrides
      * @return array<string, mixed>
      */

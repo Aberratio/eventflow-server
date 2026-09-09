@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Registrations;
 
+use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxService;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldCatalog;
@@ -40,16 +41,30 @@ final class RegistrationRepository extends Repository
      */
     private readonly ?CriticalMailer $mailer;
 
+    /**
+     * E3.4 seam — mirrors $mailer above: null whenever this deployment has no
+     * BZ_WEBHOOK_BASE_URL configured at all (local dev, CI, this repo's own
+     * test suite), in which case pushBzCriticalChange() is a silent no-op
+     * before it ever touches an Event row, rather than an attempted call that
+     * could only ever fail. A non-null instance here does not by itself mean
+     * every Event gets pushed to — pushBzCriticalChange() additionally checks
+     * that specific Event's own bz_integration_enabled + bz_organization_token
+     * (E3.2) before enqueueing anything.
+     */
+    private readonly ?BzWebhookOutboxService $bzWebhookOutbox;
+
     public function __construct(
         \PDO $pdo,
         ?PaymentGatewayInterface $gateway = null,
         ?PaymentGatewayInterface $payNowGateway = null,
         ?CriticalMailer $mailer = null,
+        ?BzWebhookOutboxService $bzWebhookOutbox = null,
     ) {
         parent::__construct($pdo);
         $this->gateway = $gateway;
         $this->payNowGateway = $payNowGateway;
         $this->mailer = $mailer;
+        $this->bzWebhookOutbox = $bzWebhookOutbox;
     }
 
     /** Provider name for the default gateway constructor argument ($gateway) — Tpay, E1.6. */
@@ -1209,6 +1224,16 @@ SQL;
                 $mapped[$column] = $data[$input];
             }
         }
+        $wasCancelledAlready = null;
+        if (array_key_exists('status', $mapped) && (string) $mapped['status'] === 'cancelled') {
+            // Read before the transition, not after: this is the only way to tell
+            // a genuine "organizer just cancelled this" edge from a repeated call
+            // (e.g. two clicks, or a retried request) against an already-cancelled
+            // Zapis — needed below for the E3.4 webhook push, which must fire once
+            // per real cancellation, not once per call.
+            $before = $this->find($id);
+            $wasCancelledAlready = $before !== null ? ((string) ($before['status'] ?? '') === 'cancelled') : null;
+        }
         if (array_key_exists('status', $mapped)) {
             $this->updateStatus($id, (string) $mapped['status'], $mapped);
         } elseif ($mapped !== []) {
@@ -1227,7 +1252,20 @@ SQL;
             $this->upsertPaymentDetails($id, $data['paymentDetails'] ?? []);
         }
 
-        return $this->find($id);
+        $result = $this->find($id);
+
+        // E3.4: "rezygnacja" trigger. Fires for every path that lands a Zapis on
+        // `cancelled` through this method — the single-registration organizer
+        // cancel route (cancel(), below) and any future direct PATCH doing the
+        // same — but deliberately NOT for markRefunded()'s own full-refund ->
+        // cancelled side effect (that one is a consequence of a refund, reported
+        // as a refund_refunded push instead, not a second, redundant
+        // cancellation notification — see markRefunded()'s call site).
+        if ($wasCancelledAlready === false && $result !== null && (string) ($result['status'] ?? '') === 'cancelled') {
+            $this->pushBzCriticalChange((string) $result['eventId'], $id, 'cancellation');
+        }
+
+        return $result;
     }
 
     public function cancel(string $id): ?array
@@ -1367,6 +1405,12 @@ SQL;
             $this->initiateGatewayRefund($id);
         }
 
+        // E3.4: "zwrot" trigger, "do zwrotu" sub-state — one push per approval,
+        // same "runs only on the genuine fresh transition" guarantee as
+        // sendRefundApprovedMail() just above (the early-return for an
+        // already-`approved` cycle never reaches this line).
+        $this->pushBzCriticalChange((string) $registration['eventId'], $id, 'refund_approved');
+
         return $this->find($id);
     }
 
@@ -1437,6 +1481,15 @@ SQL;
             $this->pdo->rollBack();
             throw $e;
         }
+
+        // E3.4: "zwrot" trigger, terminal "zwrócono" sub-state — one push per
+        // completed refund cycle (the early-return for an already-`refunded`
+        // cycle above never reaches this line). Deliberately reported as
+        // `refund_refunded`, not also as a `cancellation` push, even when this
+        // was a full refund that just moved the Zapis to `cancelled` above —
+        // that transition is a side effect of the refund, not an independent
+        // organizer cancellation, so BZ gets one notification for it, not two.
+        $this->pushBzCriticalChange((string) $registration['eventId'], $id, 'refund_refunded');
 
         return $this->find($id);
     }
@@ -1619,6 +1672,15 @@ SQL;
             if ($route === 'gateway') {
                 $this->initiateGatewayRefund($id);
             }
+            // E3.4: same "do zwrotu" push as the single-registration
+            // approveRefund() above — an organizer cancelling their whole
+            // Wydarzenie is still, per-registration, exactly the "zwrot"
+            // critical change BZ needs to hear about (issue 12 §1 explicitly
+            // frames the push as mattering most "blisko wydarzenia", which is
+            // exactly when a bulk event cancellation happens); only the mail
+            // side (sendRefundApprovedMail(), see this method's doc comment)
+            // is skipped here to avoid double-notifying the registrant.
+            $this->pushBzCriticalChange((string) $registration['eventId'], $id, 'refund_approved');
             return true;
         } catch (\Throwable $e) {
             $this->pdo->rollBack();
@@ -2013,6 +2075,89 @@ SQL;
             number_format($amount, 2, '.', ''),
             $route === 'gateway' ? 'zwrot na kartę/konto użyte do płatności' : 'przelew tradycyjny'
         );
+    }
+
+    /**
+     * E3.4: "Push zmian krytycznych (rezygnacja, zwrot) webhookiem" (issue 12
+     * §1). Two independent gates, both required, mirrored from the opposite
+     * direction of routes.php's own BZ pull endpoint (`GET
+     * /events/{eventId}/bz/participants`, E3.3):
+     *  1. This RegistrationRepository must actually have a BzWebhookOutboxService
+     *     at all — null whenever BZ_WEBHOOK_BASE_URL isn't configured for this
+     *     deployment (see $bzWebhookOutbox's doc comment), same "unconfigured
+     *     means skip, not fail" stance as every other outbound integration in
+     *     this class.
+     *  2. The specific Event this Zapis belongs to must have
+     *     bz_integration_enabled = true AND a non-empty bz_organization_token
+     *     (E3.2) — an Event that never turned BZ on gets zero pushes, exactly
+     *     like it gets rejected on the pull side.
+     *
+     * Payload is a deliberate whitelist (issue 12 §5, "bez kwot" — the exact
+     * same money-leakage discipline bzParticipantList() already applies to the
+     * pull direction): just enough for BZ to resolve which participant record
+     * changed (eventId, registrationId, and qrCode as a second identity
+     * anchor — the same field BZ already receives from the pull and can index
+     * on), what kind of critical change this is, and a timestamp for BZ's own
+     * last-write-wins reconciliation (issue 12 §2). Never a settlement amount,
+     * a price, or anything else hydrate()-shaped.
+     *
+     * Any failure enqueueing/sending is deliberately swallowed — same "never
+     * let an external call block a state transition that already committed on
+     * our side" stance as initiateGatewayRefund(). The outbox row is written
+     * (and marked failed) before the HTTP attempt regardless, so nothing here
+     * is silently lost — just not automatically retried (no cron/worker in
+     * this repo, mirroring E1.9's own reconcile()).
+     */
+    private function pushBzCriticalChange(string $eventId, string $registrationId, string $changeType): void
+    {
+        if ($this->bzWebhookOutbox === null) {
+            return;
+        }
+
+        $stmt = $this->pdo->prepare(
+            'SELECT bz_integration_enabled AS bzIntegrationEnabled, bz_organization_token AS bzOrganizationToken FROM events WHERE id = :id'
+        );
+        $stmt->execute(['id' => $eventId]);
+        $event = $stmt->fetch();
+        if ($event === false || empty($event['bzIntegrationEnabled'])) {
+            return;
+        }
+        $organizationToken = trim((string) ($event['bzOrganizationToken'] ?? ''));
+        if ($organizationToken === '') {
+            return;
+        }
+
+        $qrStmt = $this->pdo->prepare('SELECT qr_code AS qrCode FROM registrations WHERE id = :id');
+        $qrStmt->execute(['id' => $registrationId]);
+        $qrCode = $qrStmt->fetchColumn();
+
+        $payload = [
+            'eventId' => $eventId,
+            'registrationId' => $registrationId,
+            'changeType' => $changeType,
+            'occurredAt' => date(DATE_ATOM),
+            'qrCode' => $qrCode !== false && $qrCode !== null ? (string) $qrCode : null,
+        ];
+
+        try {
+            $this->bzWebhookOutbox->enqueue([
+                'eventId' => $eventId,
+                'registrationId' => $registrationId,
+                'changeType' => $changeType,
+                // Deterministic (never a timestamp/random suffix — same discipline
+                // as CriticalMailer's mail idempotency keys): scoped to
+                // (registration, change type), since each of the three change
+                // types this class emits (cancellation, refund_approved,
+                // refund_refunded) happens at most once per Zapis — its own
+                // caller already guards against firing on a repeated/no-op
+                // transition (see the three call sites above).
+                'idempotencyKey' => sprintf('bz-push:%s:%s', $registrationId, $changeType),
+                'organizationToken' => $organizationToken,
+                'payload' => $payload,
+            ]);
+        } catch (\Throwable) {
+            // Deliberately swallowed — see this method's doc comment.
+        }
     }
 
     /**

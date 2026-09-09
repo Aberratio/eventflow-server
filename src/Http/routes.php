@@ -10,6 +10,11 @@ use ZmierzymyCzas\Database\SeedManifest;
 use ZmierzymyCzas\Domain\Admin\AdminRepository;
 use ZmierzymyCzas\Domain\Auth\ApplicationApiKeyConfig;
 use ZmierzymyCzas\Domain\Auth\JwtService;
+use ZmierzymyCzas\Domain\Bz\BzWebhookClient;
+use ZmierzymyCzas\Domain\Bz\BzWebhookConfig;
+use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxRepository;
+use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxService;
+use ZmierzymyCzas\Domain\Bz\Http\CurlHttpClient as BzCurlHttpClient;
 use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
 use ZmierzymyCzas\Domain\Cms\InfoPageRepository;
 use ZmierzymyCzas\Domain\Cms\PartnerRepository;
@@ -92,7 +97,22 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $centralMailerOutbox = new CentralMailerOutboxService($centralMailerClient, new CentralMailerOutboxRepository($pdo));
     $mailTemplates = new MailTemplateRepository($pdo);
     $mailer = new CriticalMailer($centralMailerConfig, $centralMailerOutbox, $mailTemplates);
-    $registrations = new RegistrationRepository($pdo, $tpayGateway, $payNowGateway, $mailer);
+    // E3.4: outbound "push zmian krytycznych" to Biuro Zawodów — same
+    // "isConfigured() gates whether sending is even attempted" stance as
+    // Tpay/PayNow/Central Mailer above. Unlike those, there is no separate API
+    // key to read here: the outbound call authenticates with each affected
+    // Event's own bz_organization_token (E3.2), resolved per-call inside
+    // RegistrationRepository, not at wiring time — see BzWebhookConfig's doc
+    // comment for why. Safe to build and hand out even when
+    // BZ_WEBHOOK_BASE_URL is unset (local dev, CI, this repo's own test
+    // suite) and even though Biuro Zawodów's own receiving endpoint does not
+    // exist yet (separate repo/team backlog item) — RegistrationRepository
+    // never calls it in either case.
+    $bzWebhookConfig = BzWebhookConfig::fromEnv();
+    $bzWebhookOutbox = $bzWebhookConfig->isConfigured()
+        ? new BzWebhookOutboxService(new BzWebhookClient(new BzCurlHttpClient(), $bzWebhookConfig), new BzWebhookOutboxRepository($pdo))
+        : null;
+    $registrations = new RegistrationRepository($pdo, $tpayGateway, $payNowGateway, $mailer, $bzWebhookOutbox);
     // E1.10 mail #8 ("Zmiana/odwołanie Wydarzenia", 17 §1 row 8) — one call per
     // registered Zapis. Lives here (not inside EventRepository) for the same
     // reason bulkApproveRefundsForEvent() is orchestrated from routes.php

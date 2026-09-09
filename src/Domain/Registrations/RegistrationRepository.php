@@ -73,6 +73,23 @@ final class RegistrationRepository extends Repository
     private const PROVIDER_PAYNOW = 'paynow';
 
     /**
+     * E3.5: BZ-return-syncable identity fieldKeys living on `competitors` —
+     * fieldKey (the same vocabulary bzParticipantList()/FormFieldCatalog use)
+     * => the CompetitorRepository::update() input key it maps to.
+     */
+    private const BZ_SYNCABLE_COMPETITOR_FIELDS = ['first_name' => 'firstName', 'last_name' => 'lastName'];
+
+    /**
+     * E3.5: BZ-return-syncable fieldKeys living directly on `registrations` —
+     * fieldKey => the camelCase key bzSyncRow() aliases the column to. Written
+     * back to their real snake_case column by applyBzFieldSync() (identical to
+     * the fieldKey itself for category/bib_number; contact_email maps to the
+     * user_email column, same "system field key not sharing the column's own
+     * name" case as bzParticipantList()'s own contact_email handling).
+     */
+    private const BZ_SYNCABLE_REGISTRATION_FIELDS = ['category' => 'category', 'bib_number' => 'bibNumber', 'contact_email' => 'userEmail'];
+
+    /**
      * Which already-constructed gateway instance a provider name resolves to.
      * The only place in this class that ever mentions "tpay"/"paynow" by
      * name — everywhere else just calls PaymentGatewayInterface methods on
@@ -290,6 +307,190 @@ SQL;
                 'formFields' => $registration['formFields'],
             ];
         }, $withFormFields);
+    }
+
+    /**
+     * E3.5 (issue 12 §2): "Last-write-wins po znaczniku czasu" — the inbound
+     * half of the BZ sync contract, mirror image of bzParticipantList()
+     * above. BZ pushes locally-edited fields back with a per-field edit
+     * timestamp (`changedAt`); this compares that timestamp against the
+     * platform's own last-touch timestamp for the same field/row and applies
+     * the edit only when BZ's is newer — never a blind overwrite, never a
+     * blind reject (issue 12 §2's explicit requirement).
+     *
+     * Field scope is deliberately narrow and explicit, never "whatever keys
+     * BZ happens to send": exactly the fields bzParticipantList() itself
+     * exposes (this is a return-sync of that same contract, not a
+     * general-purpose registration PATCH) minus payment/amount fields, which
+     * §5 says BZ never receives in the first place and so can never
+     * legitimately claim to have edited. Any fieldKey outside the three
+     * groups below — including a payment-shaped key an untrusted or buggy
+     * caller might send ('pricePaid', 'totalAmount', 'paid', ...) — is
+     * rejected outright as out of scope, never silently merged.
+     *
+     * Timestamp comparison is per-row/per-answer, not per-attribute (a
+     * documented, deliberately coarser granularity than "one clock per
+     * field" — see migration 050's own docblock for why that is enough for
+     * this field set):
+     *  - first_name/last_name: compared against `competitors.updated_at`
+     *    (native `ON UPDATE CURRENT_TIMESTAMP`, pre-existing).
+     *  - contact_email/category/bib_number: compared against
+     *    `registrations.updated_at` (migration 050), stamped explicitly by
+     *    update() and by this method itself — never DB-magic, matching this
+     *    table's existing VARCHAR(64)/`date(DATE_ATOM)` timestamp convention.
+     *  - custom fields (bzVisibleColumns() subset only): compared against
+     *    that field's own `form_field_answers.updated_at` (native,
+     *    pre-existing, already per-answer-row, so already as fine-grained as
+     *    it gets).
+     * A NULL/missing platform timestamp always loses to an incoming BZ edit —
+     * "never touched since we started tracking" is the correct, permissive
+     * starting state for LWW (see migration 050's own docblock).
+     *
+     * Every field is returned as either applied or rejected — never silently
+     * dropped — so the caller (routes.php) can write ONE activity-log entry
+     * per call that shows every field's fate: applied with old -> new, or
+     * rejected-as-stale with both the incoming and the platform's own current
+     * value. That entry is the actual "ślad" the spec requires. This method
+     * itself never touches activity_logs (same division of responsibility as
+     * correctFormSnapshot() above).
+     *
+     * @param array<string, array{value: mixed, changedAt: string}> $fields fieldKey => {value, changedAt}
+     * @return array{
+     *     applied: array<string, array{old: mixed, new: mixed}>,
+     *     rejected: array<string, array{reason: string, incomingValue: mixed, currentValue: mixed}>
+     * }
+     * @throws \RuntimeException 'registration_not_found' when $registrationId doesn't exist or isn't part of $eventId
+     */
+    public function applyBzFieldSync(string $eventId, string $registrationId, array $fields): array
+    {
+        $row = $this->bzSyncRow($registrationId);
+        if ($row === null || (string) $row['eventId'] !== $eventId) {
+            throw new \RuntimeException('registration_not_found');
+        }
+
+        $competitorRepository = new CompetitorRepository($this->pdo);
+        $competitor = $row['competitorId'] !== null ? $competitorRepository->find((string) $row['competitorId']) : null;
+
+        $formFieldRepository = new FormFieldRepository($this->pdo);
+        $answerRepository = new FormFieldAnswerRepository($this->pdo);
+        $customFieldsByKey = [];
+        foreach ($formFieldRepository->bzVisibleColumns($eventId) as $field) {
+            $customFieldsByKey[$field['fieldKey']] = $field;
+        }
+
+        $applied = [];
+        $rejected = [];
+        $competitorUpdates = [];
+        $registrationUpdates = [];
+
+        foreach ($fields as $fieldKey => $entry) {
+            $fieldKey = (string) $fieldKey;
+            $incomingValue = is_array($entry) ? ($entry['value'] ?? null) : null;
+            $changedAtRaw = is_array($entry) ? ($entry['changedAt'] ?? null) : null;
+            $changedAt = is_string($changedAtRaw) && $changedAtRaw !== '' ? $this->parseTimestamp($changedAtRaw) : null;
+
+            if ($changedAt === null) {
+                $rejected[$fieldKey] = ['reason' => 'invalid_changed_at', 'incomingValue' => $incomingValue, 'currentValue' => null];
+                continue;
+            }
+
+            if (array_key_exists($fieldKey, self::BZ_SYNCABLE_COMPETITOR_FIELDS)) {
+                if ($competitor === null) {
+                    $rejected[$fieldKey] = ['reason' => 'no_competitor_profile', 'incomingValue' => $incomingValue, 'currentValue' => null];
+                    continue;
+                }
+                $attribute = self::BZ_SYNCABLE_COMPETITOR_FIELDS[$fieldKey];
+                $currentValue = $competitor[$attribute] ?? null;
+                $platformChangedAt = $this->parseTimestamp((string) ($competitor['updatedAt'] ?? ''));
+                if ($platformChangedAt !== null && $platformChangedAt >= $changedAt) {
+                    $rejected[$fieldKey] = ['reason' => 'stale', 'incomingValue' => $incomingValue, 'currentValue' => $currentValue];
+                    continue;
+                }
+                $applied[$fieldKey] = ['old' => $currentValue, 'new' => $incomingValue];
+                $competitorUpdates[$attribute] = $incomingValue;
+                continue;
+            }
+
+            if (array_key_exists($fieldKey, self::BZ_SYNCABLE_REGISTRATION_FIELDS)) {
+                $attribute = self::BZ_SYNCABLE_REGISTRATION_FIELDS[$fieldKey];
+                $currentValue = $row[$attribute] ?? null;
+                $platformChangedAt = $row['updatedAt'] !== null ? $this->parseTimestamp((string) $row['updatedAt']) : null;
+                if ($platformChangedAt !== null && $platformChangedAt >= $changedAt) {
+                    $rejected[$fieldKey] = ['reason' => 'stale', 'incomingValue' => $incomingValue, 'currentValue' => $currentValue];
+                    continue;
+                }
+                $applied[$fieldKey] = ['old' => $currentValue, 'new' => $incomingValue];
+                $registrationUpdates[$fieldKey === 'contact_email' ? 'user_email' : $fieldKey] = $incomingValue;
+                continue;
+            }
+
+            if (array_key_exists($fieldKey, $customFieldsByKey)) {
+                $field = $customFieldsByKey[$fieldKey];
+                $existingAnswer = $answerRepository->findByFieldAndRegistration((string) $field['id'], $registrationId);
+                $currentValue = $existingAnswer['valueText'] ?? $existingAnswer['valueJson'] ?? null;
+                $platformChangedAt = $existingAnswer !== null ? $this->parseTimestamp((string) ($existingAnswer['updatedAt'] ?? '')) : null;
+                if ($platformChangedAt !== null && $platformChangedAt >= $changedAt) {
+                    $rejected[$fieldKey] = ['reason' => 'stale', 'incomingValue' => $incomingValue, 'currentValue' => $currentValue];
+                    continue;
+                }
+                try {
+                    $answerRepository->saveAnswer($formFieldRepository, (string) $field['id'], $registrationId, $incomingValue);
+                } catch (\InvalidArgumentException) {
+                    $rejected[$fieldKey] = ['reason' => 'invalid_value', 'incomingValue' => $incomingValue, 'currentValue' => $currentValue];
+                    continue;
+                }
+                $applied[$fieldKey] = ['old' => $currentValue, 'new' => $incomingValue];
+                continue;
+            }
+
+            // Defense in depth (issue 12 §5, "bez kwot"): any key outside the
+            // three groups above — including a payment/amount-shaped key BZ
+            // was never handed and so can never legitimately have edited — is
+            // rejected outright, never merged into anything.
+            $rejected[$fieldKey] = ['reason' => 'field_not_in_scope', 'incomingValue' => $incomingValue, 'currentValue' => null];
+        }
+
+        if ($competitorUpdates !== []) {
+            $competitorRepository->update((string) $row['competitorId'], $competitorUpdates);
+        }
+        if ($registrationUpdates !== []) {
+            // Apply-time "now", not BZ's own changedAt: mirrors how
+            // competitors.updated_at/form_field_answers.updated_at already
+            // behave above (both are native ON UPDATE columns that always
+            // become "now" on any write, never the semantic edit instant) —
+            // one consistent rule across all three field groups, and still
+            // correct for LWW, since "now" is always >= any legitimately
+            // past changedAt.
+            $registrationUpdates['updated_at'] = date(DATE_ATOM);
+            $this->updateById('registrations', $registrationId, $registrationUpdates);
+        }
+
+        return ['applied' => $applied, 'rejected' => $rejected];
+    }
+
+    /** @return array<string, mixed>|null */
+    private function bzSyncRow(string $registrationId): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, event_id AS eventId, competitor_id AS competitorId, category, bib_number AS bibNumber,
+                    user_email AS userEmail, updated_at AS updatedAt
+             FROM registrations WHERE id = :id'
+        );
+        $stmt->execute(['id' => $registrationId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    private function parseTimestamp(string $value): ?\DateTimeImmutable
+    {
+        if ($value === '') {
+            return null;
+        }
+        try {
+            return new \DateTimeImmutable($value);
+        } catch (\Exception) {
+            return null;
+        }
     }
 
     /**
@@ -1223,6 +1424,16 @@ SQL;
             if (array_key_exists($input, $data)) {
                 $mapped[$column] = $data[$input];
             }
+        }
+        if ($mapped !== []) {
+            // E3.5 (issue 12 §2): any write through this single choke-point counts as
+            // "the platform touched this Zapis" for BZ return-sync LWW comparisons —
+            // see applyBzFieldSync()'s own docblock and migration 050. `bibNumber` is
+            // the one BZ-in-scope field with a real write path through this method
+            // today; `category`/`contact_email` (user_email) have none yet, so this
+            // stamp is presently a no-op for them until some future edit path routes
+            // through here too — that day needs no further plumbing.
+            $mapped['updated_at'] = date(DATE_ATOM);
         }
         $wasCancelledAlready = null;
         if (array_key_exists('status', $mapped) && (string) $mapped['status'] === 'cancelled') {

@@ -1,0 +1,48 @@
+-- E3.5: "Last-write-wins z jawnym śladem kto/kiedy/dlaczego, w obu systemach"
+-- (issue 12 §2). BZ can now push locally-edited fields back to the platform
+-- (PATCH /events/{eventId}/bz/participants/{registrationId}), tagged with the
+-- timestamp of the local edit in BZ. Deciding whether that edit should win
+-- requires knowing "when did the platform itself last touch this value" —
+-- this migration adds the one missing piece of that comparison.
+--
+-- Scope of fields this ticket returns-syncs (see RegistrationRepository::
+-- applyBzFieldSync()'s own docblock): identity (first_name/last_name, on
+-- competitors), contact_email/category/bib_number (on registrations), and
+-- custom form-field answers (bzVisibleColumns()). Three different tables,
+-- three different existing timestamp situations:
+--   - competitors.updated_at already exists (migration 001) and is already a
+--     native `ON UPDATE CURRENT_TIMESTAMP` column — nothing to add there.
+--   - form_field_answers.updated_at already exists (migration 041) for the
+--     same reason, and is naturally per-field already (one answer = one row).
+--   - registrations has never had a generic "last touched" column — every
+--     existing timestamp on this table is a purpose-built VARCHAR(64) written
+--     explicitly via `date(DATE_ATOM)` (see migration 042's own docblock:
+--     "Typ kolumny czasu — VARCHAR(64), nie TIMESTAMP — mirror istniejącej
+--     konwencji tej tabeli"). This migration follows that same convention
+--     rather than introducing a native TIMESTAMP column here: `updated_at` is
+--     stamped explicitly by RegistrationRepository::update() (and by
+--     applyBzFieldSync() itself) rather than by an `ON UPDATE
+--     CURRENT_TIMESTAMP` clause.
+--
+-- Coarse, row-level granularity is deliberate (not one column per field):
+-- the only two in-scope fields living directly on `registrations` today are
+-- `category` and `bib_number` (`contact_email` maps to `user_email` on this
+-- same table) — none of the three currently has more than one write path, so
+-- one shared timestamp is enough to resolve LWW correctly for all of them
+-- without inventing per-field columns nothing else in this table's history
+-- has needed either.
+--
+-- NULL, not backfilled to "now": a Zapis that existed before this migration
+-- ran has never had this column tracked at all. Backfilling it to the
+-- migration's own run time would make every pre-existing Zapis look like it
+-- was just edited the moment this migration happened to run, which would
+-- make a subsequent genuine BZ edit (with an honest, earlier changedAt) look
+-- stale and get wrongly rejected. NULL means "the platform has not touched
+-- this field group since this column started being tracked" — the correct,
+-- permissive starting state for LWW: an incoming BZ edit always wins against
+-- a NULL baseline.
+--
+-- Migracje nie mają ledgera i uruchamiają się przy każdym starcie
+-- (Migrator.php) — ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtórzenia.
+ALTER TABLE registrations
+  ADD COLUMN IF NOT EXISTS updated_at VARCHAR(64) NULL AFTER form_snapshot_captured_at;

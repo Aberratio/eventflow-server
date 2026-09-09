@@ -208,6 +208,64 @@ final class RegistrationRepositoryBzWebhookTest extends TestCase
         self::assertNull($this->outboxRepo->findByIdempotencyKey('bz-push:' . $registration['id'] . ':cancellation'));
     }
 
+    public function testBulkApproveRefundsForEventPushesRefundApprovedPerRegistration(): void
+    {
+        // The organizer bulk-cancel-event-cascades-refund-approvals path
+        // (bulkApproveRefundsForEvent() -> bulkApproveOneRefund()) fires the
+        // same "do zwrotu" push as the single-registration approveRefund()
+        // above, per bulkApproveOneRefund()'s own E3.4 doc comment — this
+        // exercises that call site with a real BzWebhookOutboxService wired
+        // in, which the existing bulk-refund test in
+        // RegistrationRepositoryTest never does.
+        $registrations = $this->registrationsWithBzOutbox();
+        $event = $this->events->create($this->payload([
+            'bzIntegrationEnabled' => true,
+            'bzOrganizationToken' => 'ORG-TOKEN-6',
+            'paymentConfig' => ['type' => 'admin_gateway'],
+        ]));
+        $paidPayload = $this->registrationPayload($event, 'phpunit-bulk-paid');
+        $paidPayload['paymentDetails'] = ['startFeePaid' => true];
+        $registration = $registrations->create($paidPayload);
+
+        $this->http->queueResponse(new HttpResponse(202, '{}'));
+        $count = $registrations->bulkApproveRefundsForEvent((string) $event['id'], 'phpunit-admin');
+
+        self::assertSame(1, $count);
+        self::assertCount(1, $this->http->calls);
+        $call = $this->http->calls[0];
+        self::assertSame('ORG-TOKEN-6', $call['headers']['X-BZ-Organization-Token']);
+
+        $sent = json_decode((string) $call['body'], true);
+        self::assertSame((string) $event['id'], $sent['eventId']);
+        self::assertSame($registration['id'], $sent['registrationId']);
+        self::assertSame('refund_approved', $sent['changeType']);
+        self::assertArrayHasKey('occurredAt', $sent);
+        self::assertArrayHasKey('qrCode', $sent);
+
+        $stored = $this->outboxRepo->findByIdempotencyKey('bz-push:' . $registration['id'] . ':refund_approved');
+        self::assertNotNull($stored);
+        self::assertSame('sent', $stored['status']);
+    }
+
+    public function testBulkApproveRefundsForEventSkipsPushWhenEventHasBzIntegrationDisabled(): void
+    {
+        // The BZ-enabled/token skip guard is shared, private code
+        // (pushBzCriticalChange()) already proven by
+        // testCancelSkipsPushWhenEventHasBzIntegrationDisabled() above; this
+        // is a thin confirmation that the bulk call site reaches the same
+        // guard, not a full duplicate of that test's reasoning.
+        $registrations = $this->registrationsWithBzOutbox();
+        $event = $this->events->create($this->payload(['bzIntegrationEnabled' => false]));
+        $paidPayload = $this->registrationPayload($event, 'phpunit-bulk-unpaid');
+        $paidPayload['paymentDetails'] = ['startFeePaid' => true];
+        $registration = $registrations->create($paidPayload);
+
+        $count = $registrations->bulkApproveRefundsForEvent((string) $event['id'], 'phpunit-admin');
+
+        self::assertSame(1, $count);
+        self::assertCount(0, $this->http->calls);
+    }
+
     public function testBzWebhookFailureDoesNotBreakTheCancelCall(): void
     {
         // The push is best-effort: a failing/unreachable BZ endpoint must

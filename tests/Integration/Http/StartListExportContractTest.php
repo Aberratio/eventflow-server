@@ -167,11 +167,68 @@ final class StartListExportContractTest extends HttpTestCase
         self::assertSame(422, $response->getStatusCode());
     }
 
+    /**
+     * E3.8 (issue 12 §6, "Import z pliku zostaje jako droga awaryjna"):
+     * regression coverage proving the E2.6 file-export fallback and the
+     * E3.1-E3.6 BZ pull-integration model coexist. This is the "integration
+     * ON" direction — an organizer who has flipped `bz_integration_enabled`
+     * on and set a `bz_organization_token` must still be able to use the
+     * CSV/XLSX export exactly as before, e.g. as a manual backup during the
+     * transition period or alongside the API sync. The route only ever
+     * calls $canManageEvent — nothing in it reads bz_integration_enabled or
+     * bz_organization_token at all — so this proves that by exercising the
+     * real HTTP route on a BZ-enabled event and comparing its output shape
+     * (column headers, row count, competitor name) against the BZ-disabled
+     * case from the other tests above, not just a 200 status.
+     */
+    public function testExportStillWorksWhenBzIntegrationIsEnabled(): void
+    {
+        [$eventId, $distanceId] = $this->createEventWithRegistration([
+            'bzIntegrationEnabled' => true,
+            'bzOrganizationToken' => 'ORG-TOKEN-E3-8',
+        ]);
+
+        $response = $this->request(
+            'GET',
+            '/api/v1/events/' . $eventId . '/distances/' . $distanceId . '/start-list-export?format=csv',
+            [],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertStringContainsString('text/csv', $response->getHeaderLine('Content-Type'));
+        self::assertStringContainsString('windows-1250', strtolower($response->getHeaderLine('Content-Type')));
+        self::assertStringContainsString('attachment', $response->getHeaderLine('Content-Disposition'));
+
+        $body = (string) $response->getBody();
+        self::assertNotSame('', $body);
+        $decoded = (string) iconv('Windows-1250', 'UTF-8', $body);
+        // Same column set as the BZ-disabled tests above (no form_fields
+        // catalog seeded here either, so the export is bibNumber +
+        // paymentStatus only) — the toggle must change neither the export's
+        // shape nor its data, only whether the separate bz/participants pull
+        // endpoint also happens to be reachable for this Event.
+        self::assertStringContainsString('Numer startowy', $decoded);
+        self::assertStringContainsString('Status płatności', $decoded);
+        $lines = array_values(array_filter(explode("\n", str_replace("\r\n", "\n", $decoded))));
+        self::assertCount(2, $lines, 'Header row + exactly one data row for the one seeded registration.');
+
+        $stmt = $this->pdo->prepare(
+            "SELECT id FROM activity_logs WHERE action = 'startlist_exported' AND target_id = :id"
+        );
+        $stmt->execute(['id' => $eventId]);
+        self::assertNotFalse($stmt->fetch(), 'The export on a BZ-enabled event must still write its usual activity-log entry.');
+    }
+
     /** @return array{0: string, 1: string} [eventId, distanceId] */
-    private function createEventWithRegistration(): array
+    private function createEventWithRegistration(array $eventOverrides = []): array
     {
         $slug = $this->prefix . '-event-' . bin2hex(random_bytes(3));
-        $event = $this->events->createForOrganizer($this->eventPayload($slug), $this->organizer, $this->organizer['id']);
+        $event = $this->events->createForOrganizer(
+            array_replace($this->eventPayload($slug), $eventOverrides),
+            $this->organizer,
+            $this->organizer['id']
+        );
         $eventId = (string) $event['id'];
         $distanceId = (string) $event['distances'][0]['id'];
 

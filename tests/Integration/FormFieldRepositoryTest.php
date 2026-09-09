@@ -318,6 +318,129 @@ final class FormFieldRepositoryTest extends TestCase
     }
 
     /**
+     * E3.3: `visible_to_bz` mirrors `public_list_visible`'s own default —
+     * every field, system or custom, must default to Nie so no existing field
+     * becomes visible to Biuro Zawodów by accident when this column first
+     * appears on a Wydarzenie's catalog.
+     */
+    public function testVisibleToBzDefaultsToFalseForBothSystemAndCustomFields(): void
+    {
+        $seeded = $this->fields->ensureSystemCatalog($this->eventId);
+        foreach ($seeded as $field) {
+            self::assertFalse((bool) $field['visibleToBz'], $field['fieldKey'] . ' must default visibleToBz to false.');
+        }
+
+        $custom = $this->fields->createCustom($this->eventId, [
+            'label' => 'Rozmiar koszulki',
+            'fieldType' => FormFieldType::SHORT_TEXT,
+            'state' => 'shown',
+        ]);
+        self::assertFalse((bool) $custom['visibleToBz']);
+    }
+
+    /**
+     * E3.3: a pre-existing row that never touched this column (simulating a
+     * form field written before migration 048 ran) must still read
+     * `visibleToBz` as false, purely off the column's own DEFAULT 0 — the
+     * same non-breaking backfill guarantee 047's `bz_integration_enabled`
+     * provides for `events`.
+     */
+    public function testVisibleToBzColumnDefaultsToFalseForARowThatNeverSetItExplicitly(): void
+    {
+        $id = bin2hex(random_bytes(16));
+        $this->pdo->prepare(
+            'INSERT INTO form_fields (id, event_id, kind, field_key, storage_location, state, sort_order)
+             VALUES (:id, :eventId, :kind, :fieldKey, :storageLocation, :state, :sortOrder)'
+        )->execute([
+            'id' => $id,
+            'eventId' => $this->eventId,
+            'kind' => 'custom',
+            'fieldKey' => 'phpunit_bz_backfill_' . bin2hex(random_bytes(4)),
+            'storageLocation' => 'registration',
+            'state' => 'shown',
+            'sortOrder' => 999,
+        ]);
+
+        $field = $this->fields->find($id);
+        self::assertFalse((bool) $field['visibleToBz'], 'A row inserted without visible_to_bz must fall back to the column DEFAULT 0.');
+    }
+
+    /**
+     * E3.3: settable the same way `publicListVisible` is — through
+     * updateBzVisibility(), the method the PATCH /form-fields/{fieldId}
+     * endpoint calls when the request body carries `visibleToBz`.
+     */
+    public function testUpdateBzVisibilityTogglesTheFlag(): void
+    {
+        $custom = $this->fields->createCustom($this->eventId, [
+            'label' => 'Rozmiar koszulki',
+            'fieldType' => FormFieldType::SHORT_TEXT,
+            'state' => 'shown',
+        ]);
+        self::assertFalse((bool) $custom['visibleToBz']);
+
+        $updated = $this->fields->updateBzVisibility($custom['id'], true);
+        self::assertTrue((bool) $updated['visibleToBz']);
+
+        $reverted = $this->fields->updateBzVisibility($custom['id'], false);
+        self::assertFalse((bool) $reverted['visibleToBz']);
+    }
+
+    /**
+     * E3.3: a confidential field can never become visible to Biuro Zawodów
+     * either — same defense as updatePublicListVisibility()'s own guard.
+     */
+    public function testUpdateBzVisibilityRejectsAConfidentialField(): void
+    {
+        $confidential = $this->fields->createCustom($this->eventId, [
+            'label' => 'PESEL',
+            'fieldType' => FormFieldType::SHORT_TEXT,
+            'state' => 'shown',
+            'isConfidential' => true,
+        ]);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->fields->updateBzVisibility($confidential['id'], true);
+    }
+
+    /**
+     * E3.3: bzVisibleColumns() is the filter RegistrationRepository::
+     * bzParticipantList() uses to decide which CUSTOM fields ride along on
+     * the BZ pull — system fields are deliberately excluded here (the
+     * identity section is sent unconditionally by the caller, not gated by
+     * this flag), confidential is excluded unconditionally same as
+     * publicListColumns()/exportColumns(), and a field visible on the public
+     * list but not flagged for BZ must still be excluded here — the two
+     * flags are independent opt-ins.
+     */
+    public function testBzVisibleColumnsIncludesOnlyBzFlaggedNonConfidentialCustomFields(): void
+    {
+        $bzVisible = $this->fields->createCustom($this->eventId, [
+            'label' => 'Numer kontaktu awaryjnego',
+            'fieldType' => FormFieldType::SHORT_TEXT,
+            'state' => 'shown',
+            'visibleToBz' => true,
+        ]);
+        $publicOnly = $this->fields->createCustom($this->eventId, [
+            'label' => 'Rozmiar koszulki',
+            'fieldType' => FormFieldType::SHORT_TEXT,
+            'state' => 'shown',
+            'publicListVisible' => true,
+            // visibleToBz left at default (false) — independent opt-in.
+        ]);
+        $neither = $this->fields->createCustom($this->eventId, [
+            'label' => 'Uwagi wewnętrzne',
+            'fieldType' => FormFieldType::SHORT_TEXT,
+            'state' => 'shown',
+        ]);
+
+        $keys = array_column($this->fields->bzVisibleColumns($this->eventId), 'fieldKey');
+        self::assertContains($bzVisible['fieldKey'], $keys);
+        self::assertNotContains($publicOnly['fieldKey'], $keys, 'public_list_visible alone must not grant BZ visibility.');
+        self::assertNotContains($neither['fieldKey'], $keys);
+    }
+
+    /**
      * E2.5: single_choice gets an automatic count per option, zero-count
      * options included so the organizer sees the full breakdown (e.g. a
      * t-shirt size nobody picked yet still needs to be ordered as "0").

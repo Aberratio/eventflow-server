@@ -175,6 +175,109 @@ SQL;
     }
 
     /**
+     * E3.3: "Pull uczestników" — the payload Biuro Zawodów's own polling reads
+     * per Wydarzenie (issue 12 §1/§5). Deliberately hand-built rather than
+     * reusing hydrate()'s full row: hydrate() attaches settlementItems/
+     * pricePaid/discountAmount/insurancePaid/totalAmount and merchandise
+     * lines carry `price` — exactly the financial detail this endpoint must
+     * never expose ("status opłaty (opłacony/nie — bez kwot, BZ nie
+     * potrzebuje Rozliczenia)"). Whitelisting the response shape explicitly
+     * here, instead of blacklisting fields off of hydrate()'s output, means a
+     * future money field added to hydrate() can never leak into this payload
+     * by accident.
+     *
+     * Scope: every non-removed/cancelled/expired Zapis, mirroring
+     * publicStartList()'s $showAll=true branch — BZ needs pending/unpaid
+     * entries too (an on-site "biuro zawodów" registration on race day, ticket
+     * 07 pkt 13, is unpaid until checked in) since payment status here is a
+     * per-record boolean, not a pre-filter.
+     *
+     * Identity fields (imię/nazwisko/e-mail) are the CONTROL_LOCKED system
+     * positions (FormFieldCatalog) — always required, so always resolved here
+     * unconditionally, the same way they are not gated by any visibility flag
+     * on the public start list either. Custom fields are gated by
+     * FormFieldRepository::bzVisibleColumns() (`visible_to_bz`, issue 12 §5) —
+     * a deliberate subset of formularza z ticketu 10, not everything. Both
+     * groups are resolved through the exact same live/frozen fork
+     * (resolveLiveFormFields()/attachFrozenFormFields()) the public start list
+     * already uses, so a finished Event serves its frozen snapshot here too
+     * rather than re-deriving live values that may have since changed.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function bzParticipantList(string $eventId): array
+    {
+        $this->lazilyExpireUnpaidRegistrations();
+
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::COLUMNS . " FROM registrations WHERE event_id = :eventId AND status NOT IN ('removed', 'cancelled', 'expired') ORDER BY registered_at ASC"
+        );
+        $stmt->execute(['eventId' => $eventId]);
+        $registrations = $stmt->fetchAll();
+
+        if ($registrations === []) {
+            return [];
+        }
+
+        // ensureSystemCatalog() rather than listForEvent(): an Event created
+        // after migration 041 has no guarantee anything has seeded its 13
+        // system positions yet (see FormFieldRepository's own routes.php
+        // comment on this — publicStartList()'s equivalent lookup has this
+        // same latent gap, pre-existing and out of scope here). The identity
+        // section going missing from a BZ pull is a hard requirement, so this
+        // endpoint defends itself rather than inheriting that gap.
+        $formFieldRepository = new FormFieldRepository($this->pdo);
+        $identityKeys = ['first_name', 'last_name', 'contact_email'];
+        $columns = array_values(array_filter(
+            $formFieldRepository->ensureSystemCatalog($eventId),
+            static fn (array $field): bool => in_array($field['fieldKey'], $identityKeys, true)
+        ));
+        $columns = [...$columns, ...$formFieldRepository->bzVisibleColumns($eventId)];
+
+        $withFormFields = $this->eventIsFinished($eventId)
+            ? $this->attachFrozenFormFields($registrations, $columns)
+            : $this->resolveLiveFormFields($registrations, $columns);
+
+        $competitorRepository = new CompetitorRepository($this->pdo);
+        $competitorCache = [];
+
+        return array_map(function (array $registration) use ($competitorRepository, &$competitorCache): array {
+            $competitorId = $registration['competitorId'] ?? null;
+            $identityCode = null;
+            if ($competitorId !== null) {
+                if (!array_key_exists($competitorId, $competitorCache)) {
+                    $competitorCache[$competitorId] = $competitorRepository->find((string) $competitorId);
+                }
+                $identityCode = $competitorCache[$competitorId]['identityCode'] ?? null;
+            }
+
+            $paymentDetails = $this->paymentDetails((string) $registration['id']);
+            $paid = (bool) ($paymentDetails['startFeePaid'] ?? false);
+
+            $merchandise = array_map(
+                static fn (array $line): array => [
+                    'item' => $line['merchandiseName'],
+                    'size' => $line['size'],
+                    'quantity' => (int) $line['quantity'],
+                ],
+                $this->merchandise((string) $registration['id'])
+            );
+
+            return [
+                'registrationId' => $registration['id'],
+                'distanceName' => $registration['distanceName'],
+                'category' => $registration['category'],
+                'bibNumber' => $registration['bibNumber'],
+                'qrCode' => $registration['qrCode'],
+                'identityCode' => $identityCode,
+                'paid' => $paid,
+                'merchandise' => $merchandise,
+                'formFields' => $registration['formFields'],
+            ];
+        }, $withFormFields);
+    }
+
+    /**
      * E1.14 out-of-scope seam: the spec's "wyniki, certyfikaty i eksporty
      * czytają już jego [snapshotu]" names three subsystems that would need to
      * switch from live to frozen reads once an Event finishes. Grepped before

@@ -8,6 +8,7 @@ use Slim\App;
 use Slim\Routing\RouteCollectorProxy;
 use ZmierzymyCzas\Database\SeedManifest;
 use ZmierzymyCzas\Domain\Admin\AdminRepository;
+use ZmierzymyCzas\Domain\Auth\ApplicationApiKeyConfig;
 use ZmierzymyCzas\Domain\Auth\JwtService;
 use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
 use ZmierzymyCzas\Domain\Cms\InfoPageRepository;
@@ -46,6 +47,7 @@ use ZmierzymyCzas\Domain\Shop\ShopRepository;
 use ZmierzymyCzas\Domain\Care\CareRepository;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
+use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Support\JsonResponder;
@@ -54,6 +56,11 @@ use ZmierzymyCzas\Support\UploadedFileStorage;
 return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $users = new UserRepository($pdo);
     $events = new EventRepository($pdo);
+    // E3.1/E3.3: static per-application incoming API key config (Central Mailer
+    // pattern) — built once here, same "isConfigured/fromEnv once at boot" stance
+    // as TpayConfig/PayNowConfig/CentralMailerConfig above. E3.3's BZ pull
+    // endpoint is the first route to actually wire ApiKeyAuthMiddleware in.
+    $apiKeyConfig = ApplicationApiKeyConfig::fromEnv();
     // E1.6: trasa A (bramka) is only ever wired up with a real gateway when this
     // deployment actually has Tpay credentials configured (production, or a real
     // sandbox account) — everywhere else (local dev, CI, this repo's own test
@@ -305,7 +312,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, ['status' => 'ok']));
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
@@ -885,6 +892,42 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $registrations->publicStartList($args['eventId'], $showAll));
         });
 
+        // E3.3: "Pull uczestników" — the endpoint Biuro Zawodów's own polling
+        // calls (issue 12 §1/§6, "kierunek domyślny synchronizacji: BZ
+        // pobiera"). Two independent auth layers, both required:
+        //  1. ApiKeyAuthMiddleware (E3.1, wired here for the first time) —
+        //     the calling application's own `X-API-Key`, same Central Mailer
+        //     pattern this platform uses outbound. Generic 401 on failure,
+        //     handled entirely inside the middleware.
+        //  2. The Event's own `bz_organization_token` (E3.2), presented as an
+        //     `X-BZ-Organization-Token` header — chosen over a query param so
+        //     the credential never lands in access logs or browser history
+        //     the way a query string can. Compared with `hash_equals()`
+        //     (constant-time), mirroring ApplicationApiKeyConfig::
+        //     resolveApplication()'s own pattern for secret comparison.
+        // A missing event is 404 with the exact same generic message
+        // canViewEvent()'s callers already use elsewhere in this file — never
+        // a distinct "no BZ token" message, so a caller probing IDs learns
+        // nothing about which ones exist. Token mismatch, integration
+        // disabled, and a missing token are all folded into the same generic
+        // 403 — none of the three is distinguishable from the response.
+        $api->get('/events/{eventId}/bz/participants', function (Request $request, Response $response, array $args) use ($events, $registrations) {
+            $event = $events->find((string) $args['eventId']);
+            if ($event === null) {
+                return JsonResponder::error($response, 'not_found', 'Event not found', 404);
+            }
+
+            $presentedToken = trim($request->getHeaderLine('X-BZ-Organization-Token'));
+            $configuredToken = (string) ($event['bzOrganizationToken'] ?? '');
+            $tokenMatches = $presentedToken !== '' && $configuredToken !== '' && hash_equals($configuredToken, $presentedToken);
+
+            if (!$tokenMatches || empty($event['bzIntegrationEnabled'])) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+
+            return JsonResponder::ok($response, $registrations->bzParticipantList((string) $args['eventId']));
+        })->add(new ApiKeyAuthMiddleware($apiKeyConfig));
+
         // E1.13: "Pozycja formularza" (model-formularza-zapisow.md §1-§9).
         // Public read (no auth) is the form/list renderer's source — it needs
         // the same ordered list an organizer edits, just without hidden
@@ -937,6 +980,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 }
                 if (array_key_exists('publicListVisible', $payload)) {
                     $field = $formFields->updatePublicListVisibility((string) $args['fieldId'], (bool) $payload['publicListVisible']);
+                }
+                if (array_key_exists('visibleToBz', $payload)) {
+                    $field = $formFields->updateBzVisibility((string) $args['fieldId'], (bool) $payload['visibleToBz']);
                 }
             } catch (\InvalidArgumentException $e) {
                 return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);

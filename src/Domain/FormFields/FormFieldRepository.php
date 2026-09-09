@@ -37,6 +37,7 @@ final class FormFieldRepository extends Repository
         . 'storage_location AS storageLocation, state, sort_order AS sortOrder, label_override AS labelOverride, '
         . 'tooltip_override AS tooltipOverride, public_list_visible AS publicListVisible, field_type AS fieldType, '
         . 'validation_config AS validationConfig, options, is_confidential AS isConfidential, '
+        . 'visible_to_bz AS visibleToBz, '
         . 'created_at AS createdAt, updated_at AS updatedAt';
 
     private const JSON_FIELDS = ['validationConfig', 'options'];
@@ -84,6 +85,7 @@ final class FormFieldRepository extends Repository
                 'sort_order' => $index + 1,
                 'public_list_visible' => 0,
                 'is_confidential' => 0,
+                'visible_to_bz' => 0,
             ]));
         }
 
@@ -172,6 +174,9 @@ final class FormFieldRepository extends Repository
             'validation_config' => $data['validationConfig'] ?? null,
             'options' => $options,
             'is_confidential' => !empty($data['isConfidential']) ? 1 : 0,
+            // E3.3: default Nie, same non-breaking-by-default stance as
+            // public_list_visible above (issue 12 §5).
+            'visible_to_bz' => !empty($data['visibleToBz']) ? 1 : 0,
         ], self::INSERT_JSON_FIELDS));
 
         return $this->find($id) ?? [];
@@ -257,6 +262,26 @@ final class FormFieldRepository extends Repository
         return $this->find($id) ?? [];
     }
 
+    /**
+     * E3.3: visibility on the Biuro Zawodów pull (issue 12 §5). Same "blocked
+     * for confidential fields" defense as updatePublicListVisibility() above —
+     * a poufne field (model §4.2) must never reach an external system either,
+     * even though the BZ contract is a separate audience from the public
+     * start list.
+     */
+    public function updateBzVisibility(string $id, bool $visible): array
+    {
+        $field = $this->find($id);
+        if ($field === null) {
+            throw new \InvalidArgumentException('Nie znaleziono pozycji formularza.');
+        }
+        if ($visible && !empty($field['isConfidential'])) {
+            throw new \InvalidArgumentException('Pole poufne nie może być widoczne dla Biura Zawodów.');
+        }
+        $this->updateById('form_fields', $id, ['visible_to_bz' => $visible ? 1 : 0]);
+        return $this->find($id) ?? [];
+    }
+
     public function reorder(string $eventId, array $orderedIds): void
     {
         foreach (array_values($orderedIds) as $index => $id) {
@@ -280,6 +305,30 @@ final class FormFieldRepository extends Repository
         return array_values(array_filter(
             $this->listForEvent($eventId),
             static fn (array $field): bool => !empty($field['publicListVisible']) && empty($field['isConfidential'])
+        ));
+    }
+
+    /**
+     * E3.3: subset of CUSTOM Pozycje formularza flagged visible to Biuro
+     * Zawodów (issue 12 §5, "pola custom oznaczone jako widoczne dla biura
+     * zawodów — podzbiór formularza z ticketu 10, nie wszystkie pola").
+     * System fields are deliberately excluded here — the identity section
+     * (imię/nazwisko/e-mail) is sent to BZ unconditionally by the caller
+     * (RegistrationRepository::bzParticipantList()), not gated by this flag,
+     * the same way it is not gated by `public_list_visible` on the public
+     * start list either. `is_confidential` is excluded unconditionally, same
+     * defense-in-depth stance as publicListColumns()/exportColumns() above —
+     * see updateBzVisibility()'s guard against the flag being set at all.
+     *
+     * @return array<int, array<string, mixed>> w kolejności formularza
+     */
+    public function bzVisibleColumns(string $eventId): array
+    {
+        return array_values(array_filter(
+            $this->listForEvent($eventId),
+            static fn (array $field): bool => $field['kind'] === 'custom'
+                && !empty($field['visibleToBz'])
+                && empty($field['isConfidential'])
         ));
     }
 

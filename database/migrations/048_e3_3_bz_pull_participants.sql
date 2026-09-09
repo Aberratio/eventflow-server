@@ -1,0 +1,14 @@
+-- E3.3: "Pull uczestników (kierunek domyślny synchronizacji)" — organizer-settable
+-- per-field flag gating which CUSTOM Pozycje formularza (ticket 10) are handed to
+-- Biuro Zawodów on its pull. Mirrors `public_list_visible` in shape and default
+-- (issue 12 §5, "pola custom oznaczone jako widoczne dla biura zawodów").
+--
+-- Default false (non-breaking): every field created before this migration, and
+-- every field created after it without explicitly opting in, stays invisible to
+-- BZ until an organizer flips it on — same "no existing field becomes visible by
+-- accident" stance as `public_list_visible`'s own default.
+--
+-- Migracje nie mają ledgera i uruchamiają się przy każdym starcie (Migrator.php) —
+-- ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtórzenia.
+ALTER TABLE form_fields
+  ADD COLUMN IF NOT EXISTS visible_to_bz TINYINT(1) NOT NULL DEFAULT 0 AFTER public_list_visible;

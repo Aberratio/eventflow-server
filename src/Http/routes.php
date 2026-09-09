@@ -948,6 +948,107 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $registrations->bzParticipantList((string) $args['eventId']));
         })->add(new ApiKeyAuthMiddleware($apiKeyConfig));
 
+        // E3.5 (issue 12 §2): the return leg of the sync contract — BZ pushing
+        // locally-edited fields back, merged via last-write-wins by
+        // per-field timestamp. Same two-layer auth as the pull endpoint just
+        // above (ApiKeyAuthMiddleware's X-API-Key + this Event's own
+        // bz_organization_token as X-BZ-Organization-Token, hash_equals'd),
+        // collapsed into the exact same generic 403/404 shape for the exact
+        // same reason (a caller probing ids/tokens learns nothing).
+        //
+        // Body shape: {"fields": {"<fieldKey>": {"value": ..., "changedAt":
+        // "<ISO-8601>"}, ...}, "reason"?: "<free text, optional>"}. fieldKey
+        // is the same vocabulary bzParticipantList()'s own payload and
+        // FormFieldCatalog use — first_name/last_name/contact_email/category/
+        // bib_number, plus any custom field already flagged visibleToBz. All
+        // the actual LWW/scope logic lives in
+        // RegistrationRepository::applyBzFieldSync() (see its docblock) —
+        // this handler is just auth, request/response shaping, and the
+        // activity-log entry.
+        //
+        // Actor attribution: this request carries no user JWT (it's an
+        // application calling in, per E3.1), so $logActivity's own
+        // "actor always comes from the verified JWT" convention doesn't apply
+        // here — this deliberately calls $admin->insertActivityLog()
+        // directly with a synthetic, clearly-non-user actor id instead, and
+        // spells out "Biuro Zawodów" in the description text itself (issue 12
+        // §2: "widać jawnie, kto zmienił co, kiedy i dlaczego"). activity_logs.user_id
+        // has no foreign key to `users` (checked: migration 001's table
+        // definition carries no CONSTRAINT on that column), so this sentinel
+        // value is safe to store.
+        $api->patch('/events/{eventId}/bz/participants/{registrationId}', function (Request $request, Response $response, array $args) use ($events, $registrations, $admin, $body) {
+            $event = $events->find((string) $args['eventId']);
+            if ($event === null) {
+                return JsonResponder::error($response, 'not_found', 'Event not found', 404);
+            }
+
+            $presentedToken = trim($request->getHeaderLine('X-BZ-Organization-Token'));
+            $configuredToken = (string) ($event['bzOrganizationToken'] ?? '');
+            $tokenMatches = $presentedToken !== '' && $configuredToken !== '' && hash_equals($configuredToken, $presentedToken);
+
+            if (!$tokenMatches || empty($event['bzIntegrationEnabled'])) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+
+            $registration = $registrations->find((string) $args['registrationId']);
+            if ($registration === null || (string) $registration['eventId'] !== (string) $args['eventId']) {
+                return JsonResponder::error($response, 'not_found', 'Registration not found', 404);
+            }
+
+            $payload = $body($request);
+            $fields = is_array($payload['fields'] ?? null) ? $payload['fields'] : [];
+            if ($fields === []) {
+                return JsonResponder::error($response, 'validation_error', 'Podaj przynajmniej jedno pole do synchronizacji.', 422);
+            }
+            $reason = isset($payload['reason']) ? trim((string) $payload['reason']) : '';
+
+            try {
+                $result = $registrations->applyBzFieldSync((string) $args['eventId'], (string) $args['registrationId'], $fields);
+            } catch (RuntimeException $e) {
+                if ($e->getMessage() === 'registration_not_found') {
+                    return JsonResponder::error($response, 'not_found', 'Registration not found', 404);
+                }
+                throw $e;
+            }
+
+            $describe = static fn (mixed $v): string => json_encode($v, JSON_UNESCAPED_UNICODE);
+            $parts = [];
+            foreach ($result['applied'] as $fieldKey => $change) {
+                $parts[] = sprintf('%s: %s -> %s', $fieldKey, $describe($change['old']), $describe($change['new']));
+            }
+            $description = $parts === []
+                ? 'Biuro Zawodów przesłało synchronizację pól Zapisu (brak zmian zastosowanych)'
+                : 'Biuro Zawodów zsynchronizowało pola Zapisu: ' . implode('; ', $parts);
+
+            $rejectedParts = [];
+            foreach ($result['rejected'] as $fieldKey => $rejection) {
+                $rejectedParts[] = sprintf(
+                    '%s (%s): BZ=%s, platforma=%s',
+                    $fieldKey,
+                    $rejection['reason'],
+                    $describe($rejection['incomingValue']),
+                    $describe($rejection['currentValue'])
+                );
+            }
+            if ($rejectedParts !== []) {
+                $description .= '. Odrzucono jako nieaktualne/poza zakresem: ' . implode('; ', $rejectedParts);
+            }
+            if ($reason !== '') {
+                $description .= '. Powód zgłoszony przez BZ: ' . $reason;
+            }
+
+            $admin->insertActivityLog([
+                'userId' => 'bz-integration',
+                'action' => 'bz_participant_field_synced',
+                'description' => $description,
+                'targetType' => 'registration',
+                'targetId' => (string) $args['registrationId'],
+                'targetName' => (string) ($registration['userName'] ?? ''),
+            ]);
+
+            return JsonResponder::ok($response, $result);
+        })->add(new ApiKeyAuthMiddleware($apiKeyConfig));
+
         // E1.13: "Pozycja formularza" (model-formularza-zapisow.md §1-§9).
         // Public read (no auth) is the form/list renderer's source — it needs
         // the same ordered list an organizer edits, just without hidden

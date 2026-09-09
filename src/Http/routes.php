@@ -960,7 +960,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         // "<ISO-8601>"}, ...}, "reason"?: "<free text, optional>"}. fieldKey
         // is the same vocabulary bzParticipantList()'s own payload and
         // FormFieldCatalog use — first_name/last_name/contact_email/category/
-        // bib_number, plus any custom field already flagged visibleToBz. All
+        // bib_number, plus any custom field already flagged visibleToBz —
+        // PLUS, since E3.6 (issue 12 §4, "BZ zwraca status odprawy przy
+        // każdej synchronizacji"), checked_in_at/checked_in_by: the one pair
+        // BZ never pulled from bzParticipantList() in the first place,
+        // because the Odprawa fact originates at BZ, not on the platform. All
         // the actual LWW/scope logic lives in
         // RegistrationRepository::applyBzFieldSync() (see its docblock) —
         // this handler is just auth, request/response shaping, and the

@@ -1,0 +1,22 @@
+-- E3.6: "Zwrotna informacja o odprawie" (issue 12 §4) — BZ reports check-in
+-- status back to the platform through the same return-sync channel E3.5
+-- already built (PATCH /events/{eventId}/bz/participants/{registrationId}).
+--
+-- registrations.checked_in_at already exists (migration 028, E0.2) for "czy i
+-- kiedy sprawdzono Zapis" — that migration's own comment named this exact
+-- ticket ("Biuro Zawodów, osobny ticket") as the place a real Odprawa model
+-- would eventually add "kto potwierdził". This migration adds that missing
+-- half: an opaque identifier/name from BZ's own user directory. BZ has its
+-- own users, not platform accounts, so this is deliberately never a foreign
+-- key to `users` (same reasoning activity_logs.user_id already uses for its
+-- "bz-integration" sentinel actor, see routes.php's PATCH handler).
+--
+-- VARCHAR(255) NULL, no default: BZ's contract (spec 12) never documents a
+-- fixed shape/length for an operator name, so this is a generous free-text
+-- column rather than a guessed format — consistent with this table's
+-- existing free-text BZ-sourced columns (bib_number, category).
+--
+-- Migracje nie mają ledgera i uruchamiają się przy każdym starcie
+-- (Migrator.php) — ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtórzenia.
+ALTER TABLE registrations
+  ADD COLUMN IF NOT EXISTS checked_in_by VARCHAR(255) NULL AFTER checked_in_at;

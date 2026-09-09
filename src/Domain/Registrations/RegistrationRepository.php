@@ -80,14 +80,27 @@ final class RegistrationRepository extends Repository
     private const BZ_SYNCABLE_COMPETITOR_FIELDS = ['first_name' => 'firstName', 'last_name' => 'lastName'];
 
     /**
-     * E3.5: BZ-return-syncable fieldKeys living directly on `registrations` —
-     * fieldKey => the camelCase key bzSyncRow() aliases the column to. Written
-     * back to their real snake_case column by applyBzFieldSync() (identical to
-     * the fieldKey itself for category/bib_number; contact_email maps to the
-     * user_email column, same "system field key not sharing the column's own
-     * name" case as bzParticipantList()'s own contact_email handling).
+     * E3.5/E3.6: BZ-return-syncable fieldKeys living directly on
+     * `registrations` — fieldKey => the camelCase key bzSyncRow() aliases the
+     * column to. Written back to their real snake_case column by
+     * applyBzFieldSync() (identical to the fieldKey itself for
+     * category/bib_number/checked_in_at/checked_in_by; contact_email maps to
+     * the user_email column, same "system field key not sharing the column's
+     * own name" case as bzParticipantList()'s own contact_email handling).
+     *
+     * checked_in_at/checked_in_by (E3.6, issue 12 §4, "BZ zwraca status
+     * odprawy przy każdej synchronizacji") were added here rather than given
+     * a separate endpoint/mechanism: they are return-synced fields on this
+     * same `registrations` row, so they fit this exact contract (LWW per
+     * fieldKey against `registrations.updated_at`) with zero new plumbing.
      */
-    private const BZ_SYNCABLE_REGISTRATION_FIELDS = ['category' => 'category', 'bib_number' => 'bibNumber', 'contact_email' => 'userEmail'];
+    private const BZ_SYNCABLE_REGISTRATION_FIELDS = [
+        'category' => 'category',
+        'bib_number' => 'bibNumber',
+        'contact_email' => 'userEmail',
+        'checked_in_at' => 'checkedInAt',
+        'checked_in_by' => 'checkedInBy',
+    ];
 
     /**
      * Which already-constructed gateway instance a provider name resolves to.
@@ -123,7 +136,7 @@ id, event_id AS eventId, event_name AS eventName, user_id AS userId, competitor_
 user_name AS userName,
 user_email AS userEmail, distance_id AS distanceId, distance_name AS distanceName, category,
 registered_at AS registeredAt, status, bib_number AS bibNumber, qr_code AS qrCode, team_name AS teamName, team_id AS teamId,
-discount_code AS discountCode, removed_at AS removedAt, checked_in_at AS checkedInAt,
+discount_code AS discountCode, removed_at AS removedAt, checked_in_at AS checkedInAt, checked_in_by AS checkedInBy,
 registered_by_id AS registeredById
 SQL;
 
@@ -132,7 +145,7 @@ r.id, r.event_id AS eventId, r.event_name AS eventName, r.user_id AS userId, r.c
 r.user_name AS userName,
 r.user_email AS userEmail, r.distance_id AS distanceId, r.distance_name AS distanceName, r.category,
 r.registered_at AS registeredAt, r.status, r.bib_number AS bibNumber, r.qr_code AS qrCode, r.team_name AS teamName, r.team_id AS teamId,
-r.discount_code AS discountCode, r.removed_at AS removedAt, r.checked_in_at AS checkedInAt,
+r.discount_code AS discountCode, r.removed_at AS removedAt, r.checked_in_at AS checkedInAt, r.checked_in_by AS checkedInBy,
 r.registered_by_id AS registeredById
 SQL;
 
@@ -323,10 +336,15 @@ SQL;
      * exposes (this is a return-sync of that same contract, not a
      * general-purpose registration PATCH) minus payment/amount fields, which
      * §5 says BZ never receives in the first place and so can never
-     * legitimately claim to have edited. Any fieldKey outside the three
-     * groups below — including a payment-shaped key an untrusted or buggy
-     * caller might send ('pricePaid', 'totalAmount', 'paid', ...) — is
-     * rejected outright as out of scope, never silently merged.
+     * legitimately claim to have edited, PLUS checked_in_at/checked_in_by
+     * (E3.6, issue 12 §4) — the one pair of fields this endpoint accepts that
+     * BZ never pulled from bzParticipantList() in the first place, because the
+     * Odprawa fact originates at BZ, not on the platform (see this method's
+     * "checked_in_at/checked_in_by" paragraph below for the LWW rationale).
+     * Any fieldKey outside these groups — including a payment-shaped key an
+     * untrusted or buggy caller might send ('pricePaid', 'totalAmount',
+     * 'paid', ...) — is rejected outright as out of scope, never silently
+     * merged.
      *
      * Timestamp comparison is per-row/per-answer, not per-attribute (a
      * documented, deliberately coarser granularity than "one clock per
@@ -345,6 +363,27 @@ SQL;
      * A NULL/missing platform timestamp always loses to an incoming BZ edit —
      * "never touched since we started tracking" is the correct, permissive
      * starting state for LWW (see migration 050's own docblock).
+     *
+     * checked_in_at/checked_in_by (E3.6, issue 12 §4 — "BZ zwraca status
+     * odprawy przy każdej synchronizacji"): compared against
+     * `registrations.updated_at`, the exact same coarse row-level clock as
+     * category/bib_number/contact_email above — deliberately NOT given a
+     * special-cased "monotonic, never goes backwards" rule even though a
+     * real Odprawa is close to monotonic in practice (once checked in, it
+     * essentially never gets un-checked). Two reasons: (1) the ticket that
+     * asked for this explicitly prefers staying inside the one LWW mechanism
+     * already established here over inventing a second, inconsistent one,
+     * and (2) a correctly-behaving BZ always sends an honest `changedAt` for
+     * the moment it recorded the check-in, so ordinary LWW already produces
+     * the right outcome without any extra rule — the only case a
+     * monotonic-only rule would additionally reject is a BZ-side correction
+     * of a mistaken check-in (clearing it back to NULL), which is a
+     * legitimate edit this endpoint should honor like any other, not silently
+     * refuse. `checked_in_at`'s incoming value must itself parse as a
+     * timestamp (or be explicitly `null`, clearing the check-in) — an
+     * unparseable value is rejected as `invalid_value`, mirroring the custom
+     * form-field branch below rather than being stored as opaque garbage in a
+     * column every other reader treats as a timestamp.
      *
      * Every field is returned as either applied or rejected — never silently
      * dropped — so the caller (routes.php) can write ONE activity-log entry
@@ -419,6 +458,32 @@ SQL;
                     $rejected[$fieldKey] = ['reason' => 'stale', 'incomingValue' => $incomingValue, 'currentValue' => $currentValue];
                     continue;
                 }
+                // E3.6: checked_in_at is a timestamp column — validate it parses
+                // (or is an explicit null, clearing the check-in) rather than
+                // trusting whatever BZ sends into a column every other reader
+                // treats as DATE_ATOM (see this method's own docblock above).
+                if ($fieldKey === 'checked_in_at' && $incomingValue !== null) {
+                    $normalizedCheckIn = is_string($incomingValue) && $incomingValue !== ''
+                        ? $this->parseTimestamp($incomingValue)
+                        : null;
+                    if ($normalizedCheckIn === null) {
+                        $rejected[$fieldKey] = ['reason' => 'invalid_value', 'incomingValue' => $incomingValue, 'currentValue' => $currentValue];
+                        continue;
+                    }
+                    $incomingValue = $normalizedCheckIn->format(DATE_ATOM);
+                }
+                // checked_in_by is an opaque BZ-side identifier/name (no
+                // platform user, no FK — see migration 051) stored as-is;
+                // only coerce a non-null scalar to a string so a JSON number
+                // or bool from a loose BZ client can't reach the VARCHAR
+                // column as its native PHP type.
+                if ($fieldKey === 'checked_in_by' && $incomingValue !== null) {
+                    $incomingValue = is_scalar($incomingValue) ? (string) $incomingValue : null;
+                    if ($incomingValue === null) {
+                        $rejected[$fieldKey] = ['reason' => 'invalid_value', 'incomingValue' => null, 'currentValue' => $currentValue];
+                        continue;
+                    }
+                }
                 $applied[$fieldKey] = ['old' => $currentValue, 'new' => $incomingValue];
                 $registrationUpdates[$fieldKey === 'contact_email' ? 'user_email' : $fieldKey] = $incomingValue;
                 continue;
@@ -473,7 +538,8 @@ SQL;
     {
         $stmt = $this->pdo->prepare(
             'SELECT id, event_id AS eventId, competitor_id AS competitorId, category, bib_number AS bibNumber,
-                    user_email AS userEmail, updated_at AS updatedAt
+                    user_email AS userEmail, checked_in_at AS checkedInAt, checked_in_by AS checkedInBy,
+                    updated_at AS updatedAt
              FROM registrations WHERE id = :id'
         );
         $stmt->execute(['id' => $registrationId]);
@@ -976,6 +1042,12 @@ SQL;
             'bibNumber' => $registration['bibNumber'],
             'status' => $status,
             'checkedInAt' => $registration['checkedInAt'],
+            // E3.6 (issue 12 §4): "kto potwierdził" — BZ's own opaque
+            // identifier/name for whoever confirmed check-in, surfaced next
+            // to checkedInAt on the exact same read path so the competitor's
+            // ticket/history view (E1.4's asTicket()) never needs a second
+            // fetch to show "odprawiono Cię o 7:42".
+            'checkedInBy' => $registration['checkedInBy'] ?? null,
             'issuedAt' => $registration['registeredAt'],
         ];
     }
@@ -1420,6 +1492,7 @@ SQL;
             'discountCode' => 'discount_code',
             'removedAt' => 'removed_at',
             'checkedInAt' => 'checked_in_at',
+            'checkedInBy' => 'checked_in_by',
         ] as $input => $column) {
             if (array_key_exists($input, $data)) {
                 $mapped[$column] = $data[$input];

@@ -279,6 +279,108 @@ final class BzParticipantSyncContractTest extends HttpTestCase
         self::assertSame('field_not_in_scope', $data['rejected'][$hiddenField['fieldKey']]['reason']);
     }
 
+    /**
+     * E3.6 (issue 12 §4): the core new-field case — a fresh check-in report
+     * from BZ (both checked_in_at and checked_in_by) must apply, be visible
+     * on the plain registration read afterwards, and be logged.
+     */
+    public function testCheckInStatusFromBzIsAppliedAndPersisted(): void
+    {
+        $event = $this->createBzEnabledEvent();
+        ['registrationId' => $registrationId] = $this->seedOneFullRegistration($event);
+
+        $checkedInAt = $this->iso(60);
+        $response = $this->patchSync($event['id'], $registrationId, [
+            'fields' => [
+                'checked_in_at' => ['value' => $checkedInAt, 'changedAt' => $this->iso(60)],
+                'checked_in_by' => ['value' => 'Jan Kowalski (BZ)', 'changedAt' => $this->iso(60)],
+            ],
+        ], $this->validHeaders());
+
+        self::assertSame(200, $response->getStatusCode());
+        $data = $this->json($response)['data'];
+        self::assertArrayHasKey('checked_in_at', $data['applied']);
+        self::assertArrayHasKey('checked_in_by', $data['applied']);
+        self::assertSame([], $data['rejected']);
+
+        $registration = $this->registrations->find($registrationId);
+        self::assertNotNull($registration['checkedInAt']);
+        self::assertSame('Jan Kowalski (BZ)', $registration['checkedInBy']);
+
+        $this->assertLogged($registrationId, 'bz_participant_field_synced', 'checked_in_by');
+    }
+
+    /**
+     * checked_in_at follows the exact same LWW rule as the other
+     * registration-level fields (registrations.updated_at) — a platform edit
+     * made more recently than BZ's claimed check-in instant must win, and
+     * BZ's push must show up as explicitly rejected.
+     */
+    public function testStaleCheckInReportIsRejected(): void
+    {
+        $event = $this->createBzEnabledEvent();
+        ['registrationId' => $registrationId] = $this->seedOneFullRegistration($event);
+
+        $this->registrations->update($registrationId, ['bibNumber' => '55']);
+
+        $response = $this->patchSync($event['id'], $registrationId, [
+            'fields' => ['checked_in_at' => ['value' => $this->iso(-3600), 'changedAt' => $this->iso(-3600)]],
+        ], $this->validHeaders());
+
+        self::assertSame(200, $response->getStatusCode());
+        $data = $this->json($response)['data'];
+        self::assertSame([], $data['applied']);
+        self::assertSame('stale', $data['rejected']['checked_in_at']['reason']);
+
+        $registration = $this->registrations->find($registrationId);
+        self::assertNull($registration['checkedInAt']);
+    }
+
+    /**
+     * checked_in_at is a timestamp column — an unparseable value must be
+     * rejected rather than stored as opaque garbage.
+     */
+    public function testUnparseableCheckInTimestampIsRejectedAsInvalidValue(): void
+    {
+        $event = $this->createBzEnabledEvent();
+        ['registrationId' => $registrationId] = $this->seedOneFullRegistration($event);
+
+        $response = $this->patchSync($event['id'], $registrationId, [
+            'fields' => ['checked_in_at' => ['value' => 'not-a-timestamp', 'changedAt' => $this->iso(0)]],
+        ], $this->validHeaders());
+
+        self::assertSame(200, $response->getStatusCode());
+        $data = $this->json($response)['data'];
+        self::assertSame([], $data['applied']);
+        self::assertSame('invalid_value', $data['rejected']['checked_in_at']['reason']);
+    }
+
+    /**
+     * BZ can explicitly clear a mistaken check-in by sending checked_in_at:
+     * null with a fresh changedAt — a legitimate edit, not a value that fails
+     * "must parse as a timestamp".
+     */
+    public function testExplicitNullClearsAPreviousCheckIn(): void
+    {
+        $event = $this->createBzEnabledEvent();
+        ['registrationId' => $registrationId] = $this->seedOneFullRegistration($event);
+
+        $first = $this->patchSync($event['id'], $registrationId, [
+            'fields' => ['checked_in_at' => ['value' => $this->iso(60), 'changedAt' => $this->iso(60)]],
+        ], $this->validHeaders());
+        self::assertSame(200, $first->getStatusCode());
+        self::assertNotNull($this->registrations->find($registrationId)['checkedInAt']);
+
+        $second = $this->patchSync($event['id'], $registrationId, [
+            'fields' => ['checked_in_at' => ['value' => null, 'changedAt' => $this->iso(120)]],
+        ], $this->validHeaders());
+
+        self::assertSame(200, $second->getStatusCode());
+        $data = $this->json($second)['data'];
+        self::assertArrayHasKey('checked_in_at', $data['applied']);
+        self::assertNull($this->registrations->find($registrationId)['checkedInAt']);
+    }
+
     private function assertLogged(string $registrationId, string $action, ?string $descriptionContains): void
     {
         $logs = $this->admin->activityLogs(['targetType' => 'registration', 'targetId' => $registrationId, 'action' => $action]);

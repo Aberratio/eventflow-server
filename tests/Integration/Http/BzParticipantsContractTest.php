@@ -10,6 +10,7 @@ use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldType;
 use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
+use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
@@ -47,7 +48,12 @@ final class BzParticipantsContractTest extends HttpTestCase
         // reads ApplicationApiKeyConfig::fromEnv() once, at app-construction
         // time, the same way TpayConfig/PayNowConfig::fromEnv() are read once
         // there too.
-        putenv('INCOMING_API_KEYS=biuro_zawodow=' . self::API_KEY);
+        //
+        // Env::set, not putenv: Env::get answers from the values loaded out of
+        // `.env` first, and `.env` carries an empty INCOMING_API_KEYS for local
+        // dev, so putenv's key never reached the config and every request here
+        // was authenticated against no keys at all -- a generic 401.
+        Env::set('INCOMING_API_KEYS', 'biuro_zawodow=' . self::API_KEY);
 
         parent::setUp();
 
@@ -61,7 +67,7 @@ final class BzParticipantsContractTest extends HttpTestCase
 
     protected function tearDown(): void
     {
-        putenv('INCOMING_API_KEYS');
+        Env::restore('INCOMING_API_KEYS');
 
         if (!isset($this->pdo, $this->prefix)) {
             return;

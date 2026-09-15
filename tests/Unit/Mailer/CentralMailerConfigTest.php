@@ -6,6 +6,7 @@ namespace ZmierzymyCzas\Tests\Unit\Mailer;
 
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
+use ZmierzymyCzas\Support\Env;
 
 final class CentralMailerConfigTest extends TestCase
 {
@@ -34,15 +35,15 @@ final class CentralMailerConfigTest extends TestCase
 
     public function testFromEnvStripsTrailingSlashFromBaseUrl(): void
     {
-        putenv('CENTRAL_MAILER_API_KEY=k');
-        putenv('CENTRAL_MAILER_BASE_URL=https://mailer.example.test/');
+        Env::set('CENTRAL_MAILER_API_KEY', 'k');
+        Env::set('CENTRAL_MAILER_BASE_URL', 'https://mailer.example.test/');
 
         try {
             $config = CentralMailerConfig::fromEnv();
             self::assertSame('https://mailer.example.test', $config->baseUrl);
         } finally {
-            putenv('CENTRAL_MAILER_API_KEY');
-            putenv('CENTRAL_MAILER_BASE_URL');
+            Env::restore('CENTRAL_MAILER_API_KEY');
+            Env::restore('CENTRAL_MAILER_BASE_URL');
         }
     }
 }

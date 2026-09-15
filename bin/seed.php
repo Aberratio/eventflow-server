@@ -130,14 +130,28 @@ foreach ($files as $file) {
             $statements++;
         }
     } catch (PDOException $e) {
-        // A database seeded before `seed_records` existed still holds those rows, but the
-        // manifest does not know about them, so the purge above could not remove them.
         if ($e->getCode() === '23000') {
-            fwrite(STDERR, "\n" . basename($file) . " collided with rows already in the database:\n");
+            fwrite(STDERR, "\n" . basename($file) . " violated a constraint:\n");
             fwrite(STDERR, '  ' . $e->getMessage() . "\n\n");
-            fwrite(STDERR, "This database was seeded before demo rows were tracked, so the purge could not\n");
-            fwrite(STDERR, "find them. Run `php bin/seed.php --fresh` once (local), or delete the stale demo\n");
-            fwrite(STDERR, "rows by hand (staging). Runs after that are tracked and will not hit this.\n");
+
+            // Two unrelated causes wear the same SQLSTATE, and the advice for one is
+            // useless for the other, so read the duplicated value before giving any.
+            if (str_contains($e->getMessage(), "Duplicate entry ''")) {
+                // The seeder colliding with itself: it leaves a NOT NULL UNIQUE column out
+                // of its INSERT, and this MariaDB has no STRICT_TRANS_TABLES, so instead of
+                // failing, every row of that INSERT silently gets the empty string.
+                fwrite(STDERR, "The duplicated value is the empty string: that seeder omits a column that is\n");
+                fwrite(STDERR, "NOT NULL UNIQUE, and this MariaDB runs without STRICT_TRANS_TABLES, so each row\n");
+                fwrite(STDERR, "silently gets ''. The seeder collides with itself, on an empty table too --\n");
+                fwrite(STDERR, "`--fresh` will not help. Add the column to that INSERT.\n");
+            } else {
+                // A database seeded before `seed_records` existed still holds those rows, but
+                // the manifest does not know about them, so the purge above could not remove them.
+                fwrite(STDERR, "This database was seeded before demo rows were tracked, so the purge could not\n");
+                fwrite(STDERR, "find them. Run `php bin/seed.php --fresh` once (local), or delete the stale demo\n");
+                fwrite(STDERR, "rows by hand (staging). Runs after that are tracked and will not hit this.\n");
+            }
+
             exit(1);
         }
 

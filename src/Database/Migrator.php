@@ -42,9 +42,84 @@ final class Migrator
         return array_map('basename', $files);
     }
 
+    /**
+     * PHP steps a migration script may call on itself with a `-- @php: Name::method`
+     * line, keyed by the exact spelling allowed in that marker.
+     *
+     * An allowlist rather than a resolved class name: a migration file is data, and
+     * letting one name an arbitrary callable would turn the schema directory into an
+     * execution surface. A typo then fails loudly at the migration that carries it,
+     * instead of silently skipping a step.
+     *
+     * @var array<string, array{class-string, string}>
+     */
+    private const PHP_STEPS = [
+        'CompetitorProfileBackfill::run' => [CompetitorProfileBackfill::class, 'run'],
+        'QrCodeBackfill::registrations' => [QrCodeBackfill::class, 'registrations'],
+        'QrCodeBackfill::competitors' => [QrCodeBackfill::class, 'competitors'],
+    ];
+
+    /** A whole line that is nothing but the marker; anything else stays a plain SQL comment. */
+    private const PHP_STEP_PATTERN = '/^[ \t]*--[ \t]*@php:[ \t]*([A-Za-z0-9_]+::[A-Za-z0-9_]+)[ \t\r]*$/m';
+
+    /**
+     * Applies one migration script, running any `-- @php:` step it declares at the
+     * point in the file where the marker sits.
+     *
+     * The marker exists because a few backfills cannot be written in SQL that this
+     * environment's MariaDB supports (see QrCodeBackfill), and yet have to run
+     * *between* two DDL statements of the same migration — after the column is added,
+     * before it is made NOT NULL. Keeping that ordering inside the .sql file is the
+     * point: it sits next to the statements it is ordered against, and a single-file
+     * apply (which several tests use) behaves exactly like a full run.
+     *
+     * A marker must sit between complete statements, on a line of its own. Placed
+     * mid-statement it splits that statement in two and the migration fails — loudly,
+     * which is the intended outcome for a malformed marker.
+     */
     public static function applyFile(PDO $pdo, string $file): void
     {
         $sql = (string) file_get_contents($file);
+
+        // Odd offsets are the captured step names, even offsets the SQL around them.
+        $chunks = preg_split(self::PHP_STEP_PATTERN, $sql, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [$sql];
+
+        foreach ($chunks as $offset => $chunk) {
+            if ($offset % 2 === 1) {
+                self::applyPhpStep($pdo, $file, $chunk);
+                continue;
+            }
+
+            self::applyStatements($pdo, $file, $chunk);
+        }
+    }
+
+    private static function applyPhpStep(PDO $pdo, string $file, string $step): void
+    {
+        $callable = self::PHP_STEPS[$step] ?? null;
+        if ($callable === null) {
+            throw new \RuntimeException(sprintf(
+                'Migration %s declares unknown PHP step "%s" (known: %s)',
+                basename($file),
+                $step,
+                implode(', ', array_keys(self::PHP_STEPS))
+            ));
+        }
+
+        try {
+            $callable($pdo);
+        } catch (\Throwable $e) {
+            throw new \RuntimeException(sprintf(
+                'Migration failed in %s: PHP step %s: %s',
+                basename($file),
+                $step,
+                $e->getMessage()
+            ), 0, $e);
+        }
+    }
+
+    private static function applyStatements(PDO $pdo, string $file, string $sql): void
+    {
         foreach (self::statements($sql) as $statement) {
             try {
                 $pdo->exec($statement);

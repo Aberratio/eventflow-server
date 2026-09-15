@@ -129,8 +129,7 @@ PDF;
         $jan = $this->createParticipant('Jan Kowalski', 'M', 1983);
         $this->createRegistration($event, $jan, 'M40', '101');
 
-        $path = dirname(__DIR__, 3) . DIRECTORY_SEPARATOR . 'przyklady' . DIRECTORY_SEPARATOR . 'import-wynikow' . DIRECTORY_SEPARATOR . 'wyniki-10km.xlsx';
-        self::assertFileExists($path);
+        $path = $this->realWorldSample('wyniki-10km.xlsx');
 
         $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', [
             'path' => $path,
@@ -160,8 +159,7 @@ PDF;
         $this->createRegistration($event, $this->createParticipant('Piotr Zielinski', 'M', 1994), 'M30', '103');
         $this->createRegistration($event, $this->createParticipant('Marta Wisniewska', 'K', 1984), 'K40', '104');
 
-        $path = dirname(__DIR__, 3) . DIRECTORY_SEPARATOR . 'przyklady' . DIRECTORY_SEPARATOR . 'import-wynikow' . DIRECTORY_SEPARATOR . 'wyniki-10km.csv';
-        self::assertFileExists($path);
+        $path = $this->realWorldSample('wyniki-10km.csv');
 
         $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', [
             'path' => $path,
@@ -418,5 +416,26 @@ PDF;
         }
 
         $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')->execute(['email' => $this->prefix . '.%@example.test']);
+    }
+
+    /**
+     * Absolute path to one of the real-world samples in `przyklady/import-wynikow`.
+     *
+     * That directory sits next to this repository rather than inside it — it is not
+     * tracked here and never has been — so a checkout without it is a perfectly
+     * ordinary one, not a broken test. Skipping says which file is missing and why;
+     * asserting it exists just turned an absent sibling directory into a red suite,
+     * which is what it did on every machine that does not have it.
+     */
+    private function realWorldSample(string $name): string
+    {
+        $path = dirname(__DIR__, 3) . DIRECTORY_SEPARATOR . 'przyklady'
+            . DIRECTORY_SEPARATOR . 'import-wynikow' . DIRECTORY_SEPARATOR . $name;
+
+        if (!is_file($path)) {
+            self::markTestSkipped("Real-world sample {$name} is not available: {$path} (przyklady/ is not part of this repository).");
+        }
+
+        return $path;
     }
 }

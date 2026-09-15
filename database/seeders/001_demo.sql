@@ -159,17 +159,21 @@ INSERT INTO event_gallery_albums (id, event_id, name, url, platform, photographe
 ('ga-wroclaw', 'e-wroclaw-night', 'Nocny Bieg Wroclaw - meta', 'https://photos.example.com/nocny-bieg-wroclaw-2026', 'google_photos', 'Night Run Studio', 0),
 ('ga-lodz', 'e-lodz-live', 'City Trail Lodz - backstage', 'https://instagram.com/city-trail-lodz-2026', 'instagram', 'RunPoland Media', 0);
 
-INSERT INTO registrations (id, event_id, event_name, user_id, user_name, user_email, distance_id, distance_name, category, registered_at, status, bib_number)
+-- Kod startowy (E1.11, migracja 039) jest NOT NULL bez DEFAULT i UNIQUE, a ta instalacja
+-- MariaDB nie ma STRICT_TRANS_TABLES: pominiecie kolumny nie jest bledem, tylko cichym
+-- pustym stringiem w kazdym wierszu -- czyli 1062 na drugim z nich. Fixtury podaja go wiec
+-- wprost, w tym samym formacie co RegistrationRepository::generateStartCode().
+INSERT INTO registrations (id, event_id, event_name, user_id, user_name, user_email, distance_id, distance_name, category, registered_at, status, bib_number, qr_code)
 VALUES
-('r-jan-10k', 'e-warsaw-10k', 'Warszawska Dycha 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-10k', '10 km', 'M30', '2026-05-02T10:00:00+02:00', 'confirmed', '101'),
-('r-anna-lodz', 'e-lodz-live', 'City Trail Lodz LIVE 2026', 'u-anna', 'Anna Zielinska', 'anna@example.com', 'd-lodz-7k', '7 km', 'K30', '2026-04-20T09:15:00+02:00', 'confirmed', '215'),
-('r-piotr-lodz', 'e-lodz-live', 'City Trail Lodz LIVE 2026', 'u-piotr', 'Piotr Wisniewski', 'piotr@example.com', 'd-lodz-15k', '15 km', 'M30', '2026-04-18T18:40:00+02:00', 'confirmed', '42'),
-('r-kasia-bike', 'e-krakow-bike', 'Krakowski Klasyk Rowerowy 2026', 'u-kasia', 'Katarzyna Wozniak', 'kasia@example.com', 'd-bike-45', '45 km', 'K30', '2026-05-01T11:20:00+02:00', 'confirmed', '305'),
-('r-jan-poznan', 'e-poznan-five', 'Poznanska Piatka 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-poznan-5k', '5 km', 'M30', '2026-04-01T10:00:00+02:00', 'confirmed', '18'),
-('r-anna-poznan', 'e-poznan-five', 'Poznanska Piatka 2026', 'u-anna', 'Anna Zielinska', 'anna@example.com', 'd-poznan-5k', '5 km', 'K30', '2026-04-01T10:05:00+02:00', 'confirmed', '19'),
-('r-piotr-wroclaw', 'e-wroclaw-night', 'Nocny Bieg Wroclaw 2026', 'u-piotr', 'Piotr Wisniewski', 'piotr@example.com', 'd-wroclaw-10k', '10 km', 'M30', '2026-03-10T14:00:00+01:00', 'confirmed', '77'),
-('r-kasia-wroclaw', 'e-wroclaw-night', 'Nocny Bieg Wroclaw 2026', 'u-kasia', 'Katarzyna Wozniak', 'kasia@example.com', 'd-wroclaw-10k', '10 km', 'K30', '2026-03-10T14:10:00+01:00', 'confirmed', '78'),
-('r-jan-virtual', 'e-virtual-spring', 'Wirtualny Maraton Wiosenny 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-virtual-10k', '10 km', 'OPEN', '2026-05-02T12:00:00+02:00', 'pending', NULL);
+('r-jan-10k', 'e-warsaw-10k', 'Warszawska Dycha 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-10k', '10 km', 'M30', '2026-05-02T10:00:00+02:00', 'confirmed', '101', 'pqr_d313e375912e57884abe7349577197cc5e14fb796a63b974'),
+('r-anna-lodz', 'e-lodz-live', 'City Trail Lodz LIVE 2026', 'u-anna', 'Anna Zielinska', 'anna@example.com', 'd-lodz-7k', '7 km', 'K30', '2026-04-20T09:15:00+02:00', 'confirmed', '215', 'pqr_82a92885bc598144769eb0353f0717940d81039a06921fb0'),
+('r-piotr-lodz', 'e-lodz-live', 'City Trail Lodz LIVE 2026', 'u-piotr', 'Piotr Wisniewski', 'piotr@example.com', 'd-lodz-15k', '15 km', 'M30', '2026-04-18T18:40:00+02:00', 'confirmed', '42', 'pqr_ae28b97162636da9c798a14055cacdeb6e7f58656868c72d'),
+('r-kasia-bike', 'e-krakow-bike', 'Krakowski Klasyk Rowerowy 2026', 'u-kasia', 'Katarzyna Wozniak', 'kasia@example.com', 'd-bike-45', '45 km', 'K30', '2026-05-01T11:20:00+02:00', 'confirmed', '305', 'pqr_c381fc58b377f30ad4e3797f1e277730ae720107421042f8'),
+('r-jan-poznan', 'e-poznan-five', 'Poznanska Piatka 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-poznan-5k', '5 km', 'M30', '2026-04-01T10:00:00+02:00', 'confirmed', '18', 'pqr_c3f123ff42cc27a1d15e4c52c8865274034fa60bbeb51383'),
+('r-anna-poznan', 'e-poznan-five', 'Poznanska Piatka 2026', 'u-anna', 'Anna Zielinska', 'anna@example.com', 'd-poznan-5k', '5 km', 'K30', '2026-04-01T10:05:00+02:00', 'confirmed', '19', 'pqr_88bd667429a484c6473515878196bb3b7de0c6caf4e8e072'),
+('r-piotr-wroclaw', 'e-wroclaw-night', 'Nocny Bieg Wroclaw 2026', 'u-piotr', 'Piotr Wisniewski', 'piotr@example.com', 'd-wroclaw-10k', '10 km', 'M30', '2026-03-10T14:00:00+01:00', 'confirmed', '77', 'pqr_71b486e6d0e6fd8e8d046dee30c146a868c0c646027b836b'),
+('r-kasia-wroclaw', 'e-wroclaw-night', 'Nocny Bieg Wroclaw 2026', 'u-kasia', 'Katarzyna Wozniak', 'kasia@example.com', 'd-wroclaw-10k', '10 km', 'K30', '2026-03-10T14:10:00+01:00', 'confirmed', '78', 'pqr_ef40a6380c34891f302d5ca2aff113acd6df039ad598ad1b'),
+('r-jan-virtual', 'e-virtual-spring', 'Wirtualny Maraton Wiosenny 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-virtual-10k', '10 km', 'OPEN', '2026-05-02T12:00:00+02:00', 'pending', NULL, 'pqr_9fffe9ef70f0d842cd51beeda7d1605b350fd411ca93bf05');
 
 -- Rozliczenie (E0.3): "Oplata startowa" line item per Zapis, replacing registrations.price_paid.
 INSERT INTO registration_settlement_items (id, registration_id, name, basis, amount, frozen_at, sort_order) VALUES

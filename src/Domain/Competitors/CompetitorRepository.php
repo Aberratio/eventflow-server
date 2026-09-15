@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Competitors;
 
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Support\QrCode;
 
 /**
  * Zawodnik: profil danych startowych, byt samodzielny — nie własność Konta.
@@ -180,6 +181,6 @@ SQL;
      */
     private function generateIdentityCode(): string
     {
-        return 'zqr_' . bin2hex(random_bytes(24));
+        return QrCode::identityCode();
     }
 }

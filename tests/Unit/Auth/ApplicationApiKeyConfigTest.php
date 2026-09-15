@@ -6,6 +6,7 @@ namespace ZmierzymyCzas\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Domain\Auth\ApplicationApiKeyConfig;
+use ZmierzymyCzas\Support\Env;
 
 final class ApplicationApiKeyConfigTest extends TestCase
 {
@@ -78,7 +79,7 @@ final class ApplicationApiKeyConfigTest extends TestCase
 
     public function testFromEnvParsesCommaSeparatedApplicationKeyPairs(): void
     {
-        putenv('INCOMING_API_KEYS=biuro_zawodow=secret-bz,other_app=secret-other');
+        Env::set('INCOMING_API_KEYS', 'biuro_zawodow=secret-bz,other_app=secret-other');
 
         try {
             $config = ApplicationApiKeyConfig::fromEnv();
@@ -86,20 +87,20 @@ final class ApplicationApiKeyConfigTest extends TestCase
             self::assertSame('biuro_zawodow', $config->resolveApplication('secret-bz'));
             self::assertSame('other_app', $config->resolveApplication('secret-other'));
         } finally {
-            putenv('INCOMING_API_KEYS');
+            Env::restore('INCOMING_API_KEYS');
         }
     }
 
     public function testFromEnvIgnoresBlankAndMalformedEntries(): void
     {
-        putenv('INCOMING_API_KEYS=, biuro_zawodow=secret-bz , no-equals-sign, =missing-app, empty_key=');
+        Env::set('INCOMING_API_KEYS', ', biuro_zawodow=secret-bz , no-equals-sign, =missing-app, empty_key=');
 
         try {
             $config = ApplicationApiKeyConfig::fromEnv();
 
             self::assertSame('biuro_zawodow', $config->resolveApplication('secret-bz'));
         } finally {
-            putenv('INCOMING_API_KEYS');
+            Env::restore('INCOMING_API_KEYS');
         }
     }
 }

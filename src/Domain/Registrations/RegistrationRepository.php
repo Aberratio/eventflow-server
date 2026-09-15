@@ -12,6 +12,7 @@ use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
 use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Support\QrCode;
 
 final class RegistrationRepository extends Repository
 {
@@ -440,7 +441,7 @@ SQL;
                 }
                 $attribute = self::BZ_SYNCABLE_COMPETITOR_FIELDS[$fieldKey];
                 $currentValue = $competitor[$attribute] ?? null;
-                $platformChangedAt = $this->parseTimestamp((string) ($competitor['updatedAt'] ?? ''));
+                $platformChangedAt = $this->parseDatabaseTimestamp((string) ($competitor['updatedAt'] ?? ''));
                 if ($platformChangedAt !== null && $platformChangedAt >= $changedAt) {
                     $rejected[$fieldKey] = ['reason' => 'stale', 'incomingValue' => $incomingValue, 'currentValue' => $currentValue];
                     continue;
@@ -493,7 +494,7 @@ SQL;
                 $field = $customFieldsByKey[$fieldKey];
                 $existingAnswer = $answerRepository->findByFieldAndRegistration((string) $field['id'], $registrationId);
                 $currentValue = $existingAnswer['valueText'] ?? $existingAnswer['valueJson'] ?? null;
-                $platformChangedAt = $existingAnswer !== null ? $this->parseTimestamp((string) ($existingAnswer['updatedAt'] ?? '')) : null;
+                $platformChangedAt = $existingAnswer !== null ? $this->parseDatabaseTimestamp((string) ($existingAnswer['updatedAt'] ?? '')) : null;
                 if ($platformChangedAt !== null && $platformChangedAt >= $changedAt) {
                     $rejected[$fieldKey] = ['reason' => 'stale', 'incomingValue' => $incomingValue, 'currentValue' => $currentValue];
                     continue;
@@ -554,6 +555,55 @@ SQL;
         }
         try {
             return new \DateTimeImmutable($value);
+        } catch (\Exception) {
+            return null;
+        }
+    }
+
+    /** Session offset of the database server against UTC, in seconds; asked once. */
+    private ?int $databaseUtcOffset = null;
+
+    /**
+     * Reads a timestamp that MySQL rendered, as the absolute moment it stands for.
+     *
+     * `parseTimestamp()` above is right for the columns this codebase writes itself
+     * (`registrations.updated_at` and friends are VARCHAR(64) holding DATE_ATOM, so
+     * they carry their own offset). It is wrong for a native TIMESTAMP column, which
+     * comes back as bare wall-clock in the *server's* timezone — `2026-09-16 01:12:52`
+     * with no offset — and which PHP would then read in its own.
+     *
+     * Those two timezones are not the same here and generally are not anywhere: PHP
+     * runs on `date.timezone = UTC` while MySQL's `time_zone` is `SYSTEM`, Europe/Warsaw
+     * on both this machine and production. Parsed naively, every native timestamp looks
+     * two hours into the future, so the LWW comparison below concluded that the platform
+     * had touched the row after any BZ edit made in the last two hours and rejected it
+     * as stale. That is a silent, wrong-direction data loss — BZ's edit is dropped and
+     * the caller is told the platform's value is newer — and it had gone unnoticed
+     * because the contract test covering it could not authenticate (see
+     * BzParticipantSyncContractTest::setUp()).
+     *
+     * TIMESTAMP columns are stored internally as UTC and converted on the way out, so
+     * the server's own offset is exactly what was applied and exactly what has to be
+     * undone. An incoming value that already carries an offset keeps it — the timezone
+     * argument only fills in what a bare string omits.
+     */
+    private function parseDatabaseTimestamp(string $value): ?\DateTimeImmutable
+    {
+        if ($value === '') {
+            return null;
+        }
+
+        if ($this->databaseUtcOffset === null) {
+            $this->databaseUtcOffset = (int) $this->pdo
+                ->query('SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW())')
+                ->fetchColumn();
+        }
+
+        $offset = $this->databaseUtcOffset;
+        $timezone = sprintf('%+03d:%02d', intdiv($offset, 3600), intdiv(abs($offset) % 3600, 60));
+
+        try {
+            return new \DateTimeImmutable($value, new \DateTimeZone($timezone));
         } catch (\Exception) {
             return null;
         }
@@ -1208,7 +1258,7 @@ SQL;
      */
     private function generateStartCode(): string
     {
-        return 'pqr_' . bin2hex(random_bytes(24));
+        return QrCode::startCode();
     }
 
     /**

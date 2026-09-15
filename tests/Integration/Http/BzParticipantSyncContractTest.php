@@ -10,6 +10,7 @@ use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldType;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
+use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
@@ -33,7 +34,9 @@ final class BzParticipantSyncContractTest extends HttpTestCase
 
     protected function setUp(): void
     {
-        putenv('INCOMING_API_KEYS=biuro_zawodow=' . self::API_KEY);
+        // Env::set, not putenv -- see BzParticipantsContractTest::setUp() for why
+        // the process environment cannot steer a key that `.env` also defines.
+        Env::set('INCOMING_API_KEYS', 'biuro_zawodow=' . self::API_KEY);
 
         parent::setUp();
 
@@ -47,7 +50,7 @@ final class BzParticipantSyncContractTest extends HttpTestCase
 
     protected function tearDown(): void
     {
-        putenv('INCOMING_API_KEYS');
+        Env::restore('INCOMING_API_KEYS');
 
         if (!isset($this->pdo, $this->prefix)) {
             return;

@@ -1,6 +1,5 @@
 /vendor/
-/.env
-/.env.stg
+/.env*
 /storage/uploads/
 /public/uploads/
 /.phpunit.cache/

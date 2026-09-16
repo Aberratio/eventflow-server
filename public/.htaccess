@@ -1,0 +1,28 @@
+# Front controller routing for the Slim application (Apache/mod_rewrite).
+# Mirrors the logic in router.php, which is only used by `php -S` (composer serve).
+
+Options -Indexes
+Options -MultiViews
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # If the app ever lives in a subdirectory instead of the domain root,
+    # uncomment and adjust the next line:
+    # RewriteBase /
+
+    # /uploads/* must always go through PHP so CorsMiddleware can add CORS headers.
+    RewriteCond %{REQUEST_URI} ^/uploads/
+    RewriteRule ^ index.php [QSA,L]
+
+    # Serve existing static files (CSS, JS, images, ...) directly.
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteRule ^ - [L]
+
+    # Everything else is handled by the Slim front controller.
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+# Never serve dotfiles (.env, .git, etc.) if they ever end up next to index.php.
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>

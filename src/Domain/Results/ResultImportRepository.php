@@ -32,7 +32,7 @@ headers, mapping, summary, uploaded_by AS uploadedBy, uploaded_at AS uploadedAt,
 SQL;
 
     private const ROW_COLUMNS = <<<'SQL'
-id, batch_id AS batchId, row_number AS rowNumber, raw_data AS rawData, mapped_data AS mappedData,
+id, batch_id AS batchId, `row_number` AS rowNumber, raw_data AS rawData, mapped_data AS mappedData,
 candidates, selected_registration_id AS selectedRegistrationId, selected_user_id AS selectedUserId,
 status, errors, warnings, ignore_row AS ignoreRow, updated_at AS updatedAt
 SQL;
@@ -115,7 +115,7 @@ SQL;
     /** @return array<int, array<string, mixed>> */
     public function rows(string $batchId): array
     {
-        $stmt = $this->pdo->prepare('SELECT ' . self::ROW_COLUMNS . ' FROM result_import_rows WHERE batch_id = :batchId ORDER BY row_number ASC');
+        $stmt = $this->pdo->prepare('SELECT ' . self::ROW_COLUMNS . ' FROM result_import_rows WHERE batch_id = :batchId ORDER BY `row_number` ASC');
         $stmt->execute(['batchId' => $batchId]);
         return array_map(fn (array $row): array => $this->hydrateRow($row), $stmt->fetchAll());
     }

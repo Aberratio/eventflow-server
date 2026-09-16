@@ -75,7 +75,7 @@ abstract class Repository
         $sql = sprintf(
             'INSERT INTO %s (%s) VALUES (%s)',
             $table,
-            implode(', ', $columns),
+            implode(', ', array_map(static fn (string $column): string => '`' . $column . '`', $columns)),
             implode(', ', $placeholders)
         );
 
@@ -91,7 +91,7 @@ abstract class Repository
             return;
         }
 
-        $assignments = array_map(static fn (string $column): string => "{$column} = :{$column}", array_keys($data));
+        $assignments = array_map(static fn (string $column): string => "`{$column}` = :{$column}", array_keys($data));
         $data['id'] = $id;
         $sql = sprintf('UPDATE %s SET %s WHERE id = :id', $table, implode(', ', $assignments));
 

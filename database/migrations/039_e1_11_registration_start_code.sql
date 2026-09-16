@@ -14,18 +14,25 @@
 -- bo to atomowy token, nie struktura.
 --
 -- Backfill: każdy Zapis sprzed tej migracji dostaje kod tak samo jak nowy —
--- `RANDOM_BYTES(24)` w SQL to ten sam algorytm (192 bity entropii z bezpiecznego
--- generatora), tylko wołany raz, wprost w bazie, zamiast przez PHP-owe
--- `random_bytes()` w create() — nie ma znaczenia skąd token pochodzi, tylko że
--- jest bezpiecznie losowy i pasuje do formatu BZ. Bez tego backfillu punkt 2
--- kryterium akceptacji ("nigdy nie ma Zapisu bez kodu") byłby złamany dla
--- każdego Zapisu utworzonego przed tym ticketem.
+-- dokładnie ten sam algorytm (`random_bytes(24)`, 192 bity entropii z
+-- bezpiecznego generatora) co `RegistrationRepository::create()`, tylko wołany
+-- raz, hurtem. Nie ma znaczenia skąd token pochodzi, tylko że jest bezpiecznie
+-- losowy i pasuje do formatu BZ. Bez tego backfillu punkt 2 kryterium
+-- akceptacji ("nigdy nie ma Zapisu bez kodu") byłby złamany dla każdego Zapisu
+-- utworzonego przed tym ticketem.
 ALTER TABLE registrations
   ADD COLUMN IF NOT EXISTS qr_code VARCHAR(52) NULL AFTER bib_number;
 
-UPDATE registrations
-SET qr_code = CONCAT('pqr_', LOWER(HEX(RANDOM_BYTES(24))))
-WHERE qr_code IS NULL;
+-- Backfill liczony w PHP, nie w SQL — pierwotnie stało tu
+-- `UPDATE registrations SET qr_code = CONCAT('pqr_', LOWER(HEX(RANDOM_BYTES(24))))`,
+-- ale `RANDOM_BYTES()` to funkcja MySQL 8.0, a MariaDB dostała ją dopiero w 11.3;
+-- ani development (10.4), ani produkcja (10.6) jej nie mają, więc ten statement był
+-- twardym błędem 1305, który wywracał cały przebieg migracji już tutaj i nie
+-- dopuszczał do wykonania 040+. Zamiana na przenośny SQL (`SHA2(UUID(), RAND())`
+-- itp.) świadomie odrzucona: to token, którego jedyną ochroną jest nieodgadywalność,
+-- a `UUID()` (v1 — czas + MAC) i `RAND()` nie są bezpiecznymi generatorami.
+-- Musi wykonać się dokładnie tutaj: po dodaniu kolumny, przed MODIFY ... NOT NULL.
+-- @php: QrCodeBackfill::registrations
 
 ALTER TABLE registrations
   MODIFY qr_code VARCHAR(52) NOT NULL;

@@ -37,20 +37,17 @@ CREATE TABLE IF NOT EXISTS care_relations (
 
 -- Backfill: każde istniejące Konto dostaje własny profil Zawodnika (siebie samego),
 -- tak żeby dotychczasowe rejestracje i upoważnienia miały do czego się podpiąć.
-INSERT INTO competitors (id, first_name, last_name, birth_date, gender, email, phone, club, user_id, created_at)
-SELECT
-  UUID(),
-  TRIM(SUBSTRING_INDEX(u.name, ' ', 1)),
-  TRIM(CASE WHEN LOCATE(' ', u.name) > 0 THEN SUBSTRING(u.name, LOCATE(' ', u.name) + 1) ELSE '' END),
-  u.birth_date,
-  u.gender,
-  u.email,
-  u.phone,
-  u.club,
-  u.id,
-  u.created_at
-FROM users u
-WHERE NOT EXISTS (SELECT 1 FROM competitors c WHERE c.user_id = u.id);
+--
+-- Liczony w PHP, nie w SQL — stał tu zwykły INSERT ... SELECT i był poprawny dokładnie
+-- raz: przy pierwszym zastosowaniu 027, kiedy `competitors.identity_code` (E1.12,
+-- migracja 040) jeszcze nie istniał. Migracje nie mają rejestru i wykonują się od nowa
+-- przy każdym `composer migrate`, więc od pierwszego przebiegu po 040 ten sam statement
+-- wstawiał do tabeli, w której `identity_code` jest NOT NULL bez DEFAULT i UNIQUE —
+-- a że ta instalacja MariaDB nie ma STRICT_TRANS_TABLES, pominięta kolumna nie była
+-- błędem, tylko cichym `''` w każdym wierszu i błędem 1062 na drugim z nich. Dopisanie
+-- kolumny tutaj nie wchodzi w grę: na czystej bazie 027 wykonuje się trzynaście plików
+-- przed jej powstaniem, więc krok musi móc *zapytać*, czy już jest.
+-- @php: CompetitorProfileBackfill::run
 
 -- Migracja participant_authorizations (Konto -> Konto) do care_relations (Konto -> Zawodnik).
 -- Pierwotna semantyka: grantor = osoba, która ma być zapisywana; grantee = osoba

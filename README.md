@@ -13,9 +13,17 @@ PHP 8.2 REST API for the React/Vite frontend. The API is intentionally shaped to
 
 ```sh
 composer install
+```
+```sh
 copy .env.example .env
+```
+```sh
 composer migrate
+```
+```sh
 composer seed
+```
+```sh
 composer serve
 ```
 
@@ -37,10 +45,13 @@ inserted, applies migrations, and loads a fresh set. Anything you created yourse
 left alone, so it is safe to re-run. `composer seed:fresh` is the old behaviour — drop
 every table, migrate, seed — and only works when `APP_ENV=local`.
 
+### Sanity checks
 Quick sanity checks after starting the server:
 
 ```sh
 curl http://localhost:8081/api/v1/health
+```
+```sh
 curl http://localhost:8081/api/v1/events
 ```
 

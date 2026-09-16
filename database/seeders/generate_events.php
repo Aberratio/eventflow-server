@@ -17,6 +17,10 @@
 
 declare(strict_types=1);
 
+require __DIR__ . '/../../vendor/autoload.php';
+
+use ZmierzymyCzas\Support\QrCode;
+
 // ---------------------------------------------------------------------------
 // Konfiguracja
 // ---------------------------------------------------------------------------
@@ -74,6 +78,18 @@ function uuid(string $prefix = ''): string
         substr($hex, 20, 12)
     );
     return $prefix ? "{$prefix}-{$uuid}" : $uuid;
+}
+
+/**
+ * Kod startowy (E1.11) — ten sam kształt, co `RegistrationRepository::generateStartCode()`.
+ *
+ * Fixtury muszą go podawać wprost: `registrations.qr_code` jest NOT NULL bez DEFAULT
+ * i UNIQUE (migracja 039), a MariaDB bez STRICT_TRANS_TABLES podstawiłaby za brakującą
+ * kolumnę pusty string — ten sam dla każdego wiersza, czyli 1062 na drugim z nich.
+ */
+function startCode(): string
+{
+    return QrCode::startCode();
 }
 
 function sq(mixed $v): string
@@ -279,13 +295,14 @@ function buildPastEvent(
         $timeS = generateRunTime($dist['length'], $dist['pace_mean'], $dist['pace_std']);
 
         $registrationRows[] = sprintf(
-            "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'confirmed',%s)",
+            "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'confirmed',%s,%s)",
             sq($regId), sq($eventId), sq($eventName),
             sq($p['id']), sq($p['name']), sq($p['email']),
             sq($dist['id']), sq($dist['name']),
             sq($cat),
             sq($regAt),
-            sq($bibNum)
+            sq($bibNum),
+            sq(startCode())
         );
 
         // Rozliczenie (E0.3): "Oplata startowa" line item replaces registrations.price_paid.
@@ -338,7 +355,7 @@ function buildPastEvent(
         }
     }
 
-    $sql .= "INSERT INTO registrations (id,event_id,event_name,user_id,user_name,user_email,distance_id,distance_name,category,registered_at,status,bib_number) VALUES\n";
+    $sql .= "INSERT INTO registrations (id,event_id,event_name,user_id,user_name,user_email,distance_id,distance_name,category,registered_at,status,bib_number,qr_code) VALUES\n";
     $sql .= implode(",\n", $registrationRows) . ";\n\n";
 
     $sql .= "INSERT INTO registration_settlement_items (id,registration_id,name,basis,amount,frozen_at,sort_order) VALUES\n";
@@ -482,14 +499,15 @@ function buildCurrentEvent(): array
             $status = $paid ? 'confirmed' : 'pending';
 
             $regRows[] = sprintf(
-                "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 sq($regId), sq($eventId), sq($eventName),
                 sq($p['id']), sq($p['name']), sq($p['email']),
                 sq($batch['dist']['id']), sq($batch['dist']['name']),
                 sq($cat),
                 sq($regAt),
                 sq($status),
-                sq($bibNum)
+                sq($bibNum),
+                sq(startCode())
             );
 
             // Rozliczenie (E0.3): replaces registrations.price_paid.
@@ -513,7 +531,7 @@ function buildCurrentEvent(): array
         }
     }
 
-    $sql .= "INSERT INTO registrations (id,event_id,event_name,user_id,user_name,user_email,distance_id,distance_name,category,registered_at,status,bib_number) VALUES\n";
+    $sql .= "INSERT INTO registrations (id,event_id,event_name,user_id,user_name,user_email,distance_id,distance_name,category,registered_at,status,bib_number,qr_code) VALUES\n";
     $sql .= implode(",\n", $regRows) . ";\n\n";
 
     $sql .= "INSERT INTO registration_settlement_items (id,registration_id,name,basis,amount,frozen_at,sort_order) VALUES\n";

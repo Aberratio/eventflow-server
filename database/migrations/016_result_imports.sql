@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS result_import_batches (
 CREATE TABLE IF NOT EXISTS result_import_rows (
   id VARCHAR(36) PRIMARY KEY,
   batch_id VARCHAR(36) NOT NULL,
-  row_number INT NOT NULL,
+  `row_number` INT NOT NULL,
   raw_data JSON NOT NULL,
   mapped_data JSON NULL,
   candidates JSON NULL,
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS result_import_rows (
   warnings JSON NULL,
   ignore_row TINYINT(1) NOT NULL DEFAULT 0,
   updated_at VARCHAR(64) NOT NULL,
-  UNIQUE KEY uniq_result_import_row (batch_id, row_number),
+  UNIQUE KEY uniq_result_import_row (batch_id, `row_number`),
   INDEX idx_result_import_rows_batch (batch_id),
   INDEX idx_result_import_rows_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

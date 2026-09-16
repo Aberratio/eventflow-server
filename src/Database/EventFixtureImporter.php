@@ -7,6 +7,7 @@ namespace ZmierzymyCzas\Database;
 use PDO;
 use RuntimeException;
 use ZmierzymyCzas\Domain\Events\EventRepository;
+use ZmierzymyCzas\Support\QrCode;
 use ZmierzymyCzas\Support\Uuid;
 
 /**
@@ -425,6 +426,13 @@ final class EventFixtureImporter
                 'category' => (string) ($registration['category'] ?? ''),
                 'registered_at' => $registeredAt,
                 'status' => (string) ($registration['status'] ?? 'pending'),
+                // E1.11: kod startowy, tak jak generuje go RegistrationRepository::create().
+                // Generowany tu, a nie brany z fixtury: `qr_code` jest NOT NULL bez DEFAULT
+                // i UNIQUE, a ten import biegnie bez STRICT_TRANS_TABLES, gdzie pominiecie
+                // kolumny to nie blad, tylko ciche '' w kazdym wierszu -- czyli 1062 na
+                // drugim Zapisie. Fixtura i tak nie moglaby go nosic sensownie: staly
+                // literal w events.json bylby tym samym tokenem w kazdej bazie.
+                'qr_code' => QrCode::startCode(),
                 'bib_number' => $registration['bibNumber'] ?? null,
                 'team_name' => $registration['teamName'] ?? null,
                 'discount_code' => $registration['discountCode'] ?? null,

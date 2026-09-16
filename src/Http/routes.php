@@ -196,6 +196,40 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
 
     $body = static fn (Request $request): array => is_array($request->getParsedBody()) ? $request->getParsedBody() : [];
     $query = static fn (Request $request): array => $request->getQueryParams();
+    // Shared validation for POST/PATCH /shop/products. On create ($partial =
+    // false) every required field must be present and non-empty; on update
+    // ($partial = true) a field is only checked when the caller actually
+    // sent it, so partial PATCH payloads keep working.
+    $validateShopProduct = static function (array $payload, bool $partial): ?string {
+        $required = [
+            'name' => 'Name',
+            'slug' => 'Slug',
+            'description' => 'Description',
+            'category' => 'Category',
+            'brand' => 'Brand',
+            'imageUrl' => 'Image URL',
+        ];
+        foreach ($required as $field => $label) {
+            if ($partial && !array_key_exists($field, $payload)) {
+                continue;
+            }
+            if (trim((string) ($payload[$field] ?? '')) === '') {
+                return $label . ' is required';
+            }
+        }
+        if (!$partial && !array_key_exists('price', $payload)) {
+            return 'Price is required';
+        }
+        if (array_key_exists('price', $payload)) {
+            if (!is_numeric($payload['price'])) {
+                return 'Price must be numeric';
+            }
+            if ((float) $payload['price'] < 0) {
+                return 'Price must not be negative';
+            }
+        }
+        return null;
+    };
     $adminRoles = ['admin', 'superadmin'];
     $staffRoles = ['admin', 'superadmin', 'moderator'];
     $eventManagerRoles = ['organizer', 'admin', 'superadmin', 'moderator'];
@@ -332,7 +366,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
             'status' => 'ok',
             'env' => (string) Env::get('APP_ENV', ''),
@@ -1999,15 +2033,25 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $shop->categories($includeArchived));
         });
         $api->post('/shop/categories', function (Request $request, Response $response) use ($shop, $body, $logActivity) {
+            $payload = $body($request);
+            if (trim((string) ($payload['name'] ?? '')) === '') {
+                return JsonResponder::error($response, 'validation_error', 'Name is required', 422);
+            }
+
             $auth = (array) $request->getAttribute('auth');
-            $created = $shop->createCategory($body($request));
+            $created = $shop->createCategory($payload);
             $logActivity($auth, 'shop_category_created', 'Utworzono kategorię sklepu', 'shopCategory', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
             return JsonResponder::ok($response, $created, 'Category created', 201);
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));
         $api->patch('/shop/categories/{id}', function (Request $request, Response $response, array $args) use ($shop, $body, $logActivity) {
+            $payload = $body($request);
+            if (array_key_exists('name', $payload) && trim((string) $payload['name']) === '') {
+                return JsonResponder::error($response, 'validation_error', 'Name is required', 422);
+            }
+
             $auth = (array) $request->getAttribute('auth');
-            $updated = $shop->updateCategory($args['id'], $body($request));
+            $updated = $shop->updateCategory($args['id'], $payload);
             $logActivity($auth, 'shop_category_updated', 'Zaktualizowano kategorię sklepu', 'shopCategory', (string) $args['id'], (string) ($updated['name'] ?? ''));
             return JsonResponder::ok($response, $updated);
         })
@@ -2127,18 +2171,39 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
         });
         $api->get('/shop/products/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->findProductBySlug($args['slug'])));
-        $api->get('/shop/products/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->findProduct($args['id'])));
-        $api->post('/shop/products', function (Request $request, Response $response) use ($shop, $body, $logActivity) {
+        $api->get('/shop/products/{id}', function (Request $request, Response $response, array $args) use ($shop, $optionalAuth, $isStaffRole) {
+            $product = $shop->findProduct((string) $args['id']);
+            // Archived products are staff-only, same visibility rule as the
+            // catalog listing's `includeArchived` filter above — a direct ID
+            // lookup must not let the public route around it.
+            if ($product !== null && ($product['status'] ?? 'active') !== 'active' && !$isStaffRole((string) ($optionalAuth($request)['role'] ?? ''))) {
+                return JsonResponder::ok($response, null);
+            }
+            return JsonResponder::ok($response, $product);
+        });
+        $api->post('/shop/products', function (Request $request, Response $response) use ($shop, $body, $logActivity, $validateShopProduct) {
+            $payload = $body($request);
+            $error = $validateShopProduct($payload, false);
+            if ($error !== null) {
+                return JsonResponder::error($response, 'validation_error', $error, 422);
+            }
+
             $auth = (array) $request->getAttribute('auth');
-            $created = $shop->createProduct($body($request));
+            $created = $shop->createProduct($payload);
             $logActivity($auth, 'shop_product_created', 'Utworzono produkt', 'shopProduct', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
             return JsonResponder::ok($response, $created, 'Product created', 201);
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->patch('/shop/products/{id}', function (Request $request, Response $response, array $args) use ($shop, $body, $logActivity) {
+        $api->patch('/shop/products/{id}', function (Request $request, Response $response, array $args) use ($shop, $body, $logActivity, $validateShopProduct) {
+            $payload = $body($request);
+            $error = $validateShopProduct($payload, true);
+            if ($error !== null) {
+                return JsonResponder::error($response, 'validation_error', $error, 422);
+            }
+
             $auth = (array) $request->getAttribute('auth');
             $existing = $shop->findProduct((string) $args['id']);
-            $updated = $shop->updateProduct($args['id'], $body($request));
+            $updated = $shop->updateProduct($args['id'], $payload);
             $logActivity($auth, 'shop_product_updated', 'Zaktualizowano produkt', 'shopProduct', (string) $args['id'], (string) ($updated['name'] ?? $existing['name'] ?? ''));
             return JsonResponder::ok($response, $updated);
         })

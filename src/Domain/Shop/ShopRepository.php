@@ -44,8 +44,15 @@ SQL;
             $params['maxPrice'] = $filters['maxPrice'];
         }
         if (!empty($filters['search'])) {
-            $where[] = '(name LIKE :search OR description LIKE :search OR brand LIKE :search)';
-            $params['search'] = '%' . $filters['search'] . '%';
+            // Native prepares (PDO::ATTR_EMULATE_PREPARES => false, see
+            // Connection) reject a named placeholder used more than once in
+            // the same query — each occurrence needs its own binding even
+            // though the value is identical.
+            $where[] = '(name LIKE :search1 OR description LIKE :search2 OR brand LIKE :search3)';
+            $searchTerm = '%' . $filters['search'] . '%';
+            $params['search1'] = $searchTerm;
+            $params['search2'] = $searchTerm;
+            $params['search3'] = $searchTerm;
         }
 
         $whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';

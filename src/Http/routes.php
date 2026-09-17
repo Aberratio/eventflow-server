@@ -175,7 +175,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $admin = new AdminRepository($pdo);
     $backgrounds = new EventBackgroundRepository($pdo);
     $insurance = new InsuranceRepository($pdo);
-    $orders = new OrderRepository($pdo);
+    $orders = new OrderRepository($pdo, $shop);
     $certificates = new CertificateRepository($pdo);
     $care = new CareRepository($pdo);
     // E1.13: "Pozycja formularza" — jeden byt dla pól systemowych i własnych.
@@ -2129,7 +2129,35 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->get('/shop/orders/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $orders->find($args['id'])))
             ->add(new AuthMiddleware($jwt, $staffRoles));
         $api->post('/shop/orders', function (Request $request, Response $response) use ($orders, $users, $body, $mailer) {
-            $created = $orders->create($body($request));
+            // E5.2: userId is never taken from the request body — it is always
+            // the authenticated caller (auth.sub), same as e.g. the
+            // registrations route above derives its own userId this way.
+            $auth = (array) $request->getAttribute('auth');
+            $callerId = (string) ($auth['sub'] ?? '');
+            try {
+                $created = $orders->create($body($request), $callerId);
+            } catch (RuntimeException $e) {
+                // E5.2: mirrors the registration_capacity_exceeded handling above —
+                // a nonexistent/archived product or an unrecognized delivery/payment
+                // method is a problem with the request itself (422), while stock
+                // running out is a state conflict with what's actually left (409).
+                $validationErrors = [
+                    'order_invalid_product' => 'One or more products in this order are invalid or no longer available.',
+                    'order_invalid_delivery_method' => 'Selected delivery method is not recognized.',
+                    'order_invalid_payment_method' => 'Selected payment method is not recognized.',
+                ];
+                if (isset($validationErrors[$e->getMessage()])) {
+                    return JsonResponder::error($response, $e->getMessage(), $validationErrors[$e->getMessage()], 422);
+                }
+                $conflictErrors = [
+                    'order_out_of_stock' => 'One or more products in this order are out of stock.',
+                    'order_insufficient_stock' => 'Requested quantity exceeds available stock for one or more products.',
+                ];
+                if (isset($conflictErrors[$e->getMessage()])) {
+                    return JsonResponder::error($response, $e->getMessage(), $conflictErrors[$e->getMessage()], 409);
+                }
+                throw $e;
+            }
             // E1.10 mail #12 ("Zamówienie sklepowe: potwierdzenie i zmiana
             // statusu", 17 §1 row 12) — systemic, the shop belongs to the
             // platform, not an organizer (17 §5).

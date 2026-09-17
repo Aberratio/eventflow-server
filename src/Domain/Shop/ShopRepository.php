@@ -85,6 +85,22 @@ SQL;
         return $row ? $this->hydrateProduct($row) : null;
     }
 
+    /**
+     * E5.2: locks a shop_products row (SELECT ... FOR UPDATE) for the rest of
+     * the caller's transaction — mirrors
+     * RegistrationRepository::lockDistanceForRegistration() for the analogous
+     * overselling race, here on a shop order's stock decrement instead of a
+     * Dystans's registeredCount. Must only be called inside an already-open
+     * PDO transaction (OrderRepository::create()).
+     */
+    public function lockProductForOrder(string $id): ?array
+    {
+        $stmt = $this->pdo->prepare('SELECT ' . self::PRODUCT_COLUMNS . ' FROM shop_products WHERE id = :id FOR UPDATE');
+        $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch();
+        return $row ? $this->hydrateProduct($row) : null;
+    }
+
     public function findProductBySlug(string $slug): ?array
     {
         $stmt = $this->pdo->prepare("SELECT " . self::PRODUCT_COLUMNS . " FROM shop_products WHERE slug = :slug AND status = 'active'");

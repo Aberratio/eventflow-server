@@ -2079,6 +2079,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         // entries, and an admin screen. Left as-is until the payment work lands.
         $api->get('/shop/delivery-methods', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
             ['id' => 'courier', 'name' => 'Kurier', 'price' => 15.99, 'estimatedDays' => '1-2 dni'],
+            ['id' => 'paczkomat', 'name' => 'Paczkomat', 'price' => 12.99, 'estimatedDays' => '1-2 dni'],
             ['id' => 'pickup', 'name' => 'Odbior osobisty', 'price' => 0, 'estimatedDays' => 'w dniu zawodow'],
         ]));
         $api->get('/shop/payment-methods', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
@@ -2145,6 +2146,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                     'order_invalid_product' => 'One or more products in this order are invalid or no longer available.',
                     'order_invalid_delivery_method' => 'Selected delivery method is not recognized.',
                     'order_invalid_payment_method' => 'Selected payment method is not recognized.',
+                    'order_invalid_address' => 'A complete shipping address is required for this delivery method.',
                 ];
                 if (isset($validationErrors[$e->getMessage()])) {
                     return JsonResponder::error($response, $e->getMessage(), $validationErrors[$e->getMessage()], 422);

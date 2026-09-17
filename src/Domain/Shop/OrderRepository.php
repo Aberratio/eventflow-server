@@ -22,8 +22,21 @@ final class OrderRepository extends Repository
      */
     private const DELIVERY_METHODS = [
         'courier' => ['id' => 'courier', 'name' => 'Kurier', 'price' => 15.99, 'estimatedDays' => '1-2 dni'],
+        'paczkomat' => ['id' => 'paczkomat', 'name' => 'Paczkomat', 'price' => 12.99, 'estimatedDays' => '1-2 dni'],
         'pickup' => ['id' => 'pickup', 'name' => 'Odbior osobisty', 'price' => 0.0, 'estimatedDays' => 'w dniu zawodow'],
     ];
+
+    /**
+     * E5.3: the two delivery methods that ship to a physical shipping
+     * address (spec issue 16 §5 — "kurier/paczkomat (adres z koszyka)").
+     * `pickup` (odbior osobisty w Biurze Zawodow, ticket E5.4) never needs
+     * one, and an organizer-package purchase (a digital product — spec §5,
+     * "nie przechodzi przez zadna z nich") isn't wired to a delivery method
+     * at all yet, so this check is deliberately keyed off the *selected
+     * delivery method*, not the product type: it only ever fires for an
+     * order that actually chose courier/paczkomat, never unconditionally.
+     */
+    private const DELIVERY_METHODS_REQUIRING_ADDRESS = ['courier', 'paczkomat'];
 
     /** @see self::DELIVERY_METHODS — same story, mirrors GET /shop/payment-methods. */
     private const PAYMENT_METHODS = [
@@ -113,6 +126,10 @@ final class OrderRepository extends Repository
         $paymentMethod = $this->resolveMethod((array) ($data['paymentMethod'] ?? []), self::PAYMENT_METHODS, 'order_invalid_payment_method');
         $deliveryPrice = (float) $deliveryMethod['price'];
         $paymentSurcharge = (float) ($paymentMethod['surcharge'] ?? 0);
+
+        if (in_array($deliveryMethod['id'], self::DELIVERY_METHODS_REQUIRING_ADDRESS, true)) {
+            $this->validateShippingAddress((array) ($data['shippingAddress'] ?? []), (string) $deliveryMethod['id']);
+        }
 
         $requestedItems = array_map(static fn ($item): array => (array) $item, (array) ($data['items'] ?? []));
 
@@ -210,6 +227,31 @@ final class OrderRepository extends Repository
         }
 
         return $catalog[$methodId];
+    }
+
+    /**
+     * E5.3: courier/paczkomat require a shipping address in the same shape
+     * as the client's `ShopOrderAddress` (fullName/street/city/postalCode,
+     * optional phone; paczkomatId in place of street/city for a paczkomat
+     * pickup point). Mirrors the client's own mirrored validation — this is
+     * the authoritative check, the client one is UX only.
+     *
+     * @param array<string, mixed> $address
+     */
+    private function validateShippingAddress(array $address, string $deliveryMethodId): void
+    {
+        $required = ['fullName', 'street', 'city', 'postalCode'];
+        foreach ($required as $field) {
+            if (trim((string) ($address[$field] ?? '')) === '') {
+                throw new \RuntimeException('order_invalid_address');
+            }
+        }
+        if (!preg_match('/^\d{2}-\d{3}$/', (string) $address['postalCode'])) {
+            throw new \RuntimeException('order_invalid_address');
+        }
+        if ($deliveryMethodId === 'paczkomat' && trim((string) ($address['paczkomatId'] ?? '')) === '') {
+            throw new \RuntimeException('order_invalid_address');
+        }
     }
 
     /**

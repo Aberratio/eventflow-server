@@ -211,6 +211,180 @@ final class ShopOrderContractTest extends HttpTestCase
         self::assertSame(0, $this->countOrderItemsForProduct($product['id']));
     }
 
+    public function testCourierOrderWithoutShippingAddressIsRejected(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        unset($payload['shippingAddress']); // courier requires one.
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('order_invalid_address', $this->json($response)['error']['code']);
+        self::assertSame(0, $this->countOrdersForBuyer());
+    }
+
+    public function testCourierOrderWithIncompleteShippingAddressIsRejected(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['shippingAddress'] = [
+            'fullName' => 'Jan Kowalski',
+            'street' => '',
+            'city' => 'Warszawa',
+            'postalCode' => '00-001',
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('order_invalid_address', $this->json($response)['error']['code']);
+        self::assertSame(0, $this->countOrdersForBuyer());
+    }
+
+    public function testCourierOrderWithMalformedPostalCodeIsRejected(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['shippingAddress'] = [
+            'fullName' => 'Jan Kowalski',
+            'street' => 'Testowa 1',
+            'city' => 'Warszawa',
+            'postalCode' => '00001',
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('order_invalid_address', $this->json($response)['error']['code']);
+        self::assertSame(0, $this->countOrdersForBuyer());
+    }
+
+    public function testCourierOrderWithValidAddressIsPersistedAndReadableBack(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['shippingAddress'] = [
+            'fullName' => 'Jan Kowalski',
+            'street' => 'Testowa 1',
+            'city' => 'Warszawa',
+            'postalCode' => '00-001',
+            'phone' => '600123456',
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+        $created = $this->json($response)['data'];
+        self::assertSame('Jan Kowalski', $created['shippingAddress']['fullName']);
+        self::assertSame('00-001', $created['shippingAddress']['postalCode']);
+
+        $fetched = $this->json($this->request(
+            'GET',
+            '/api/v1/shop/orders/' . $created['id'],
+            [],
+            $this->bearer($this->buyer['id'], 'admin', $this->buyer['email'])
+        ))['data'];
+        self::assertSame('Testowa 1', $fetched['shippingAddress']['street']);
+    }
+
+    public function testPaczkomatOrderWithoutPaczkomatIdIsRejected(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['deliveryMethod'] = ['id' => 'paczkomat', 'name' => 'Paczkomat', 'price' => 999999];
+        $payload['shippingAddress'] = [
+            'fullName' => 'Jan Kowalski',
+            'street' => 'Testowa 1',
+            'city' => 'Warszawa',
+            'postalCode' => '00-001',
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('order_invalid_address', $this->json($response)['error']['code']);
+        self::assertSame(0, $this->countOrdersForBuyer());
+    }
+
+    public function testPaczkomatOrderWithPaczkomatIdIsAccepted(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['deliveryMethod'] = ['id' => 'paczkomat', 'name' => 'Paczkomat', 'price' => 999999];
+        $payload['shippingAddress'] = [
+            'fullName' => 'Jan Kowalski',
+            'street' => 'Testowa 1',
+            'city' => 'Warszawa',
+            'postalCode' => '00-001',
+            'paczkomatId' => 'WAW01A',
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+        $created = $this->json($response)['data'];
+        self::assertSame('paczkomat', $created['deliveryMethod']['id']);
+        // real catalog price (12.99), not the forged 999999.
+        self::assertSame(52.99, (float) $created['totalPrice']);
+        self::assertSame('WAW01A', $created['shippingAddress']['paczkomatId']);
+    }
+
+    public function testPickupOrderNeverRequiresAShippingAddress(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['deliveryMethod'] = ['id' => 'pickup', 'name' => 'Odbior osobisty', 'price' => 0];
+        // no shippingAddress at all.
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('pickup', $this->json($response)['data']['deliveryMethod']['id']);
+    }
+
     private function countOrdersForBuyer(): int
     {
         $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM shop_orders WHERE user_id = :id');
@@ -246,6 +420,17 @@ final class ShopOrderContractTest extends HttpTestCase
             ],
             'deliveryMethod' => ['id' => 'courier', 'name' => 'Kurier', 'price' => 999999],
             'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+            // E5.3: courier requires a shipping address — pre-existing tests
+            // in this file that only care about pricing/stock/product
+            // validation get a valid one by default so they don't have to
+            // know about it; the address-specific tests below override or
+            // unset this key explicitly.
+            'shippingAddress' => [
+                'fullName' => 'Jan Kowalski',
+                'street' => 'Testowa 1',
+                'city' => 'Warszawa',
+                'postalCode' => '00-001',
+            ],
         ];
     }
 

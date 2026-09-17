@@ -154,10 +154,74 @@ final class ShopOrderContractTest extends HttpTestCase
         self::assertSame(0, $this->countOrdersForBuyer());
     }
 
+    public function testOrderingAnOutOfStockProductIsRejectedRegardlessOfStockCount(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'inStock' => false, 'stockCount' => 10]);
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $this->orderPayload($product, 1),
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(409, $response->getStatusCode());
+        self::assertSame('order_out_of_stock', $this->json($response)['error']['code']);
+        self::assertSame(0, $this->countOrdersForBuyer());
+        self::assertSame(0, $this->countOrderItemsForProduct($product['id']));
+    }
+
+    public function testOrderingWithAnUnrecognizedDeliveryMethodIsRejected(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['deliveryMethod'] = ['id' => 'teleport', 'name' => 'Teleport', 'price' => 0];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('order_invalid_delivery_method', $this->json($response)['error']['code']);
+        self::assertSame(0, $this->countOrdersForBuyer());
+        self::assertSame(0, $this->countOrderItemsForProduct($product['id']));
+    }
+
+    public function testOrderingWithAnUnrecognizedPaymentMethodIsRejected(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['paymentMethod'] = ['id' => 'crypto', 'name' => 'Crypto'];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('order_invalid_payment_method', $this->json($response)['error']['code']);
+        self::assertSame(0, $this->countOrdersForBuyer());
+        self::assertSame(0, $this->countOrderItemsForProduct($product['id']));
+    }
+
     private function countOrdersForBuyer(): int
     {
         $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM shop_orders WHERE user_id = :id');
         $stmt->execute(['id' => $this->buyer['id']]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    private function countOrderItemsForProduct(string $productId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM shop_order_items WHERE product_id = :id');
+        $stmt->execute(['id' => $productId]);
         return (int) $stmt->fetchColumn();
     }
 

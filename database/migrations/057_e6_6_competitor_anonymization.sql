@@ -1,0 +1,33 @@
+-- E6.6 (issue 15 §6, "Ranking: publiczny, z respektowaniem anonimizacji"):
+-- the anonymization flag itself.
+--
+-- Investigation before writing this ticket's ranking code found that
+-- "anonymization" (ticket 10's concept, referenced here only because this
+-- ticket's own title commits to respecting it) is currently VESTIGIAL:
+-- FormFieldCatalog seeds an `anonymization` system form-field position
+-- ("Anonimizacja", Nie/Pokaz), but RegistrationRepository::attachPublicFormFields()
+-- has an explicit dev comment confirming there is no backing column anywhere
+-- and the seeded position simply resolves to null. Building a ranking that
+-- claims to "respect anonimizacje" against a field that can never be true
+-- would make this ticket's own stated requirement false.
+--
+-- Deliberately minimal, scoped fix: a single boolean on `competitors` (the
+-- Zawodnik profile — anonymization is a property of the competitor, not of
+-- any one Zapis/Konto, matching how the spec frames it: "Zawodnik z aktywna
+-- anonimizacja"). Defaults to false so no existing profile changes behavior.
+-- No new table, no history of past states — mirrors identity_code's own
+-- "no status, just overwrite" precedent (migration 040) rather than
+-- inventing a bigger mechanism ticket 10 hasn't asked for yet.
+--
+-- Out of scope, deliberately (see E6.6 report): retrofitting every existing
+-- public read (publicStartList(), ResultRepository's public results/team
+-- results) to honor this flag is ticket 10's territory. This migration only
+-- adds the column; E6.6's own ranking endpoint is the sole consumer wired up
+-- in this ticket (plus the trivial 1-2 line wiring into the two existing
+-- public reads noted in the report, once the helper existed anyway).
+--
+-- Migrations have no ledger and run on every boot (see Migrator.php) —
+-- ADD COLUMN IF NOT EXISTS is safe to repeat.
+
+ALTER TABLE competitors
+  ADD COLUMN IF NOT EXISTS is_anonymized TINYINT(1) NOT NULL DEFAULT 0 AFTER identity_code;

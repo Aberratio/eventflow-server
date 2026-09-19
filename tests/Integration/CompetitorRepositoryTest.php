@@ -98,4 +98,38 @@ final class CompetitorRepositoryTest extends TestCase
     {
         self::assertNull($this->competitors->regenerateIdentityCode('does-not-exist'));
     }
+
+    /**
+     * E6.6 (issue 15 §6): the anonymization flag itself — defaults to false
+     * (an existing profile's behavior never changes on its own), and the
+     * self-service toggle flips it in either direction, is persisted, and
+     * touches nothing else on the profile.
+     */
+    public function testNewCompetitorDefaultsToNotAnonymized(): void
+    {
+        $competitor = $this->competitors->create(['firstName' => 'Ela', 'lastName' => $this->namePrefix]);
+
+        self::assertFalse((bool) $competitor['isAnonymized']);
+    }
+
+    public function testSetAnonymizationTogglesAndPersists(): void
+    {
+        $competitor = $this->competitors->create(['firstName' => 'Fela', 'lastName' => $this->namePrefix]);
+
+        $anonymized = $this->competitors->setAnonymization($competitor['id'], true);
+        self::assertNotNull($anonymized);
+        self::assertTrue((bool) $anonymized['isAnonymized']);
+        self::assertSame($competitor['firstName'], $anonymized['firstName']);
+
+        $found = $this->competitors->find($competitor['id']);
+        self::assertTrue((bool) $found['isAnonymized']);
+
+        $unAnonymized = $this->competitors->setAnonymization($competitor['id'], false);
+        self::assertFalse((bool) $unAnonymized['isAnonymized']);
+    }
+
+    public function testSetAnonymizationReturnsNullForUnknownCompetitor(): void
+    {
+        self::assertNull($this->competitors->setAnonymization('does-not-exist', true));
+    }
 }

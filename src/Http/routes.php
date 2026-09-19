@@ -17,6 +17,7 @@ use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxService;
 use ZmierzymyCzas\Domain\Bz\Http\CurlHttpClient as BzCurlHttpClient;
 use ZmierzymyCzas\Domain\Challenges\ChallengePointsSettingsRepository;
 use ZmierzymyCzas\Domain\Challenges\ChallengePointThresholdScorer;
+use ZmierzymyCzas\Domain\Challenges\ChallengeRankingCalculator;
 use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
 use ZmierzymyCzas\Domain\Cms\InfoPageRepository;
 use ZmierzymyCzas\Domain\Cms\PartnerRepository;
@@ -148,6 +149,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $challenges = new ChallengeRepository($pdo);
     $challengePointsSettings = new ChallengePointsSettingsRepository($pdo);
     $challengePointThresholdScorer = new ChallengePointThresholdScorer($pdo, $challengePointsSettings);
+    // E6.6 (issue 15 §6): shared ranking collaborator for both the Wyzwanie
+    // ranking endpoint and the Series ranking endpoint below.
+    $challengeRanking = new ChallengeRankingCalculator($challenges, $competitors, $challengePointThresholdScorer);
     // E1.10 mail #13 ("Ukończenie Wyzwania") — shared by every write path that
     // can cross a challenge's minCompleted threshold: manual approval
     // (reviewEntry(), below) and result-derived auto-approval (join(), which
@@ -2036,6 +2040,22 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
         $api->get('/series/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->findBySlug($args['slug'])));
         $api->get('/series/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->find($args['id'])));
+        // E6.6 (issue 15 §6): "Klasyfikacja Serii jest widoczna publicznie" —
+        // a Series has no participations of its own, so its ranking is the
+        // union of its linked Wyzwania's participants (ChallengeRepository::
+        // list(['seriesId' => ...]), the same filter the admin list screen
+        // already uses), points summed across them by
+        // ChallengeRankingCalculator. A Series with no linked Wyzwania simply
+        // returns an empty ranking rather than a 404 — an empty Series is a
+        // valid, if uninteresting, state, not an error.
+        $api->get('/series/{id}/ranking', function (Request $request, Response $response, array $args) use ($series, $challenges, $challengeRanking) {
+            $seriesId = (string) $args['id'];
+            if ($series->find($seriesId) === null) {
+                return JsonResponder::error($response, 'not_found', 'Seria nie istnieje.', 404);
+            }
+            $challengeIds = array_column($challenges->list(['seriesId' => $seriesId, 'includeArchived' => true]), 'id');
+            return JsonResponder::ok($response, $challengeRanking->rank($challengeIds));
+        });
         $api->post('/series', function (Request $request, Response $response) use ($series, $body, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $created = $series->create($body($request), $auth);
@@ -2360,6 +2380,21 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $challengePointThresholdScorer->score($node, (string) $args['userId']));
         })
             ->add(new AuthMiddleware($jwt));
+
+        // E6.6 (issue 15 §6, "Ranking: publiczny, z respektowaniem anonimizacji"):
+        // public, unauthenticated (same convention as
+        // /events/{eventId}/results and publicStartList() — no
+        // AuthMiddleware) — descending points, ex-aequo ties share a rank
+        // ("1,1,3"), anonymized competitors masked. See
+        // ChallengeRankingCalculator's docblock for the full design
+        // (point-total edge case, tie convention, masking).
+        $api->get('/challenges/{id}/ranking', function (Request $request, Response $response, array $args) use ($challenges, $challengeRanking) {
+            $challengeId = (string) $args['id'];
+            if ($challenges->find($challengeId) === null) {
+                return JsonResponder::error($response, 'not_found', 'Wyzwanie nie istnieje.', 404);
+            }
+            return JsonResponder::ok($response, $challengeRanking->rank([$challengeId]));
+        });
 
         $api->post('/challenges/{id}/archive', function (Request $request, Response $response, array $args) use ($challenges, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
@@ -3072,6 +3107,29 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
 
             $updated = $competitors->regenerateIdentityCode($id);
             return JsonResponder::ok($response, $updated, 'Kod tożsamości został wygenerowany na nowo.');
+        })->add(new AuthMiddleware($jwt));
+
+        // E6.6 (issue 15 §6): self-service anonymization toggle — same
+        // authorization circle as rotate-identity-code just above (own
+        // profile or Opieka over this Zawodnik). Setting this drives
+        // CompetitorNamePresenter's masking wherever it's wired in (today:
+        // the E6.6 ranking endpoints above).
+        $api->post('/competitors/{id}/anonymization', function (Request $request, Response $response, array $args) use ($competitors, $care, $body): Response {
+            $auth = (array) $request->getAttribute('auth');
+            $kontoId = (string) ($auth['sub'] ?? '');
+            $id = (string) ($args['id'] ?? '');
+
+            if ($competitors->find($id) === null) {
+                return JsonResponder::error($response, 'not_found', 'Zawodnik nie istnieje.', 404);
+            }
+
+            if (!$care->canRegister($kontoId, $id)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz Opieki nad tym Zawodnikiem.', 403);
+            }
+
+            $isAnonymized = (bool) ($body($request)['isAnonymized'] ?? false);
+            $updated = $competitors->setAnonymization($id, $isAnonymized);
+            return JsonResponder::ok($response, $updated, $isAnonymized ? 'Anonimizacja włączona.' : 'Anonimizacja wyłączona.');
         })->add(new AuthMiddleware($jwt));
 
         // E1.10 §5 (model szablonów) — minimal server-side CRUD, no frontend in

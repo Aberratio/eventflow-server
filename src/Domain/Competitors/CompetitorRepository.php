@@ -15,7 +15,7 @@ final class CompetitorRepository extends Repository
 {
     private const COLUMNS = <<<'SQL'
 id, first_name AS firstName, last_name AS lastName, birth_date AS birthDate, gender,
-email, phone, club, identity_code AS identityCode, user_id AS userId, created_at AS createdAt, updated_at AS updatedAt
+email, phone, club, identity_code AS identityCode, is_anonymized AS isAnonymized, user_id AS userId, created_at AS createdAt, updated_at AS updatedAt
 SQL;
 
     public function find(string $id): ?array
@@ -140,6 +140,26 @@ SQL;
             }
         }
         $this->updateById('competitors', $id, $mapped);
+        return $this->find($id);
+    }
+
+    /**
+     * E6.6 (issue 15 §6): self-service anonymization toggle — a Zawodnik (or
+     * whoever has Opieka over them, same authorization circle routes.php
+     * already uses for rotateIdentityCode()) can flip this on their own
+     * profile. Mirrors regenerateIdentityCode()'s shape deliberately: a
+     * single-purpose, narrowly-named method rather than routing this through
+     * the generic update() above, so the one field this ticket actually needs
+     * writable from a public-ish self-service action isn't bundled with
+     * name/birth-date/contact-detail edits that need their own scrutiny.
+     */
+    public function setAnonymization(string $id, bool $isAnonymized): ?array
+    {
+        if ($this->find($id) === null) {
+            return null;
+        }
+
+        $this->updateById('competitors', $id, ['is_anonymized' => $isAnonymized ? 1 : 0]);
         return $this->find($id);
     }
 

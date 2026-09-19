@@ -2147,6 +2147,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                     'order_invalid_delivery_method' => 'Selected delivery method is not recognized.',
                     'order_invalid_payment_method' => 'Selected payment method is not recognized.',
                     'order_invalid_address' => 'A complete shipping address is required for this delivery method.',
+                    'order_invalid_invoice_data' => 'Company name and a complete billing address are required to request an invoice.',
+                    'order_invalid_nip' => 'The provided NIP (tax ID) is not a valid Polish NIP.',
                 ];
                 if (isset($validationErrors[$e->getMessage()])) {
                     return JsonResponder::error($response, $e->getMessage(), $validationErrors[$e->getMessage()], 422);

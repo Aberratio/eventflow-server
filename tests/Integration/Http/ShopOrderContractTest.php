@@ -385,6 +385,159 @@ final class ShopOrderContractTest extends HttpTestCase
         self::assertSame('pickup', $this->json($response)['data']['deliveryMethod']['id']);
     }
 
+    public function testOrderWithoutInvoiceDataIsUnaffectedAndPersistsNoInvoice(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        // no invoiceData at all — the pre-E5.5 default (plain receipt).
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+        $created = $this->json($response)['data'];
+        self::assertNull($created['invoiceData']);
+    }
+
+    public function testOrderWithValidInvoiceDataSucceedsAndPersists(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['invoiceData'] = [
+            'companyName' => 'Testowa Sp. z o.o.',
+            'nip' => '525-234-40-78',
+            'street' => 'Faktury 1',
+            'city' => 'Warszawa',
+            'postalCode' => '00-002',
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+        $created = $this->json($response)['data'];
+        self::assertSame('Testowa Sp. z o.o.', $created['invoiceData']['companyName']);
+        self::assertSame('525-234-40-78', $created['invoiceData']['nip']);
+
+        $fetched = $this->json($this->request(
+            'GET',
+            '/api/v1/shop/orders/' . $created['id'],
+            [],
+            $this->bearer($this->buyer['id'], 'admin', $this->buyer['email'])
+        ))['data'];
+        self::assertSame('Faktury 1', $fetched['invoiceData']['street']);
+    }
+
+    public function testInvoiceRequestedWithoutCompanyNameIsRejected(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['invoiceData'] = [
+            'companyName' => '',
+            'nip' => '5252344078',
+            'street' => 'Faktury 1',
+            'city' => 'Warszawa',
+            'postalCode' => '00-002',
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('order_invalid_invoice_data', $this->json($response)['error']['code']);
+        self::assertSame(0, $this->countOrdersForBuyer());
+    }
+
+    public function testInvoiceRequestedWithoutBillingAddressIsRejected(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['invoiceData'] = [
+            'companyName' => 'Testowa Sp. z o.o.',
+            'nip' => '5252344078',
+            'street' => '',
+            'city' => 'Warszawa',
+            'postalCode' => '00-002',
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('order_invalid_invoice_data', $this->json($response)['error']['code']);
+        self::assertSame(0, $this->countOrdersForBuyer());
+    }
+
+    public function testInvoiceRequestedWithMalformedNipIsRejected(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['invoiceData'] = [
+            'companyName' => 'Testowa Sp. z o.o.',
+            'nip' => '1234567890',
+            'street' => 'Faktury 1',
+            'city' => 'Warszawa',
+            'postalCode' => '00-002',
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('order_invalid_nip', $this->json($response)['error']['code']);
+        self::assertSame(0, $this->countOrdersForBuyer());
+    }
+
+    public function testInvoiceRequestedWithWrongDigitCountNipIsRejected(): void
+    {
+        $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
+
+        $payload = $this->orderPayload($product, 1);
+        $payload['invoiceData'] = [
+            'companyName' => 'Testowa Sp. z o.o.',
+            'nip' => '12345',
+            'street' => 'Faktury 1',
+            'city' => 'Warszawa',
+            'postalCode' => '00-002',
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('order_invalid_nip', $this->json($response)['error']['code']);
+        self::assertSame(0, $this->countOrdersForBuyer());
+    }
+
     private function countOrdersForBuyer(): int
     {
         $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM shop_orders WHERE user_id = :id');

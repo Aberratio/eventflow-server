@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class OrderRepository extends Repository
 {
-    private const JSON_FIELDS = ['deliveryMethod', 'paymentMethod', 'shippingAddress', 'history'];
+    private const JSON_FIELDS = ['deliveryMethod', 'paymentMethod', 'shippingAddress', 'invoiceData', 'history'];
 
     /**
      * E5.2: authoritative delivery-method catalog, mirrored from the hardcoded
@@ -73,6 +73,7 @@ final class OrderRepository extends Repository
                     o.payment_surcharge AS paymentSurcharge, o.price_adjustment AS priceAdjustment,
                     o.total_price AS totalPrice, o.delivery_method AS deliveryMethod,
                     o.payment_method AS paymentMethod, o.shipping_address AS shippingAddress,
+                    o.invoice_data AS invoiceData,
                     o.tracking_number AS trackingNumber, o.admin_notes AS adminNotes,
                     o.cancel_reason AS cancelReason, o.estimated_delivery AS estimatedDelivery,
                     o.history, o.created_at AS createdAt, o.updated_at AS updatedAt
@@ -92,6 +93,7 @@ final class OrderRepository extends Repository
                     o.payment_surcharge AS paymentSurcharge, o.price_adjustment AS priceAdjustment,
                     o.total_price AS totalPrice, o.delivery_method AS deliveryMethod,
                     o.payment_method AS paymentMethod, o.shipping_address AS shippingAddress,
+                    o.invoice_data AS invoiceData,
                     o.tracking_number AS trackingNumber, o.admin_notes AS adminNotes,
                     o.cancel_reason AS cancelReason, o.estimated_delivery AS estimatedDelivery,
                     o.history, o.created_at AS createdAt, o.updated_at AS updatedAt
@@ -129,6 +131,15 @@ final class OrderRepository extends Repository
 
         if (in_array($deliveryMethod['id'], self::DELIVERY_METHODS_REQUIRING_ADDRESS, true)) {
             $this->validateShippingAddress((array) ($data['shippingAddress'] ?? []), (string) $deliveryMethod['id']);
+        }
+
+        // E5.5: "chce fakture" is signalled by sending invoiceData at all —
+        // same pattern as shippingAddress, no separate boolean column. An
+        // order that omits it entirely (the pre-E5.5 default: plain
+        // receipt) never touches this and stays byte-for-byte backward
+        // compatible with E5.2/E5.3/E5.4.
+        if (isset($data['invoiceData'])) {
+            $this->validateInvoiceData((array) $data['invoiceData']);
         }
 
         $requestedItems = array_map(static fn ($item): array => (array) $item, (array) ($data['items'] ?? []));
@@ -189,6 +200,7 @@ final class OrderRepository extends Repository
                 'delivery_method' => json_encode($deliveryMethod, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 'payment_method' => json_encode($paymentMethod, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 'shipping_address' => isset($data['shippingAddress']) ? json_encode($data['shippingAddress'], JSON_UNESCAPED_UNICODE) : null,
+                'invoice_data' => isset($data['invoiceData']) ? json_encode($data['invoiceData'], JSON_UNESCAPED_UNICODE) : null,
                 'estimated_delivery' => $data['estimatedDelivery'] ?? null,
                 'history' => '[]',
             ]);
@@ -251,6 +263,68 @@ final class OrderRepository extends Repository
         }
         if ($deliveryMethodId === 'paczkomat' && trim((string) ($address['paczkomatId'] ?? '')) === '') {
             throw new \RuntimeException('order_invalid_address');
+        }
+    }
+
+    /**
+     * E5.5: invoice data (spec issue 16 pkt 1 — "dane adresowe, faktura z
+     * NIP"; SS6 — "dane do faktury" is part of the minimal required shop
+     * scope). Data capture only, no document is generated here (explicitly
+     * out of scope, see issue 16). Required whenever the client sends
+     * invoiceData at all — companyName, a well-formed NIP, and a billing
+     * address in the same street/city/postalCode shape as
+     * validateShippingAddress() above, for the same reason: one address
+     * shape across the order, not two independently-evolving ones.
+     *
+     * NIP format gets its own error code (order_invalid_nip) per the
+     * ticket's request for "a clear error code on malformed NIP" — every
+     * other missing/invalid invoice field falls under order_invalid_invoice_data,
+     * mirroring how order_invalid_address covers the whole shipping-address
+     * shape in E5.3.
+     *
+     * @param array<string, mixed> $invoice
+     */
+    private function validateInvoiceData(array $invoice): void
+    {
+        if (trim((string) ($invoice['companyName'] ?? '')) === '') {
+            throw new \RuntimeException('order_invalid_invoice_data');
+        }
+
+        $required = ['street', 'city', 'postalCode'];
+        foreach ($required as $field) {
+            if (trim((string) ($invoice[$field] ?? '')) === '') {
+                throw new \RuntimeException('order_invalid_invoice_data');
+            }
+        }
+        if (!preg_match('/^\d{2}-\d{3}$/', (string) $invoice['postalCode'])) {
+            throw new \RuntimeException('order_invalid_invoice_data');
+        }
+
+        $this->validateNip((string) ($invoice['nip'] ?? ''));
+    }
+
+    /**
+     * Polish NIP: 10 digits (dashes/spaces allowed in the submitted form,
+     * stripped before checking), with a checksum over the first 9 digits
+     * using the standard NIP weights; the 10th digit must equal the
+     * weighted sum mod 11 (a mod-11 result of 10 is itself invalid — no
+     * real NIP produces it).
+     */
+    private function validateNip(string $nip): void
+    {
+        $digits = preg_replace('/[\s-]/', '', $nip) ?? '';
+        if (!preg_match('/^\d{10}$/', $digits)) {
+            throw new \RuntimeException('order_invalid_nip');
+        }
+
+        $weights = [6, 5, 7, 2, 3, 4, 5, 6, 7];
+        $sum = 0;
+        for ($i = 0; $i < 9; $i++) {
+            $sum += $weights[$i] * (int) $digits[$i];
+        }
+        $checksum = $sum % 11;
+        if ($checksum === 10 || $checksum !== (int) $digits[9]) {
+            throw new \RuntimeException('order_invalid_nip');
         }
     }
 

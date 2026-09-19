@@ -59,6 +59,18 @@ final class OrderRepository extends Repository
      */
     private const SERVICE_KIND_ORGANIZER_PACKAGE = 'organizer_package';
 
+    /**
+     * E5.7 (issue 16 §2 "Samoobsluga"): roles that already imply
+     * Organizator-level access, mirroring routes.php's $isStaffRole closure
+     * exactly (admin/superadmin/moderator) — a staff account buying an
+     * organizer package still gets its credit (unconditional per E5.6) but
+     * is never downgraded/reassigned to plain 'organizer', since that would
+     * be destructive to a role that already does everything Organizator can.
+     */
+    private const STAFF_ROLES = ['admin', 'superadmin', 'moderator'];
+
+    private const ROLE_ORGANIZER = 'organizer';
+
     private ShopRepository $shop;
 
     public function __construct(\PDO $pdo, ?ShopRepository $shop = null)
@@ -201,13 +213,14 @@ final class OrderRepository extends Repository
                     $this->decrementStock($productId, $quantity);
                 }
 
-                // E5.6: the credit granted here is the seam E5.7 (self-service
-                // purchase -> Organizer role) is meant to build on — deliberately
-                // just the counter, no role-granting logic, same transaction as
-                // the stock decrement above so a purchase can never charge the
-                // buyer's card (well, "succeed" here) without also crediting them.
+                // E5.6/E5.7: the credit grant is unconditional (E5.6); the role
+                // grant right after it is E5.7's job, same transaction, same
+                // call site, so a purchase can never charge the buyer's card
+                // (well, "succeed" here) and grant a credit without also
+                // granting the role it's meant to unlock, or vice versa.
                 if (($product['serviceKind'] ?? null) === self::SERVICE_KIND_ORGANIZER_PACKAGE) {
                     $this->grantOrganizerPackageCredits($userId, $quantity);
+                    $this->grantOrganizerRoleIfNeeded($userId);
                 }
 
                 $price = (float) $product['price'];
@@ -298,6 +311,39 @@ final class OrderRepository extends Repository
         $this->pdo->prepare(
             'UPDATE users SET organizer_package_credits = organizer_package_credits + :count WHERE id = :userId'
         )->execute(['count' => $count, 'userId' => $userId]);
+    }
+
+    /**
+     * E5.7 (issue 16 §2 "Samoobsluga"): a self-service organizer-package
+     * purchase grants the Organizator role to the buying account, same
+     * transaction as grantOrganizerPackageCredits() above — the manual
+     * "promocja po e-mailu" path (§4.4.4, PATCH /users/{id}/role, admin-only)
+     * stays as-is as the emergency route for partners/migrations; this is
+     * just the new self-service one the spec asks for.
+     *
+     * `SELECT ... FOR UPDATE` (not the unlocked UserRepository::find() this
+     * class otherwise avoids reaching for) so a role read/write can't race a
+     * concurrent write to the same row inside this same transaction; role is
+     * a single ENUM column on `users` (001_init.sql:
+     * participant|organizer|moderator|admin|superadmin), no separate roles
+     * table. Only a plain 'participant' gets bumped to 'organizer' — an
+     * account that's already 'organizer', or already holds a staff role that
+     * implies Organizator-level access anyway (STAFF_ROLES, mirroring
+     * routes.php's $isStaffRole), is left untouched: idempotent on a second
+     * purchase, and never destructive/downgrading to a higher role.
+     */
+    private function grantOrganizerRoleIfNeeded(string $userId): void
+    {
+        $stmt = $this->pdo->prepare('SELECT role FROM users WHERE id = :userId FOR UPDATE');
+        $stmt->execute(['userId' => $userId]);
+        $role = $stmt->fetchColumn();
+
+        if ($role === false || $role === self::ROLE_ORGANIZER || in_array($role, self::STAFF_ROLES, true)) {
+            return;
+        }
+
+        $this->pdo->prepare('UPDATE users SET role = :role WHERE id = :userId')
+            ->execute(['role' => self::ROLE_ORGANIZER, 'userId' => $userId]);
     }
 
     /**

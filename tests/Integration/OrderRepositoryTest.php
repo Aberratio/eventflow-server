@@ -98,6 +98,78 @@ final class OrderRepositoryTest extends TestCase
         self::assertSame(3, $this->rawStockCount($product['id']));
     }
 
+    /**
+     * E5.7 (issue 16 §2 "Samoobsluga"): proves the credit grant and the
+     * Organizator role grant can't desync — both happen inside create()'s
+     * single transaction (see OrderRepository::create()'s comment at the
+     * grantOrganizerPackageCredits()/grantOrganizerRoleIfNeeded() call site).
+     * A cart with a valid organizer-package item first, then a second item
+     * that fails stock validation, forces the whole transaction to roll
+     * back: if the role grant lived outside that transaction (e.g. committed
+     * eagerly, or in a separate connection/statement not covered by the
+     * rollback), this test would catch it as a role that "stuck" despite the
+     * order never actually succeeding.
+     */
+    public function testFailedOrderRollsBackBothTheCreditGrantAndTheRoleGrantTogether(): void
+    {
+        $organizerPackage = $this->shop->createProduct([
+            'name' => $this->prefix . ' Pakiet Organizatora',
+            'slug' => $this->prefix . '-organizer-package',
+            'description' => 'Prawo do utworzenia jednego Wydarzenia.',
+            'price' => 499.0,
+            'category' => 'organizer',
+            'brand' => 'Test Brand',
+            'inStock' => true,
+            'stockCount' => null,
+            'isService' => true,
+            'serviceKind' => 'organizer_package',
+        ]);
+        $limitedProduct = $this->shop->createProduct([
+            'name' => $this->prefix . ' Limited Product',
+            'slug' => $this->prefix . '-limited',
+            'description' => 'Test',
+            'price' => 10,
+            'category' => 'apparel',
+            'brand' => 'Test Brand',
+            'imageUrl' => 'https://example.test/product.jpg',
+            'inStock' => true,
+            'stockCount' => 1,
+        ]);
+
+        $payload = [
+            'items' => [
+                ['productId' => $organizerPackage['id'], 'productName' => $organizerPackage['name'], 'quantity' => 1],
+                ['productId' => $limitedProduct['id'], 'productName' => $limitedProduct['name'], 'quantity' => 5],
+            ],
+            'deliveryMethod' => ['id' => 'pickup', 'name' => 'Odbior osobisty'],
+            'paymentMethod' => ['id' => 'card', 'name' => 'Karta platnicza'],
+        ];
+
+        try {
+            $this->orders->create($payload, $this->buyer['id']);
+            self::fail('Expected order_insufficient_stock to abort the whole transaction.');
+        } catch (\RuntimeException $e) {
+            self::assertSame('order_insufficient_stock', $e->getMessage());
+        }
+
+        self::assertSame(0, $this->organizerPackageCredits($this->buyer['id']));
+        self::assertSame('participant', $this->roleOf($this->buyer['id']));
+    }
+
+    private function organizerPackageCredits(string $userId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT organizer_package_credits FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    private function roleOf(string $userId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT role FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+        return (string) $stmt->fetchColumn();
+    }
+
     /** @return array<string, mixed> */
     private function orderPayload(array $product, int $quantity): array
     {

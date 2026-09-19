@@ -617,6 +617,100 @@ final class ShopOrderContractTest extends HttpTestCase
         self::assertSame(201, $response->getStatusCode());
     }
 
+    /**
+     * E5.7 (issue 16 §2 "Samoobsluga"): the point of the ticket — a
+     * self-service organizer-package purchase by a plain 'participant'
+     * grants both the credit (E5.6, unconditional) AND the Organizator role,
+     * not just the credit.
+     */
+    public function testPurchasingOrganizerPackageAsParticipantGrantsCreditAndOrganizerRole(): void
+    {
+        $product = $this->createOrganizerPackageProduct();
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            [
+                'items' => [
+                    ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 1, 'price' => 1],
+                ],
+                'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+            ],
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame(1, $this->organizerPackageCredits($this->buyer['id']));
+        self::assertSame('organizer', $this->roleOf($this->buyer['id']));
+    }
+
+    /**
+     * A second organizer-package purchase by an account that's already
+     * 'organizer' (e.g. from a first purchase, or from the §4.4.4 manual
+     * admin promotion path) must stay idempotent: more credit, same role,
+     * no error, no duplicate role assignment (there's nothing to duplicate —
+     * `role` is a single column — but this locks in that the UPDATE is a
+     * no-op rather than something that could ever fail on a "already has
+     * this role" edge case).
+     */
+    public function testPurchasingOrganizerPackageAsExistingOrganizerOnlyAddsCreditAndLeavesRoleUnchanged(): void
+    {
+        $this->users->update($this->buyer['id'], ['role' => 'organizer']);
+        $product = $this->createOrganizerPackageProduct();
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            [
+                'items' => [
+                    ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 2, 'price' => 1],
+                ],
+                'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+            ],
+            $this->bearer($this->buyer['id'], 'organizer', $this->buyer['email'])
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame(2, $this->organizerPackageCredits($this->buyer['id']));
+        self::assertSame('organizer', $this->roleOf($this->buyer['id']));
+    }
+
+    /**
+     * An admin (a staff role that already implies Organizator-level access
+     * everywhere else in this app — routes.php's $isStaffRole) buying an
+     * organizer package still gets the credit, but is never reassigned down
+     * to plain 'organizer' — that would be destructive to a strictly higher
+     * role for no reason.
+     */
+    public function testPurchasingOrganizerPackageAsAdminGrantsCreditWithoutTouchingTheHigherRole(): void
+    {
+        $this->users->update($this->buyer['id'], ['role' => 'admin']);
+        $product = $this->createOrganizerPackageProduct();
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            [
+                'items' => [
+                    ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 1, 'price' => 1],
+                ],
+                'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+            ],
+            $this->bearer($this->buyer['id'], 'admin', $this->buyer['email'])
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame(1, $this->organizerPackageCredits($this->buyer['id']));
+        self::assertSame('admin', $this->roleOf($this->buyer['id']));
+    }
+
+    private function roleOf(string $userId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT role FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+        return (string) $stmt->fetchColumn();
+    }
+
     /** @return array<string, mixed> */
     private function createOrganizerPackageProduct(array $overrides = []): array
     {

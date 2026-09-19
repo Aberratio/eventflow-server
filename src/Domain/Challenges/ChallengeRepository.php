@@ -15,6 +15,14 @@ final class ChallengeRepository extends Repository
     private const NODE_TYPES = ['group', 'event_threshold', 'point_threshold', 'sub_challenge_threshold'];
     private const LEAF_EVENT_NODE_TYPES = ['event_threshold', 'point_threshold'];
 
+    /**
+     * E6.3 lazily-built collaborator (issue 15 §3): the full recursive tree
+     * evaluator. Built on first use rather than taken as a constructor
+     * argument so every existing call site (`new ChallengeRepository($pdo)`,
+     * all over routes.php and the test suite) keeps working unchanged.
+     */
+    private ?ChallengeConditionTreeEvaluator $treeEvaluator = null;
+
     /** @param array<string, mixed> $filters @return array<int, array<string, mixed>> */
     public function list(array $filters = []): array
     {
@@ -526,15 +534,21 @@ final class ChallengeRepository extends Repository
     /**
      * E1.10 mail #13 ("Ukończenie Wyzwania", 17 §1 row 13). Challenge completion
      * has no discrete write of its own anywhere in this codebase —
-     * hydrateParticipation() only *computes* isCompleted on every read from the
-     * live entries list (see its `completedCount >= minCompleted` check above).
-     * This is the one materialized moment: called right after an entry review
-     * (approve) or a result-derived auto-approval (syncResultEntries()), it
-     * checks whether the just-updated entry count crosses the threshold for
-     * the first time and, if so, marks `completion_notified_at` so it is never
-     * reported "just completed" twice for the same participation — the caller
-     * (routes.php) is responsible for actually sending the mail with whatever
-     * it gets back here.
+     * hydrateParticipation() only *computes* isCompleted on every read (see
+     * isChallengeCompletedForUser() below, shared by both). This is the one
+     * materialized moment: called right after an entry review (approve) or a
+     * result-derived auto-approval (syncResultEntries()), it checks whether
+     * the participant has JUST become completed for the first time and, if
+     * so, marks `completion_notified_at` so it is never reported "just
+     * completed" twice for the same participation — the caller (routes.php)
+     * is responsible for actually sending the mail with whatever it gets
+     * back here.
+     *
+     * E6.3 (issue 15 §3): "completed" is now determined by the real
+     * condition tree (ChallengeConditionTreeEvaluator) when the challenge has
+     * one, not the legacy flat `rule.minCompleted` count — see
+     * isChallengeCompletedForUser()'s doc comment for the fallback rule and
+     * why it still exists.
      *
      * @return array{challengeId: string, userId: string, challengeName: string}|null
      */
@@ -554,11 +568,7 @@ final class ChallengeRepository extends Repository
             return null;
         }
 
-        $completedCount = count(array_filter(
-            $this->entries($challengeId, $userId),
-            static fn (array $entry): bool => $entry['status'] === 'approved'
-        ));
-        if ($completedCount < (int) ($challenge['rule']['minCompleted'] ?? 1)) {
+        if (!$this->isChallengeCompletedForUser($challenge, $userId)) {
             return null;
         }
 
@@ -567,6 +577,86 @@ final class ChallengeRepository extends Repository
         ]);
 
         return ['challengeId' => $challengeId, 'userId' => $userId, 'challengeName' => (string) $challenge['name']];
+    }
+
+    /**
+     * E6.3 (issue 15 §3): the single source of truth for "has $userId
+     * completed $challenge", shared by checkCompletion() (the mail-gate) and
+     * hydrateParticipation() (the `isCompleted` field returned on every
+     * participation read).
+     *
+     * Uses the full recursive condition-tree evaluation
+     * (ChallengeConditionTreeEvaluator) when the challenge HAS a tree — which
+     * is every challenge created/updated through ChallengeRepository::create()
+     * (it always seeds a default tree) and every pre-E6.1 challenge touched
+     * by migration 054's backfill. Falls back to the legacy flat
+     * `completedCount >= rule.minCompleted` check ONLY when
+     * `getConditionTree()` returns null — a genuinely tree-less row, which in
+     * practice only happens for rows inserted directly via SQL bypassing the
+     * repository (as several of this repo's own integration test fixtures
+     * do). This fallback is deliberate, not a workaround: a challenge with no
+     * tree at all has nothing for the evaluator to walk, and refusing to
+     * ever mark it complete would be a silent regression for that legacy
+     * shape rather than the ticket's intended "the tree becomes the real
+     * rule".
+     *
+     * Stale-tree handling (E6.2's `conditionTreeMatchesEvents` flag, issue 15
+     * §3 point 3): a `false` flag does NOT block automatic evaluation here —
+     * most of the time it correctly means "deliberately customized tree"
+     * (a `group`/`point_threshold`/`sub_challenge_threshold` root, or an
+     * event_threshold root with a time window), which is completely expected
+     * and must still drive completion normally. The one case worth an admin's
+     * attention is a root that is STILL shaped like the plain default
+     * (`event_threshold`, no window) but whose linked events no longer match
+     * the challenge's current flat `events` list — that specific shape is
+     * logged as a warning (not blocked) so completions still compute
+     * correctly for everyone else while the drift is visible in the logs.
+     *
+     * @param array<string, mixed> $challenge as returned by find()/hydrate()
+     */
+    private function isChallengeCompletedForUser(array $challenge, string $userId): bool
+    {
+        $tree = $challenge['conditionTree'] ?? null;
+        if ($tree === null) {
+            $completedCount = count(array_filter(
+                $this->entries((string) $challenge['id'], $userId),
+                static fn (array $entry): bool => $entry['status'] === 'approved'
+            ));
+            return $completedCount >= (int) ($challenge['rule']['minCompleted'] ?? 1);
+        }
+
+        if (
+            ($challenge['conditionTreeMatchesEvents'] ?? true) === false
+            && ($tree['type'] ?? null) === 'event_threshold'
+            && ($tree['windowStart'] ?? null) === null
+            && ($tree['windowEnd'] ?? null) === null
+        ) {
+            error_log(sprintf(
+                '[ChallengeConditionTreeEvaluator] Challenge %s: condition tree looks like the plain default '
+                . '(event_threshold, no window) but no longer matches the flat events list (conditionTreeMatchesEvents=false) '
+                . '— evaluating against the tree as-is; an admin may want to re-check this challenge\'s tree.',
+                (string) $challenge['id']
+            ));
+        }
+
+        $memo = [];
+        try {
+            return $this->treeEvaluator()->evaluateNode($tree, $userId, $memo);
+        } catch (\RuntimeException $e) {
+            error_log('[ChallengeConditionTreeEvaluator] ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /** Lazily builds the E6.3 tree evaluator — see its property doc comment. */
+    private function treeEvaluator(): ChallengeConditionTreeEvaluator
+    {
+        if ($this->treeEvaluator === null) {
+            $pointsSettings = new ChallengePointsSettingsRepository($this->pdo);
+            $scorer = new ChallengePointThresholdScorer($this->pdo, $pointsSettings);
+            $this->treeEvaluator = new ChallengeConditionTreeEvaluator($this->pdo, $this, $scorer);
+        }
+        return $this->treeEvaluator;
     }
 
     /** @param array<string, mixed> $row */
@@ -633,7 +723,10 @@ final class ChallengeRepository extends Repository
         $row['entries'] = $entries;
         $row['completedCount'] = count(array_filter($entries, static fn (array $entry): bool => $entry['status'] === 'approved'));
         $challenge = $this->find((string) $row['challengeId']);
-        $row['isCompleted'] = $challenge ? $row['completedCount'] >= (int) ($challenge['rule']['minCompleted'] ?? 1) : false;
+        // E6.3: real tree-based completion (falls back to the flat
+        // completedCount >= minCompleted rule for tree-less legacy rows —
+        // see isChallengeCompletedForUser()'s doc comment).
+        $row['isCompleted'] = $challenge !== null && $this->isChallengeCompletedForUser($challenge, (string) $row['userId']);
         return $row;
     }
 

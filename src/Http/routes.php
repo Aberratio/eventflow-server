@@ -695,6 +695,23 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 throw $e;
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        // E6.4 (issue 15 §3): "Wydarzenie zewnętrzne" — a barebones Event a
+        // Moderator/Admin creates as the reference point for a Zawodnik's
+        // manual challenge-entry proof (see EventRepository::createExternal()'s
+        // doc comment). Moderator-or-above per ticket 09's role split ("weryfikacja
+        // Zgłoszeń u Moderatora") — a Moderator reviewing a proof submission that
+        // has no matching Event on the platform needs to be able to create the
+        // reference row itself, not escalate to Admin for it.
+        $api->post('/events/external', function (Request $request, Response $response) use ($events, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            try {
+                $created = $events->createExternal($body($request), (string) ($auth['sub'] ?? ''));
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
+            $logActivity($auth, 'event_created', 'Utworzono wydarzenie zewnętrzne', 'event', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
+            return JsonResponder::ok($response, $created, 'External event created', 201);
+        })->add(new AuthMiddleware($jwt, $staffRoles));
         $api->patch('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $users, $body, $canManageEvent, $isStaffRole, $logActivity, $notifyEventChanged) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);

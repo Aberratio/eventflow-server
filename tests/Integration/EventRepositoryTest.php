@@ -89,6 +89,47 @@ final class EventRepositoryTest extends TestCase
         }
     }
 
+    /**
+     * E6.4 (issue 15 §3): "Wydarzenie zewnętrzne" — the barebones reference
+     * Event a Moderator/Admin creates for a Zawodnik's manual challenge-entry
+     * proof. Pins the minimal shape the spec asks for: `isExternal = true`,
+     * `publicationStatus = 'published'` (visible/selectable immediately, no
+     * moderation workflow to run it through), `registrationStatus = 'none'`,
+     * and — the "no Dystansow" half of "stan bez Dystansow i zapisow" —
+     * zero `distances` rows, since createExternal() never accepts a
+     * `distances` payload at all.
+     */
+    public function testCreateExternalPersistsBarebonesEventWithNoDistances(): void
+    {
+        $event = $this->events->createExternal([
+            'name' => $this->slugPrefix . ' Polmaraton Korony 2015',
+            'date' => '2015-09-06',
+            'location' => 'Rynek Glowny',
+            'city' => 'Krakow',
+        ], 'phpunit-moderator');
+
+        self::assertNotEmpty($event['id']);
+        self::assertTrue($event['isExternal']);
+        self::assertSame('published', $event['publicationStatus']);
+        self::assertSame('none', $event['registrationStatus']);
+        self::assertSame([], $event['distances']);
+
+        $reread = $this->events->find((string) $event['id']);
+        self::assertNotNull($reread);
+        self::assertTrue($reread['isExternal']);
+
+        // Sanity: an ordinary Event created through create()/createForOrganizer()
+        // is NOT external by default.
+        $ordinary = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-not-external']));
+        self::assertFalse($ordinary['isExternal']);
+    }
+
+    public function testCreateExternalRejectsMissingName(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->events->createExternal(['date' => '2015-09-06', 'location' => 'X', 'city' => 'Y'], 'phpunit-moderator');
+    }
+
     public function testCreatePersistsEventAndDistancesInDatabase(): void
     {
         $event = $this->events->create($this->payload([

@@ -53,7 +53,7 @@ id, name, slug, discipline, date, location, location_maps_url AS locationMapsUrl
 original_image_url AS originalImageUrl,
 series_id AS seriesId, organizer_id AS organizerId, organizer_name AS organizerName,
 organizer_contact AS organizerContact,
-publication_status AS publicationStatus, visibility, is_test AS isTest, deleted_at AS deletedAt,
+publication_status AS publicationStatus, visibility, is_test AS isTest, is_external AS isExternal, deleted_at AS deletedAt,
 rejection_reason AS rejectionReason,
 submitted_at AS submittedAt, approved_at AS approvedAt, approved_by AS approvedBy,
 published_at AS publishedAt, published_by AS publishedBy, created_by AS createdBy,
@@ -127,6 +127,10 @@ SQL;
         }
         if (empty($filters['includePrivate'])) {
             $where[] = 'is_private = 0';
+        }
+        if (array_key_exists('isExternal', $filters) && $filters['isExternal'] !== '') {
+            $where[] = 'is_external = :isExternal';
+            $params['isExternal'] = !empty($filters['isExternal']) ? 1 : 0;
         }
         if (empty($filters['includeUnpublished'])) {
             $where[] = "publication_status IN ('published', 'finished')";
@@ -258,6 +262,65 @@ SQL;
         }
 
         return $this->find($id);
+    }
+
+    /**
+     * E6.4 (issue 15 §3): a barebones "Wydarzenie zewnętrzne" — the reference
+     * point a Moderator/Admin creates so a Zawodnik's manual challenge-entry
+     * proof (a Korona half-marathon that never ran on this platform, or a
+     * pre-platform completion) can point at a real Event row instead of
+     * free text. Deliberately minimal per the ticket's own scoping: no
+     * `distances`/registration payload is ever accepted here (unlike
+     * create()/createForOrganizer(), which both call replaceChildren()), so
+     * an external Event can never accidentally grow Dystans or registration
+     * machinery. Always created already `published` (there is no
+     * organizer-submission workflow to run it through) and with
+     * `registrationStatus = 'none'` — "no distances, no registrations" per
+     * spec — so it never appears as joinable to a Zawodnik browsing Events.
+     *
+     * @param array<string, mixed> $data expects name/date/location/city;
+     *   discipline/description/imageUrl/registrationDeadline are defaulted
+     *   when omitted since this Event never goes through a real
+     *   organizer-facing creation form.
+     */
+    public function createExternal(array $data, string $actorId): array
+    {
+        $id = $this->id();
+        $name = trim((string) ($data['name'] ?? ''));
+        if ($name === '') {
+            throw new \InvalidArgumentException('Nazwa wydarzenia zewnętrznego jest wymagana.');
+        }
+        $payload = [
+            'name' => $name,
+            'slug' => $this->uniqueExternalSlug($name, $id),
+            'discipline' => in_array($data['discipline'] ?? null, ['running', 'cycling', 'triathlon', 'multisport'], true)
+                ? $data['discipline']
+                : 'running',
+            'date' => (string) ($data['date'] ?? ''),
+            'location' => (string) ($data['location'] ?? ''),
+            'city' => (string) ($data['city'] ?? ''),
+            'description' => (string) ($data['description'] ?? 'Wydarzenie zewnętrzne — bez Dystansów i zapisów na platformie.'),
+            'imageUrl' => (string) ($data['imageUrl'] ?? ''),
+            'organizerId' => $actorId,
+            'organizerName' => (string) ($data['organizerName'] ?? 'Wydarzenie zewnętrzne'),
+            'publicationStatus' => 'published',
+            'publishedAt' => date(DATE_ATOM),
+            'publishedBy' => $actorId,
+            'createdBy' => $actorId,
+            'registrationDeadline' => (string) ($data['date'] ?? ''),
+            'registrationStatus' => 'none',
+            'visibility' => 'public',
+            'isExternal' => true,
+        ];
+        $this->insert('events', $this->eventData($id, $payload, true));
+        return $this->find($id);
+    }
+
+    private function uniqueExternalSlug(string $name, string $id): string
+    {
+        $base = strtolower(trim((string) preg_replace('/[^a-z0-9]+/i', '-', $name), '-'));
+        $base = $base !== '' ? $base : 'wydarzenie-zewnetrzne';
+        return $base . '-' . substr($id, 0, 8);
     }
 
     /** @param array<string, mixed> $data */
@@ -575,7 +638,7 @@ SQL;
     private function hydrate(array $row): array
     {
         $event = $this->decode($row, self::EVENT_JSON);
-        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'isTest', 'registrationUntilEventStart', 'enableMerchandiseInRegistration', 'bzIntegrationEnabled'] as $bool) {
+        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'isTest', 'isExternal', 'registrationUntilEventStart', 'enableMerchandiseInRegistration', 'bzIntegrationEnabled'] as $bool) {
             $event[$bool] = (bool) ($event[$bool] ?? false);
         }
         $event['distances'] = array_map(
@@ -799,6 +862,7 @@ SQL;
             'isPrivate' => 'is_private',
             'visibility' => 'visibility',
             'isTest' => 'is_test',
+            'isExternal' => 'is_external',
             'accessCode' => 'access_code',
             'registrationEmbed' => 'registration_embed',
             'registrationFormConfig' => 'registration_form_config',

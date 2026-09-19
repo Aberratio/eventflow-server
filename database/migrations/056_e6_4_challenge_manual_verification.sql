@@ -1,0 +1,22 @@
+-- E6.4 (issue 15 §3, "Weryfikacja: automat liczy, sciezka manualna dla dowodu"):
+-- "Wydarzenie zewnetrzne" — a barebones Event row that exists purely as a
+-- reference point for a manual challenge-entry proof submission (half-marathon
+-- of the Korona that never ran on this platform, or a completion from before
+-- the platform existed). Spec: "obslugiwane przez Wydarzenie zewnetrzne, stan
+-- bez Dystansow i zapisow, ustalony w ticket 06 pkt 6 wlasnie z mysla o tym
+-- przypadku".
+--
+-- Deliberately minimal, per issue 15's own scoping note for this ticket: one
+-- boolean flag, not a parallel event system. An external Event is created
+-- through the same `events` table/EventRepository as any other Event (so it
+-- can be linked into a Wyzwanie's flat `events` list / condition-tree
+-- event_threshold node exactly like a normal Event), just with no Dystans
+-- rows and no registration machinery ever attached to it — EventRepository's
+-- dedicated createExternal() enforces that by construction (it never accepts
+-- a `distances` payload).
+--
+-- Migrations have no ledger and run on every boot (see Migrator.php) —
+-- ADD COLUMN IF NOT EXISTS is safe to repeat.
+
+ALTER TABLE events
+  ADD COLUMN IF NOT EXISTS is_external TINYINT(1) NOT NULL DEFAULT 0 AFTER is_test;

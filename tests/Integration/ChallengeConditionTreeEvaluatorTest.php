@@ -231,6 +231,129 @@ final class ChallengeConditionTreeEvaluatorTest extends TestCase
         self::assertTrue($this->evaluator->evaluateNode($node, $competitor['id'], $memo));
     }
 
+    /**
+     * E6.4 (issue 15 §3, gap fixed here): the "ścieżka manualna dla dowodu" -
+     * a Moderator-approved `challenge_entries` row with `source = 'manual'`
+     * for an EXTERNAL Event (no Dystans, never had any registrations, so it
+     * can never have a `results` row) must still satisfy an `event_threshold`
+     * node. Before this fix, evaluateEventThreshold() only ever queried
+     * `results`, so an approved manual entry for an Event with zero results
+     * rows would never count - the Wyzwanie could never complete via the
+     * manual verification path the spec explicitly calls for.
+     */
+    public function testEventThresholdSatisfiedByApprovedManualEntryWithoutResultsRow(): void
+    {
+        $competitor = $this->createUser('ET Manual Proof');
+        $externalEvent = $this->events->createExternal([
+            'name' => 'Polmaraton Korony (przed platforma)',
+            'date' => '2019-09-01',
+            'location' => 'Rynek',
+            'city' => 'Krakow',
+        ], 'tester-moderator');
+        self::assertTrue($externalEvent['isExternal']);
+
+        // Approved manual entry, but deliberately NO `results` row - external
+        // Events have no timing infrastructure at all.
+        $challenge = $this->createChallenge(['name' => 'Manual Proof Challenge']);
+        $this->approveEntry((string) $challenge['id'], $competitor['id'], $externalEvent['id']);
+
+        $node = [
+            'type' => 'event_threshold',
+            'requiredCount' => 1,
+            'events' => [['eventId' => $externalEvent['id']]],
+        ];
+
+        $memo = [];
+        self::assertTrue(
+            $this->evaluator->evaluateNode($node, $competitor['id'], $memo),
+            'An approved manual challenge_entries row must satisfy event_threshold even with zero results rows.'
+        );
+
+        // Sanity: confirm there genuinely is no results row backing this.
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM results WHERE event_id = :id');
+        $stmt->execute(['id' => $externalEvent['id']]);
+        self::assertSame(0, (int) $stmt->fetchColumn());
+    }
+
+    public function testEventThresholdManualEntryRespectsTimeWindowViaEventDate(): void
+    {
+        $competitor = $this->createUser('ET Manual Window');
+        $externalEvent = $this->events->createExternal([
+            'name' => 'Old Race Outside Window',
+            'date' => '2015-05-01',
+            'location' => 'Rynek',
+            'city' => 'Krakow',
+        ], 'tester-moderator');
+        $challenge = $this->createChallenge(['name' => 'Manual Window Challenge']);
+        $this->approveEntry((string) $challenge['id'], $competitor['id'], $externalEvent['id']);
+
+        $node = [
+            'type' => 'event_threshold',
+            'requiredCount' => 1,
+            'windowStart' => '2020-01-01',
+            'windowEnd' => '2026-12-31',
+            'events' => [['eventId' => $externalEvent['id']]],
+        ];
+
+        $memo = [];
+        self::assertFalse($this->evaluator->evaluateNode($node, $competitor['id'], $memo), 'Manual entry for a 2015 Event must not satisfy a 2020-2026 window.');
+
+        $node['windowStart'] = '2010-01-01';
+        $memo = [];
+        self::assertTrue($this->evaluator->evaluateNode($node, $competitor['id'], $memo));
+    }
+
+    public function testEventThresholdManualEntryScopedToOwningChallengeWhenChallengeIdGiven(): void
+    {
+        $competitor = $this->createUser('ET Manual Scope');
+        $externalEvent = $this->events->createExternal([
+            'name' => 'Scoped Race',
+            'date' => '2021-05-01',
+            'location' => 'Rynek',
+            'city' => 'Krakow',
+        ], 'tester-moderator');
+        $challengeA = $this->createChallenge(['name' => 'Scope Challenge A']);
+        $challengeB = $this->createChallenge(['name' => 'Scope Challenge B']);
+        // Approved only under Challenge A.
+        $this->approveEntry((string) $challengeA['id'], $competitor['id'], $externalEvent['id']);
+
+        $node = [
+            'type' => 'event_threshold',
+            'requiredCount' => 1,
+            'events' => [['eventId' => $externalEvent['id']]],
+        ];
+
+        $memoA = [];
+        self::assertTrue(
+            $this->evaluator->evaluateNode($node, $competitor['id'], $memoA, 0, (string) $challengeA['id']),
+            'Entry approved under Challenge A must satisfy Challenge A\'s own event_threshold node.'
+        );
+
+        $memoB = [];
+        self::assertFalse(
+            $this->evaluator->evaluateNode($node, $competitor['id'], $memoB, 0, (string) $challengeB['id']),
+            'An entry approved under Challenge A must not silently satisfy a different Challenge B that links the same Event.'
+        );
+    }
+
+    public function testEventThresholdDoesNotDoubleCountWhenBothResultAndManualEntryExist(): void
+    {
+        $competitor = $this->createUser('ET Dedup');
+        [$event, $dist] = $this->makeEvent('et-dedup');
+        $challenge = $this->createChallenge(['name' => 'Dedup Challenge']);
+        $this->finishResult($event, $dist, $competitor['id'], $competitor['name']);
+        $this->approveEntry((string) $challenge['id'], $competitor['id'], $event['id']);
+
+        $node = [
+            'type' => 'event_threshold',
+            'requiredCount' => 2, // if the Event were double-counted, this would wrongly pass
+            'events' => [['eventId' => $event['id']]],
+        ];
+
+        $memo = [];
+        self::assertFalse($this->evaluator->evaluateNode($node, $competitor['id'], $memo), 'One Event backed by both a result and a manual entry must still count once.');
+    }
+
     // --- point_threshold (delegates to E6.2's scorer) -----------------------
 
     public function testPointThresholdDelegatesToScorer(): void

@@ -641,7 +641,7 @@ final class ChallengeRepository extends Repository
 
         $memo = [];
         try {
-            return $this->treeEvaluator()->evaluateNode($tree, $userId, $memo);
+            return $this->treeEvaluator()->evaluateNode($tree, $userId, $memo, 0, (string) $challenge['id']);
         } catch (\RuntimeException $e) {
             error_log('[ChallengeConditionTreeEvaluator] ' . $e->getMessage());
             return false;

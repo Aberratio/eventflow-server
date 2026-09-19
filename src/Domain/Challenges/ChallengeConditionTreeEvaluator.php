@@ -95,7 +95,7 @@ final class ChallengeConditionTreeEvaluator
         // here resolves to false on the repeat visit instead of looping.
         $memo[$key] = false;
         $tree = $this->challenges->getConditionTree($challengeId);
-        $result = $tree === null ? false : $this->evaluateNode($tree, $userId, $memo, $depth);
+        $result = $tree === null ? false : $this->evaluateNode($tree, $userId, $memo, $depth, $challengeId);
         $memo[$key] = $result;
         return $result;
     }
@@ -107,18 +107,31 @@ final class ChallengeConditionTreeEvaluator
      * embedded `conditionTree`) can evaluate it without a redundant
      * getConditionTree() round-trip.
      *
+     * $challengeId (E6.4, issue 15 §3) scopes an `event_threshold` node's
+     * manual-entry lookup to entries submitted/approved under THIS Wyzwanie —
+     * `challenge_entries` is keyed on (challengeId, userId, eventId)
+     * (ChallengeRepository::submitEntry()'s entryFor() lookup), i.e. two
+     * different Wyzwania that both link the same Event each require their
+     * own separate manual submission + Moderator approval. Left `null` for
+     * backward compatibility (pre-E6.4 callers, and every direct unit test of
+     * a bare node in isolation) — a `null` challengeId falls back to the
+     * broader "approved manual entry for this Event by this user under ANY
+     * challenge" match rather than refusing to match at all, since a caller
+     * that truly doesn't know its own challenge context has no narrower
+     * question to ask.
+     *
      * @param array<string, mixed> $node
      * @param array<string, bool> $memo
      */
-    public function evaluateNode(array $node, string $userId, array &$memo, int $depth = 0): bool
+    public function evaluateNode(array $node, string $userId, array &$memo, int $depth = 0, ?string $challengeId = null): bool
     {
         $this->guardDepth($depth);
 
         return match ($node['type'] ?? null) {
-            'event_threshold' => $this->evaluateEventThreshold($node, $userId),
+            'event_threshold' => $this->evaluateEventThreshold($node, $userId, $challengeId),
             'point_threshold' => $this->pointScorer->score($node, $userId)['satisfied'],
             'sub_challenge_threshold' => $this->evaluateSubChallengeThreshold($node, $userId, $memo, $depth),
-            'group' => $this->evaluateGroup($node, $userId, $memo, $depth),
+            'group' => $this->evaluateGroup($node, $userId, $memo, $depth, $challengeId),
             default => false,
         };
     }
@@ -134,8 +147,34 @@ final class ChallengeConditionTreeEvaluator
         }
     }
 
-    /** @param array<string, mixed> $node */
-    private function evaluateEventThreshold(array $node, string $userId): bool
+    /**
+     * E6.4 (issue 15 §3): counts an Event as "completed for this competitor"
+     * from EITHER a real `results` row (auto-synced, the pre-existing path)
+     * OR an approved `challenge_entries` row with `source = 'manual'` (the
+     * moderator-verified proof path) — whichever exists. This is the fix for
+     * a real gap E6.3 left open: a manually-approved entry for an external
+     * Event (issue 15 §3 — "obslugiwane przez Wydarzenie zewnetrzne, stan bez
+     * Dystansow i zapisow") has no timing infrastructure behind it at all, so
+     * it can NEVER have a `results` row — without this UNION, an approved
+     * manual proof would satisfy `submitEntry()`/`reviewEntry()`'s own bookkeeping
+     * but never actually count toward the tree's `event_threshold` node, i.e.
+     * the Wyzwanie would never be marked complete no matter how many manual
+     * entries a Moderator approves. `DISTINCT` across the UNION collapses the
+     * (rare, but possible — e.g. a result was later imported for an Event that
+     * also has an old approved manual entry) double-count case: one Event
+     * counts once no matter which path verified it.
+     *
+     * The window filter is applied to both sources uniformly — the `results`
+     * path already filtered by the Event's own `date` via a JOIN; the manual
+     * path does the same (it has no separate "when did this happen" signal
+     * more authoritative than the Event's date, since submitted/reviewed
+     * timestamps describe the paperwork, not the race), so both branches are
+     * windowed identically rather than picking two different notions of
+     * "when".
+     *
+     * @param array<string, mixed> $node
+     */
+    private function evaluateEventThreshold(array $node, string $userId, ?string $challengeId): bool
     {
         $required = max(0, (int) ($node['requiredCount'] ?? 0));
         $eventIds = array_values(array_unique(array_map(
@@ -147,21 +186,31 @@ final class ChallengeConditionTreeEvaluator
         }
 
         $placeholders = implode(',', array_fill(0, count($eventIds), '?'));
-        $sql = "SELECT COUNT(DISTINCT r.event_id) FROM results r
-                INNER JOIN events e ON e.id = r.event_id
-                WHERE r.user_id = ? AND r.status = 'finished' AND r.event_id IN ({$placeholders})";
-        $params = [$userId, ...$eventIds];
-
         $windowStart = $node['windowStart'] ?? null;
         $windowEnd = $node['windowEnd'] ?? null;
+        $windowSql = '';
+        $windowParams = [];
         if ($windowStart !== null && $windowStart !== '') {
-            $sql .= ' AND e.date >= ?';
-            $params[] = $windowStart;
+            $windowSql .= ' AND e.date >= ?';
+            $windowParams[] = $windowStart;
         }
         if ($windowEnd !== null && $windowEnd !== '') {
-            $sql .= ' AND e.date <= ?';
-            $params[] = $windowEnd;
+            $windowSql .= ' AND e.date <= ?';
+            $windowParams[] = $windowEnd;
         }
+
+        $challengeSql = $challengeId !== null ? ' AND ce.challenge_id = ?' : '';
+        $challengeParam = $challengeId !== null ? [$challengeId] : [];
+        $sql = "SELECT COUNT(DISTINCT event_id) FROM (
+                    SELECT r.event_id AS event_id FROM results r
+                    INNER JOIN events e ON e.id = r.event_id
+                    WHERE r.user_id = ? AND r.status = 'finished' AND r.event_id IN ({$placeholders}){$windowSql}
+                    UNION
+                    SELECT ce.event_id AS event_id FROM challenge_entries ce
+                    INNER JOIN events e ON e.id = ce.event_id
+                    WHERE ce.user_id = ? AND ce.status = 'approved' AND ce.source = 'manual' AND ce.event_id IN ({$placeholders}){$windowSql}{$challengeSql}
+                ) completed_events";
+        $params = [$userId, ...$eventIds, ...$windowParams, $userId, ...$eventIds, ...$windowParams, ...$challengeParam];
 
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
@@ -174,7 +223,7 @@ final class ChallengeConditionTreeEvaluator
      * @param array<string, mixed> $node
      * @param array<string, bool> $memo
      */
-    private function evaluateGroup(array $node, string $userId, array &$memo, int $depth): bool
+    private function evaluateGroup(array $node, string $userId, array &$memo, int $depth, ?string $challengeId): bool
     {
         $children = array_values(array_filter((array) ($node['children'] ?? []), 'is_array'));
         if ($children === []) {
@@ -186,7 +235,7 @@ final class ChallengeConditionTreeEvaluator
 
         $satisfiedCount = 0;
         foreach ($children as $child) {
-            if ($this->evaluateNode($child, $userId, $memo, $depth + 1)) {
+            if ($this->evaluateNode($child, $userId, $memo, $depth + 1, $challengeId)) {
                 $satisfiedCount++;
             }
         }

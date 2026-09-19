@@ -2387,6 +2387,54 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         })->add(new AuthMiddleware($jwt));
         $api->post('/challenge-entries', fn (Request $request, Response $response) => JsonResponder::ok($response, $challenges->submitEntry($body($request), (array) $request->getAttribute('auth')), 'Challenge entry submitted', 201))
             ->add(new AuthMiddleware($jwt));
+        // E6.5 (issue 15 §4-5): "Uczestnictwo odblokowuje zakup Produktu" —
+        // userId is always the caller's own JWT (auth.sub), same as
+        // POST /shop/orders/POST /challenges/{id}/join, never something the
+        // request body could spoof. Reuses ChallengeRepository::claimReward(),
+        // which itself reuses OrderRepository::create() for the actual order —
+        // see its doc comment for the completion gate, double-claim lock and
+        // why the order/challenge writes aren't in one shared transaction.
+        $api->post('/challenges/{id}/claim-reward', function (Request $request, Response $response, array $args) use ($challenges, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $userId = (string) ($auth['sub'] ?? '');
+            $payload = $body($request);
+            $productId = (string) ($payload['productId'] ?? '');
+            try {
+                $participation = $challenges->claimReward((string) $args['id'], $productId, $payload, $userId);
+            } catch (\RuntimeException $e) {
+                $notFound = ['challenge_not_found' => 'Wyzwanie nie istnieje.'];
+                if (isset($notFound[$e->getMessage()])) {
+                    return JsonResponder::error($response, $e->getMessage(), $notFound[$e->getMessage()], 404);
+                }
+                $validationErrors = [
+                    'challenge_not_joined' => 'Nie dołączono do tego Wyzwania.',
+                    'challenge_invalid_reward_product' => 'Wskazany produkt nie jest nagrodą tego Wyzwania.',
+                    'order_invalid_product' => 'One or more products in this order are invalid or no longer available.',
+                    'order_invalid_delivery_method' => 'Selected delivery method is not recognized.',
+                    'order_invalid_payment_method' => 'Selected payment method is not recognized.',
+                    'order_invalid_address' => 'A complete shipping address is required for this delivery method.',
+                    'order_invalid_invoice_data' => 'Company name and a complete billing address are required to request an invoice.',
+                    'order_invalid_nip' => 'The provided NIP (tax ID) is not a valid Polish NIP.',
+                ];
+                if (isset($validationErrors[$e->getMessage()])) {
+                    return JsonResponder::error($response, $e->getMessage(), $validationErrors[$e->getMessage()], 422);
+                }
+                $forbidden = ['challenge_not_completed' => 'Wyzwanie nie zostało jeszcze ukończone.'];
+                if (isset($forbidden[$e->getMessage()])) {
+                    return JsonResponder::error($response, $e->getMessage(), $forbidden[$e->getMessage()], 403);
+                }
+                $conflictErrors = [
+                    'challenge_reward_already_claimed' => 'Nagroda dla tego Wyzwania została już odebrana.',
+                    'order_out_of_stock' => 'One or more products in this order are out of stock.',
+                    'order_insufficient_stock' => 'Requested quantity exceeds available stock for one or more products.',
+                ];
+                if (isset($conflictErrors[$e->getMessage()])) {
+                    return JsonResponder::error($response, $e->getMessage(), $conflictErrors[$e->getMessage()], 409);
+                }
+                throw $e;
+            }
+            return JsonResponder::ok($response, $participation, 'Reward claimed', 201);
+        })->add(new AuthMiddleware($jwt));
         $api->patch('/challenge-entries/{id}/review', function (Request $request, Response $response, array $args) use ($challenges, $body, $logActivity, $notifyChallengeCompletion) {
             $auth = (array) $request->getAttribute('auth');
             $payload = $body($request);

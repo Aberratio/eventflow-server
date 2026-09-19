@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Challenges;
 
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Domain\Shop\OrderRepository;
 
 final class ChallengeRepository extends Repository
 {
@@ -22,6 +23,15 @@ final class ChallengeRepository extends Repository
      * all over routes.php and the test suite) keeps working unchanged.
      */
     private ?ChallengeConditionTreeEvaluator $treeEvaluator = null;
+
+    /**
+     * E6.5 (issue 15 §4): lazily-built collaborator, same shape/rationale as
+     * $treeEvaluator above — claimReward() needs OrderRepository::create() to
+     * actually place the reward order, but adding it as a constructor
+     * argument would break every existing `new ChallengeRepository($pdo)`
+     * call site across routes.php and the test suite.
+     */
+    private ?OrderRepository $orders = null;
 
     /** @param array<string, mixed> $filters @return array<int, array<string, mixed>> */
     public function list(array $filters = []): array
@@ -488,6 +498,125 @@ final class ChallengeRepository extends Repository
         ]);
         $this->syncResultEntries($challengeId, (string) $user['id']);
         return $this->participations($challengeId, (string) $user['id'])[0];
+    }
+
+    /**
+     * E6.5 (issue 15 §4-5): claims this challenge's reward Product for
+     * $userId — "Uczestnictwo odblokowuje możliwość zakupu powiązanego
+     * Produktu". Gated on the SAME completion check
+     * hydrateParticipation()/checkCompletion() use
+     * (isChallengeCompletedForUser(), E6.3's real condition-tree evaluator —
+     * never a flat rule). Reuses OrderRepository::create() (E5.2/E5.6) for
+     * the actual order: price, stock/variant-limit enforcement, delivery and
+     * payment validation, and the zero-price path (a free reward is simply a
+     * Product with price 0 — same order flow, no special case here) all stay
+     * the shop's responsibility, not duplicated here.
+     *
+     * Double-claim guard (§4-5 leaves the mechanism unspecified — judgment
+     * call, documented here): `reward_granted` is flipped 0->1 with a single
+     * conditional UPDATE ("claim lock") BEFORE the shop order is created.
+     * ChallengeRepository and OrderRepository/ShopRepository don't share one
+     * transaction here — OrderRepository::create() opens and manages its own,
+     * and nesting a second beginTransaction() on the same PDO connection
+     * isn't supported — so true single-transaction atomicity across both
+     * domains would need a larger refactor outside this ticket's scope.
+     * Instead: the conditional UPDATE's affected-row count acts as an atomic
+     * compare-and-set lock (two concurrent claims can never both flip 0->1),
+     * and if OrderRepository::create() then throws for ANY reason (out of
+     * stock, invalid product/method/address, etc.) the lock is released
+     * (reverted back to 0) before rethrowing, so a failed purchase never
+     * leaves a phantom "reward granted" with no order behind it. The
+     * challenge's own completion status — computed separately by
+     * isChallengeCompletedForUser(), never written by this method — is
+     * completely unaffected by a failed or successful claim either way, per
+     * issue 15 §5 ("ukończenie Wyzwania nie znika").
+     *
+     * @param array<string, mixed> $item deliveryMethod/paymentMethod/shippingAddress/invoiceData/size/color, same shape OrderRepository::create() expects for a single-item cart
+     * @return array<string, mixed> the updated participation (see hydrateParticipation())
+     */
+    public function claimReward(string $challengeId, string $productId, array $item, string $userId): array
+    {
+        $challenge = $this->find($challengeId);
+        if ($challenge === null) {
+            throw new \RuntimeException('challenge_not_found');
+        }
+
+        $stmt = $this->pdo->prepare(
+            'SELECT id, reward_granted AS rewardGranted FROM challenge_participations WHERE challenge_id = :challengeId AND user_id = :userId'
+        );
+        $stmt->execute(['challengeId' => $challengeId, 'userId' => $userId]);
+        $participation = $stmt->fetch();
+        if ($participation === false) {
+            throw new \RuntimeException('challenge_not_joined');
+        }
+
+        if (!$this->isChallengeCompletedForUser($challenge, $userId)) {
+            throw new \RuntimeException('challenge_not_completed');
+        }
+
+        $isRewardProduct = false;
+        foreach ((array) ($challenge['products'] ?? []) as $product) {
+            if (($product['productId'] ?? null) === $productId && ($product['purpose'] ?? null) === 'reward') {
+                $isRewardProduct = true;
+                break;
+            }
+        }
+        if (!$isRewardProduct) {
+            throw new \RuntimeException('challenge_invalid_reward_product');
+        }
+
+        $participationId = (string) $participation['id'];
+        $claimedAt = date(DATE_ATOM);
+        $claim = $this->pdo->prepare(
+            'UPDATE challenge_participations SET reward_granted = 1, reward_granted_at = :at WHERE id = :id AND reward_granted = 0'
+        );
+        $claim->execute(['at' => $claimedAt, 'id' => $participationId]);
+        if ($claim->rowCount() !== 1) {
+            throw new \RuntimeException('challenge_reward_already_claimed');
+        }
+
+        try {
+            $order = $this->orders()->create([
+                'items' => [[
+                    'productId' => $productId,
+                    'quantity' => 1,
+                    'size' => $item['size'] ?? null,
+                    'color' => $item['color'] ?? null,
+                ]],
+                'deliveryMethod' => $item['deliveryMethod'] ?? null,
+                'paymentMethod' => $item['paymentMethod'] ?? null,
+                'shippingAddress' => $item['shippingAddress'] ?? null,
+                'invoiceData' => $item['invoiceData'] ?? null,
+            ], $userId);
+        } catch (\Throwable $e) {
+            $this->pdo->prepare(
+                'UPDATE challenge_participations SET reward_granted = 0, reward_granted_at = NULL WHERE id = :id'
+            )->execute(['id' => $participationId]);
+            throw $e;
+        }
+
+        $this->pdo->prepare('UPDATE challenge_participations SET selected_rewards = :selectedRewards WHERE id = :id')
+            ->execute([
+                'selectedRewards' => json_encode([[
+                    'productId' => $productId,
+                    'orderId' => $order['id'],
+                    'size' => $item['size'] ?? null,
+                    'color' => $item['color'] ?? null,
+                    'claimedAt' => $claimedAt,
+                ]], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'id' => $participationId,
+            ]);
+
+        return $this->participations($challengeId, $userId)[0];
+    }
+
+    /** Lazily builds the E6.5 order-creation collaborator — see its property doc comment. */
+    private function orders(): OrderRepository
+    {
+        if ($this->orders === null) {
+            $this->orders = new OrderRepository($this->pdo);
+        }
+        return $this->orders;
     }
 
     /** @param array<string, mixed> $data */

@@ -75,12 +75,47 @@ final class ChallengeRepository extends Repository
         return $this->find($id);
     }
 
-    /** @param array<string, mixed> $data */
+    /**
+     * @param array<string, mixed> $data
+     *
+     * E6.2 resync-gap fix (issue 15 §2, gap flagged by E6.1's own
+     * verification): editing a challenge's legacy flat `events` list through
+     * this method used to leave the condition tree (E6.1) untouched unless
+     * the caller also sent an explicit `conditionTree` - silently stale once
+     * E6.2 makes the tree's `point_threshold`/`event_threshold` nodes drive
+     * real scoring decisions.
+     *
+     * Chosen fix, scoped deliberately: auto-resync ONLY the unambiguous
+     * default-shape case (root is a single `event_threshold` node with no
+     * time window whose linked events are exactly the challenge's current
+     * flat `challenge_events` list - precisely the shape
+     * conditionTreeOrDefault()/migration 054's backfill both produce, i.e.
+     * "the admin never customized the tree"). For anything beyond that (a
+     * `group`/`point_threshold`/`sub_challenge_threshold` root, a windowed or
+     * already-subset-scoped event_threshold root, multiple leaf nodes, etc.)
+     * this method does NOT silently rewrite the tree - guessing which nodes
+     * an admin-customized tree "should" follow a flat-list edit would be
+     * wrong more often than right. Instead, `hydrate()` always exposes
+     * `conditionTreeMatchesEvents` (see below), a plain descriptive flag (not
+     * an alarm) so callers - including E6.3's future full-tree evaluator and
+     * the admin UI - can see at a glance whether the tree currently mirrors
+     * the flat list, and treat a customized tree's "false" as expected rather
+     * than stale.
+     */
     public function update(string $id, array $data): ?array
     {
         if (array_key_exists('conditionTree', $data)) {
             $this->assertValidTree($id, (array) $data['conditionTree']);
         }
+
+        $eventsChangingWithoutExplicitTree = array_key_exists('events', $data) && !array_key_exists('conditionTree', $data);
+        $oldFlatEventIds = null;
+        $oldTree = null;
+        if ($eventsChangingWithoutExplicitTree) {
+            $oldFlatEventIds = array_column($this->find($id)['events'] ?? [], 'eventId');
+            $oldTree = $this->getConditionTree($id);
+        }
+
         $this->pdo->beginTransaction();
         try {
             $this->updateById('challenges', $id, $this->challengeData($id, $data, false));
@@ -92,6 +127,13 @@ final class ChallengeRepository extends Repository
             }
             if (array_key_exists('conditionTree', $data)) {
                 $this->saveConditionTreeInternal($id, (array) $data['conditionTree']);
+            } elseif ($eventsChangingWithoutExplicitTree && $this->isDefaultEventThresholdTree($oldTree, $oldFlatEventIds ?? [])) {
+                $newEvents = array_values($data['events'] ?? []);
+                $this->saveConditionTreeInternal($id, [
+                    'type' => 'event_threshold',
+                    'requiredCount' => count($newEvents),
+                    'events' => $newEvents,
+                ]);
             }
             $this->pdo->commit();
         } catch (\Throwable $e) {
@@ -99,6 +141,31 @@ final class ChallengeRepository extends Repository
             throw $e;
         }
         return $this->find($id);
+    }
+
+    /**
+     * True only when $tree is exactly the "still the default" shape: a
+     * single root `event_threshold` node, no time window, whose linked
+     * events are precisely $flatEventIds (as a set) with requiredCount equal
+     * to that count. See update()'s doc comment for why only this exact
+     * shape is safe to auto-resync.
+     *
+     * @param array<string, mixed>|null $tree
+     * @param array<int, string> $flatEventIds
+     */
+    private function isDefaultEventThresholdTree(?array $tree, array $flatEventIds): bool
+    {
+        if ($tree === null || ($tree['type'] ?? null) !== 'event_threshold') {
+            return false;
+        }
+        if (($tree['windowStart'] ?? null) !== null || ($tree['windowEnd'] ?? null) !== null) {
+            return false;
+        }
+        $treeEventIds = array_column($tree['events'] ?? [], 'eventId');
+        sort($treeEventIds);
+        $flat = $flatEventIds;
+        sort($flat);
+        return $treeEventIds === $flat && (int) ($tree['requiredCount'] ?? -1) === count($flat);
     }
 
     /**
@@ -541,7 +608,18 @@ final class ChallengeRepository extends Repository
                 ];
             }
         }
-        $row['conditionTree'] = $this->getConditionTree((string) $row['id']);
+        $tree = $this->getConditionTree((string) $row['id']);
+        $row['conditionTree'] = $tree;
+        // E6.2 resync-gap guard (see update()'s doc comment): purely
+        // descriptive - true means the tree is still the plain
+        // "ukoncz wszystkie flat Wydarzenia" default shape, false means
+        // either it was deliberately customized (expected) or it has
+        // genuinely drifted from an `events` edit this repository couldn't
+        // safely auto-resync (worth a human glance in the admin UI).
+        $row['conditionTreeMatchesEvents'] = $this->isDefaultEventThresholdTree(
+            $tree,
+            array_column($row['events'], 'eventId')
+        );
         return $row;
     }
 

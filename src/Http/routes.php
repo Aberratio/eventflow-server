@@ -15,6 +15,8 @@ use ZmierzymyCzas\Domain\Bz\BzWebhookConfig;
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxRepository;
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxService;
 use ZmierzymyCzas\Domain\Bz\Http\CurlHttpClient as BzCurlHttpClient;
+use ZmierzymyCzas\Domain\Challenges\ChallengePointsSettingsRepository;
+use ZmierzymyCzas\Domain\Challenges\ChallengePointThresholdScorer;
 use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
 use ZmierzymyCzas\Domain\Cms\InfoPageRepository;
 use ZmierzymyCzas\Domain\Cms\PartnerRepository;
@@ -144,6 +146,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $series = new SeriesRepository($pdo);
     $shop = new ShopRepository($pdo);
     $challenges = new ChallengeRepository($pdo);
+    $challengePointsSettings = new ChallengePointsSettingsRepository($pdo);
+    $challengePointThresholdScorer = new ChallengePointThresholdScorer($pdo, $challengePointsSettings);
     // E1.10 mail #13 ("Ukończenie Wyzwania") — shared by every write path that
     // can cross a challenge's minCompleted threshold: manual approval
     // (reviewEntry(), below) and result-derived auto-approval (join(), which
@@ -366,7 +370,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
             'status' => 'ok',
             'env' => (string) Env::get('APP_ENV', ''),
@@ -2304,6 +2308,42 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             return JsonResponder::ok($response, $saved, 'Condition tree saved');
         })->add(new AuthMiddleware($jwt, $staffRoles));
+
+        // E6.2 (issue 15 §2): global, admin-configurable points-per-place
+        // table a `point_threshold` node converts an Event classification
+        // place into points with. Same read-open/write-admin-only shape as
+        // /insurance/settings.
+        $api->get('/challenge-points-settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $challengePointsSettings->getSettings()));
+        $api->patch('/challenge-points-settings', function (Request $request, Response $response) use ($challengePointsSettings, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            try {
+                $updated = $challengePointsSettings->updateSettings($body($request));
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
+            $logActivity($auth, 'challenge_points_settings_updated', 'Zaktualizowano tabele punktacji Wyzwan', 'challengePointsSettings', null, null);
+            return JsonResponder::ok($response, $updated);
+        })
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+
+        // E6.2: scores one point_threshold node of a Wyzwanie's condition
+        // tree for one competitor (issue 15 §2 building block — NOT the full
+        // recursive tree evaluator, which is out of scope here and belongs to
+        // E6.3 "Weryfikacja automatyczna ukonczenia z Wynikow"). The node is
+        // sent in the request body (its own definition — events/pointsRequired/
+        // bestResultsCount, the same shape the tree read/write endpoints use)
+        // rather than looked up by id, because hydrateNode() (E6.1) doesn't
+        // expose node ids in the tree it returns and adding them is outside
+        // this ticket's scope.
+        $api->post('/challenges/{id}/condition-tree/point-score/{userId}', function (Request $request, Response $response, array $args) use ($challengePointThresholdScorer, $body) {
+            $node = $body($request);
+            if (($node['type'] ?? null) !== 'point_threshold') {
+                return JsonResponder::error($response, 'validation_error', 'Expected a point_threshold node', 422);
+            }
+            return JsonResponder::ok($response, $challengePointThresholdScorer->score($node, (string) $args['userId']));
+        })
+            ->add(new AuthMiddleware($jwt));
+
         $api->post('/challenges/{id}/archive', function (Request $request, Response $response, array $args) use ($challenges, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $archived = $challenges->archive($args['id']);

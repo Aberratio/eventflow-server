@@ -57,6 +57,8 @@
             "php -l src/Database/ShopFixtureImporter.php",
             "php -l src/Database/SeriesLinker.php",
             "php -l src/Domain/Challenges/ChallengeRepository.php",
+            "php -l src/Domain/Challenges/ChallengePointsSettingsRepository.php",
+            "php -l src/Domain/Challenges/ChallengePointThresholdScorer.php",
             "php -l src/Domain/Mailer/CriticalMails/MailCatalog.php",
             "php -l src/Domain/Mailer/CriticalMails/MailRenderer.php",
             "php -l src/Domain/Mailer/CriticalMails/MailTemplateRepository.php",

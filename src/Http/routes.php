@@ -2272,16 +2272,38 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->get('/challenges/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->find($args['id'])));
         $api->post('/challenges', function (Request $request, Response $response) use ($challenges, $body) {
             $auth = (array) $request->getAttribute('auth');
-            return JsonResponder::ok($response, $challenges->create($body($request), (string) ($auth['sub'] ?? '')), 'Challenge created', 201);
+            try {
+                return JsonResponder::ok($response, $challenges->create($body($request), (string) ($auth['sub'] ?? '')), 'Challenge created', 201);
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
         })->add(new AuthMiddleware($jwt, $staffRoles));
         $api->patch('/challenges/{id}', function (Request $request, Response $response, array $args) use ($challenges, $body, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $existing = $challenges->find((string) $args['id']);
-            $updated = $challenges->update($args['id'], $body($request));
+            try {
+                $updated = $challenges->update($args['id'], $body($request));
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
             $logActivity($auth, 'challenge_updated', 'Zaktualizowano wyzwanie', 'challenge', (string) $args['id'], (string) ($updated['name'] ?? $existing['name'] ?? ''));
             return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt, $staffRoles));
+        // E6.1: dedicated read/write for a challenge's completion condition
+        // tree (issue 15 §1). GET/PATCH /challenges/{id} already embed the
+        // same tree (see ChallengeRepository::hydrate()) — these exist
+        // alongside them so the admin tree-builder UI can write just the
+        // tree without resending the whole flat challenge payload.
+        $api->get('/challenges/{id}/condition-tree', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->getConditionTree((string) $args['id'])));
+        $api->put('/challenges/{id}/condition-tree', function (Request $request, Response $response, array $args) use ($challenges, $body) {
+            try {
+                $saved = $challenges->saveConditionTree((string) $args['id'], $body($request));
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
+            return JsonResponder::ok($response, $saved, 'Condition tree saved');
+        })->add(new AuthMiddleware($jwt, $staffRoles));
         $api->post('/challenges/{id}/archive', function (Request $request, Response $response, array $args) use ($challenges, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $archived = $challenges->archive($args['id']);

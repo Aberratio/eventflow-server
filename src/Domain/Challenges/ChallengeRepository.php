@@ -11,6 +11,9 @@ final class ChallengeRepository extends Repository
     private const COLUMNS = 'id, name, slug, description, image_url AS imageUrl, series_id AS seriesId, min_completed AS minCompleted, max_time AS maxTime, start_date AS startDate, end_date AS endDate, status, created_by AS createdBy';
     private const STATUSES = ['active', 'completed', 'upcoming', 'archived'];
     private const ENTRY_STATUSES = ['pending', 'approved', 'rejected'];
+    /** E6.1 condition-tree node types (issue 15 §1). */
+    private const NODE_TYPES = ['group', 'event_threshold', 'point_threshold', 'sub_challenge_threshold'];
+    private const LEAF_EVENT_NODE_TYPES = ['event_threshold', 'point_threshold'];
 
     /** @param array<string, mixed> $filters @return array<int, array<string, mixed>> */
     public function list(array $filters = []): array
@@ -61,6 +64,9 @@ final class ChallengeRepository extends Repository
             $this->insert('challenges', $this->challengeData($id, [...$data, 'createdBy' => $actorId], true));
             $this->replaceEvents($id, $data['events'] ?? []);
             $this->replaceProducts($id, $data['products'] ?? $data['rewards'] ?? []);
+            $tree = $this->conditionTreeOrDefault($data);
+            $this->assertValidTree($id, $tree);
+            $this->saveConditionTreeInternal($id, $tree);
             $this->pdo->commit();
         } catch (\Throwable $e) {
             $this->pdo->rollBack();
@@ -72,6 +78,9 @@ final class ChallengeRepository extends Repository
     /** @param array<string, mixed> $data */
     public function update(string $id, array $data): ?array
     {
+        if (array_key_exists('conditionTree', $data)) {
+            $this->assertValidTree($id, (array) $data['conditionTree']);
+        }
         $this->pdo->beginTransaction();
         try {
             $this->updateById('challenges', $id, $this->challengeData($id, $data, false));
@@ -81,12 +90,280 @@ final class ChallengeRepository extends Repository
             if (array_key_exists('products', $data) || array_key_exists('rewards', $data)) {
                 $this->replaceProducts($id, $data['products'] ?? $data['rewards'] ?? []);
             }
+            if (array_key_exists('conditionTree', $data)) {
+                $this->saveConditionTreeInternal($id, (array) $data['conditionTree']);
+            }
             $this->pdo->commit();
         } catch (\Throwable $e) {
             $this->pdo->rollBack();
             throw $e;
         }
         return $this->find($id);
+    }
+
+    /**
+     * E6.1: reads a challenge's condition tree back as nested JSON (see
+     * hydrateNode() for the exact shape). Returns null only if the challenge
+     * has no root node at all, which should not happen for any challenge
+     * created after this migration (create() always seeds one) — a legacy
+     * row that somehow lacks one falls back to null rather than throwing, so
+     * a stale read never 500s.
+     */
+    public function getConditionTree(string $challengeId): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, parent_node_id AS parentNodeId, node_type AS nodeType, required_count AS requiredCount,
+                    points_required AS pointsRequired, best_results_count AS bestResultsCount,
+                    window_start AS windowStart, window_end AS windowEnd, sort_order AS sortOrder
+             FROM challenge_condition_nodes WHERE challenge_id = :id ORDER BY sort_order ASC'
+        );
+        $stmt->execute(['id' => $challengeId]);
+        $rows = $stmt->fetchAll();
+        if ($rows === []) {
+            return null;
+        }
+        $byId = [];
+        $root = null;
+        foreach ($rows as $row) {
+            $byId[(string) $row['id']] = $row;
+            if ($row['parentNodeId'] === null) {
+                $root = $row;
+            }
+        }
+        return $root === null ? null : $this->hydrateNode($root, $byId);
+    }
+
+    /**
+     * E6.1: replaces a challenge's entire condition tree. Public entry point
+     * used by the dedicated tree endpoint; create()/update() go through the
+     * *Internal variant below because they already hold the transaction and
+     * (for update()) already ran assertValidTree() before starting it.
+     *
+     * @param array<string, mixed> $tree
+     */
+    public function saveConditionTree(string $challengeId, array $tree): ?array
+    {
+        $this->assertValidTree($challengeId, $tree);
+        $this->pdo->beginTransaction();
+        try {
+            $this->saveConditionTreeInternal($challengeId, $tree);
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+        return $this->getConditionTree($challengeId);
+    }
+
+    /** @param array<string, mixed> $tree */
+    private function assertValidTree(string $challengeId, array $tree): void
+    {
+        if ($this->find($challengeId) === null) {
+            throw new \InvalidArgumentException('Wyzwanie nie istnieje.');
+        }
+        $subChallengeIds = [];
+        $this->collectSubChallengeIds($tree, $subChallengeIds);
+        foreach (array_unique($subChallengeIds) as $subChallengeId) {
+            if ($subChallengeId === $challengeId) {
+                throw new \InvalidArgumentException('Węzeł progu pod-Wyzwań nie może odwoływać się do własnego Wyzwania.');
+            }
+            if ($this->find($subChallengeId) === null) {
+                throw new \InvalidArgumentException("Wskazane pod-Wyzwanie ({$subChallengeId}) nie istnieje lub nie zostało jeszcze zapisane.");
+            }
+            // Spec invariant: references only go down (a sub-challenge is
+            // always created/saved before the challenge that composes it),
+            // so a cycle can only appear if the referenced sub-challenge's
+            // own (already-saved) tree transitively references back up to
+            // $challengeId. Walk it defensively rather than trust the
+            // invariant blindly.
+            if (in_array($challengeId, $this->collectReferencedChallengeIds($subChallengeId, []), true)) {
+                throw new \InvalidArgumentException('Wykryto cykl w drzewie warunków ukończenia Wyzwania.');
+            }
+        }
+    }
+
+    /** @param array<string, mixed> $node @param array<int, string> $ids */
+    private function collectSubChallengeIds(array $node, array &$ids): void
+    {
+        $type = (string) ($node['type'] ?? '');
+        if ($type === 'sub_challenge_threshold') {
+            foreach (array_values($node['subChallenges'] ?? []) as $sub) {
+                $subId = is_array($sub) ? (string) ($sub['challengeId'] ?? '') : (string) $sub;
+                if ($subId !== '') {
+                    $ids[] = $subId;
+                }
+            }
+        }
+        if ($type === 'group') {
+            foreach (array_values($node['children'] ?? []) as $child) {
+                if (is_array($child)) {
+                    $this->collectSubChallengeIds($child, $ids);
+                }
+            }
+        }
+    }
+
+    /** @param array<int, string> $seen @return array<int, string> */
+    private function collectReferencedChallengeIds(string $challengeId, array $seen): array
+    {
+        if (in_array($challengeId, $seen, true)) {
+            return $seen;
+        }
+        $seen[] = $challengeId;
+        $stmt = $this->pdo->prepare(
+            'SELECT DISTINCT sc.sub_challenge_id AS subChallengeId
+             FROM challenge_condition_node_sub_challenges sc
+             INNER JOIN challenge_condition_nodes n ON n.id = sc.node_id
+             WHERE n.challenge_id = :challengeId'
+        );
+        $stmt->execute(['challengeId' => $challengeId]);
+        foreach ($stmt->fetchAll() as $row) {
+            $seen = $this->collectReferencedChallengeIds((string) $row['subChallengeId'], $seen);
+        }
+        return $seen;
+    }
+
+    /** @param array<string, mixed> $tree */
+    private function saveConditionTreeInternal(string $challengeId, array $tree): void
+    {
+        $this->pdo->prepare('DELETE FROM challenge_condition_nodes WHERE challenge_id = :id')->execute(['id' => $challengeId]);
+        $this->insertNode($challengeId, null, $tree, 0);
+    }
+
+    /** @param array<string, mixed> $node */
+    private function insertNode(string $challengeId, ?string $parentId, array $node, int $sortOrder): void
+    {
+        $type = (string) ($node['type'] ?? '');
+        if (!in_array($type, self::NODE_TYPES, true)) {
+            throw new \InvalidArgumentException("Nieprawidłowy typ węzła warunku ukończenia: \"{$type}\".");
+        }
+
+        $id = $this->id();
+        $this->insert('challenge_condition_nodes', [
+            'id' => $id,
+            'challenge_id' => $challengeId,
+            'parent_node_id' => $parentId,
+            'node_type' => $type,
+            'required_count' => isset($node['requiredCount']) ? max(0, (int) $node['requiredCount']) : null,
+            'points_required' => isset($node['pointsRequired']) ? max(0, (int) $node['pointsRequired']) : null,
+            'best_results_count' => isset($node['bestResultsCount']) ? max(0, (int) $node['bestResultsCount']) : null,
+            'window_start' => $node['windowStart'] ?? null,
+            'window_end' => $node['windowEnd'] ?? null,
+            'sort_order' => $sortOrder,
+        ]);
+
+        if (in_array($type, self::LEAF_EVENT_NODE_TYPES, true)) {
+            foreach (array_values($node['events'] ?? []) as $index => $event) {
+                $eventId = is_array($event) ? (string) ($event['eventId'] ?? '') : (string) $event;
+                if ($eventId === '') {
+                    continue;
+                }
+                $this->insert('challenge_condition_node_events', ['node_id' => $id, 'event_id' => $eventId, 'sort_order' => $index]);
+            }
+        }
+
+        if ($type === 'sub_challenge_threshold') {
+            foreach (array_values($node['subChallenges'] ?? []) as $index => $sub) {
+                $subId = is_array($sub) ? (string) ($sub['challengeId'] ?? '') : (string) $sub;
+                if ($subId === '') {
+                    continue;
+                }
+                $this->insert('challenge_condition_node_sub_challenges', ['node_id' => $id, 'sub_challenge_id' => $subId, 'sort_order' => $index]);
+            }
+        }
+
+        if ($type === 'group') {
+            $children = array_values($node['children'] ?? []);
+            if ($children === []) {
+                throw new \InvalidArgumentException('Węzeł grupujący (AND/próg) musi mieć co najmniej jedno dziecko.');
+            }
+            foreach ($children as $index => $child) {
+                if (!is_array($child)) {
+                    throw new \InvalidArgumentException('Nieprawidłowa definicja dziecka węzła grupującego.');
+                }
+                $this->insertNode($challengeId, $id, $child, $index);
+            }
+        }
+    }
+
+    /**
+     * Default tree for create(): a single root event_threshold node mirroring
+     * the flat `events` list ("ukończ wszystkie"), exactly the shape the
+     * 054 migration backfills onto pre-existing challenges — keeps the flat
+     * creation path (no `conditionTree` in the payload, still what the
+     * existing admin UI/tests send) producing a valid, equivalent tree.
+     *
+     * @param array<string, mixed> $data @return array<string, mixed>
+     */
+    private function conditionTreeOrDefault(array $data): array
+    {
+        if (isset($data['conditionTree']) && is_array($data['conditionTree'])) {
+            return $data['conditionTree'];
+        }
+        $events = array_values($data['events'] ?? []);
+        return [
+            'type' => 'event_threshold',
+            'requiredCount' => count($events),
+            'events' => $events,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @param array<string, array<string, mixed>> $byId
+     * @return array<string, mixed>
+     */
+    private function hydrateNode(array $row, array $byId): array
+    {
+        $node = [
+            'type' => $row['nodeType'],
+            'requiredCount' => $row['requiredCount'] !== null ? (int) $row['requiredCount'] : null,
+        ];
+
+        if ($row['nodeType'] === 'point_threshold') {
+            $node['pointsRequired'] = $row['pointsRequired'] !== null ? (int) $row['pointsRequired'] : null;
+            $node['bestResultsCount'] = $row['bestResultsCount'] !== null ? (int) $row['bestResultsCount'] : null;
+        }
+
+        if (in_array($row['nodeType'], [...self::LEAF_EVENT_NODE_TYPES, 'sub_challenge_threshold'], true)) {
+            $node['windowStart'] = $row['windowStart'];
+            $node['windowEnd'] = $row['windowEnd'];
+        }
+
+        if (in_array($row['nodeType'], self::LEAF_EVENT_NODE_TYPES, true)) {
+            $events = $this->pdo->prepare(
+                'SELECT cne.event_id AS eventId, e.name AS eventName, e.date AS eventDate
+                 FROM challenge_condition_node_events cne LEFT JOIN events e ON e.id = cne.event_id
+                 WHERE cne.node_id = :id ORDER BY cne.sort_order ASC'
+            );
+            $events->execute(['id' => $row['id']]);
+            $node['events'] = array_map(static fn (array $e): array => [
+                'eventId' => $e['eventId'],
+                'eventName' => $e['eventName'] ?? $e['eventId'],
+                'eventDate' => $e['eventDate'] ?? '',
+            ], $events->fetchAll());
+        }
+
+        if ($row['nodeType'] === 'sub_challenge_threshold') {
+            $subs = $this->pdo->prepare(
+                'SELECT sc.sub_challenge_id AS challengeId, c.name
+                 FROM challenge_condition_node_sub_challenges sc LEFT JOIN challenges c ON c.id = sc.sub_challenge_id
+                 WHERE sc.node_id = :id ORDER BY sc.sort_order ASC'
+            );
+            $subs->execute(['id' => $row['id']]);
+            $node['subChallenges'] = array_map(static fn (array $s): array => [
+                'challengeId' => $s['challengeId'],
+                'name' => $s['name'] ?? $s['challengeId'],
+            ], $subs->fetchAll());
+        }
+
+        if ($row['nodeType'] === 'group') {
+            $children = array_values(array_filter($byId, static fn (array $r): bool => $r['parentNodeId'] === $row['id']));
+            usort($children, static fn (array $a, array $b): int => $a['sortOrder'] <=> $b['sortOrder']);
+            $node['children'] = array_map(fn (array $child): array => $this->hydrateNode($child, $byId), $children);
+        }
+
+        return $node;
     }
 
     public function archive(string $id): ?array
@@ -264,6 +541,7 @@ final class ChallengeRepository extends Repository
                 ];
             }
         }
+        $row['conditionTree'] = $this->getConditionTree((string) $row['id']);
         return $row;
     }
 

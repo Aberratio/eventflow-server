@@ -538,6 +538,109 @@ final class ShopOrderContractTest extends HttpTestCase
         self::assertSame(0, $this->countOrdersForBuyer());
     }
 
+    /**
+     * E5.6 (issue 16 §2): the organizer package is a `shop_products` row
+     * flagged `serviceKind = 'organizer_package'` — a digital, no-delivery
+     * product. Buying one grants exactly `quantity` credits on the buyer's
+     * `organizer_package_credits` counter; the order needs no delivery method
+     * and no shipping address at all, unlike every other product in this file.
+     */
+    public function testPurchasingOrganizerPackageIncrementsCreditByOne(): void
+    {
+        $product = $this->createOrganizerPackageProduct();
+
+        $payload = [
+            'items' => [
+                ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 1, 'price' => 1],
+            ],
+            'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+            // deliberately no deliveryMethod, no shippingAddress.
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame(1, $this->organizerPackageCredits($this->buyer['id']));
+    }
+
+    public function testPurchasingNUnitsOfOrganizerPackageIncrementsCreditByN(): void
+    {
+        $product = $this->createOrganizerPackageProduct();
+
+        $payload = [
+            'items' => [
+                ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 3, 'price' => 1],
+            ],
+            'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame(3, $this->organizerPackageCredits($this->buyer['id']));
+    }
+
+    /**
+     * E5.6/issue 16 §5: a digital-only order never goes through a delivery
+     * method — omitting it entirely still succeeds (unlike every physical
+     * product in this file, where a missing/invalid delivery method is
+     * `order_invalid_delivery_method`).
+     */
+    public function testDigitalOnlyOrderSucceedsWithoutAnyDeliveryMethod(): void
+    {
+        $product = $this->createOrganizerPackageProduct();
+
+        $payload = [
+            'items' => [
+                ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 1, 'price' => 1],
+            ],
+            'paymentMethod' => ['id' => 'card', 'name' => 'Karta platnicza'],
+        ];
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/shop/orders',
+            $payload,
+            $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
+        );
+
+        self::assertSame(201, $response->getStatusCode());
+    }
+
+    /** @return array<string, mixed> */
+    private function createOrganizerPackageProduct(array $overrides = []): array
+    {
+        return $this->createProduct(array_merge([
+            'name' => $this->prefix . ' Pakiet Organizatora',
+            'slug' => $this->prefix . '-organizer-package',
+            'description' => 'Prawo do utworzenia jednego Wydarzenia.',
+            'price' => 499.0,
+            'category' => 'organizer',
+            'brand' => 'Zmierzymy Czas',
+            'inStock' => true,
+            'stockCount' => null,
+            'isService' => true,
+            'serviceKind' => 'organizer_package',
+        ], $overrides));
+    }
+
+    private function organizerPackageCredits(string $userId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT organizer_package_credits FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+        return (int) $stmt->fetchColumn();
+    }
+
     private function countOrdersForBuyer(): int
     {
         $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM shop_orders WHERE user_id = :id');

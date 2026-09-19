@@ -434,6 +434,139 @@ final class OrganizerEventContractTest extends HttpTestCase
         self::assertSame('forbidden', $this->json($response)['error']['code']);
     }
 
+    /**
+     * E5.6 (issue 16 §2): submitting with an available "pakiet organizatora"
+     * credit succeeds and spends exactly one credit — never at Draft creation,
+     * only at the Szkic -> Zgloszone transition itself.
+     */
+    public function testSubmitWithAvailableCreditSucceedsAndDecrementsCreditByOne(): void
+    {
+        $this->grantOrganizerPackageCredits($this->organizerA['id'], 2);
+
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-credit-submit']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+        // Creating (and freely editing) the Draft never touched the credit.
+        self::assertSame(2, $this->organizerPackageCredits($this->organizerA['id']));
+
+        $submitResp = $this->request(
+            'POST',
+            '/api/v1/events/' . $eventId . '/submit',
+            [],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+
+        self::assertSame(200, $submitResp->getStatusCode());
+        self::assertSame('submitted', $this->json($submitResp)['data']['publicationStatus']);
+        self::assertSame(1, $this->organizerPackageCredits($this->organizerA['id']));
+    }
+
+    /**
+     * E5.6: with zero available credit, the submit is rejected with a clear 4xx
+     * business error, the event stays in Draft, and the (already-zero) credit
+     * counter is left untouched — no partial/desynced state.
+     */
+    public function testSubmitWithNoAvailableCreditIsRejectedAndEventStaysDraft(): void
+    {
+        // organizerA starts with 0 organizer_package_credits (default) — no grant.
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-credit-none']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+
+        $submitResp = $this->request(
+            'POST',
+            '/api/v1/events/' . $eventId . '/submit',
+            [],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+
+        self::assertSame(409, $submitResp->getStatusCode());
+        self::assertSame('event_submit_no_organizer_credit', $this->json($submitResp)['error']['code']);
+        self::assertSame(0, $this->organizerPackageCredits($this->organizerA['id']));
+
+        $fetched = $this->json($this->request(
+            'GET',
+            '/api/v1/events/' . $eventId,
+            [],
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        ))['data'];
+        self::assertSame('draft', $fetched['publicationStatus']);
+    }
+
+    /**
+     * E5.6: rejection by a moderator refunds exactly one credit back to the
+     * organizer — the platform decided the event isn't good enough, so the
+     * organizer shouldn't be out a credit for trying.
+     */
+    public function testRejectingSubmittedEventRefundsCreditByOne(): void
+    {
+        $this->grantOrganizerPackageCredits($this->organizerA['id'], 1);
+
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-credit-refund']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+
+        $this->request('POST', '/api/v1/events/' . $eventId . '/submit', [], $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email']));
+        self::assertSame(0, $this->organizerPackageCredits($this->organizerA['id']));
+
+        $rejectResp = $this->request(
+            'POST',
+            '/api/v1/events/' . $eventId . '/reject',
+            ['reason' => 'Brakuje regulaminu'],
+            $this->bearer($this->admin['id'], 'admin', $this->admin['email'])
+        );
+
+        self::assertSame(200, $rejectResp->getStatusCode());
+        self::assertSame('draft', $this->json($rejectResp)['data']['publicationStatus']);
+        self::assertSame(1, $this->organizerPackageCredits($this->organizerA['id']));
+    }
+
+    /**
+     * E5.6: approval is a one-shot consumption model — the credit was already
+     * spent at submit(), and approve() (Submitted -> Published) must not touch
+     * it again in either direction.
+     */
+    public function testApprovingSubmittedEventDoesNotTouchCredit(): void
+    {
+        $this->grantOrganizerPackageCredits($this->organizerA['id'], 1);
+
+        $createResp = $this->request(
+            'POST',
+            '/api/v1/events',
+            $this->eventPayload(['slug' => $this->prefix . '-credit-approve']),
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
+        );
+        $eventId = $this->json($createResp)['data']['id'];
+
+        $this->request('POST', '/api/v1/events/' . $eventId . '/submit', [], $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email']));
+        self::assertSame(0, $this->organizerPackageCredits($this->organizerA['id']));
+
+        $approveResp = $this->request(
+            'POST',
+            '/api/v1/events/' . $eventId . '/approve',
+            [],
+            $this->bearer($this->admin['id'], 'admin', $this->admin['email'])
+        );
+
+        self::assertSame(200, $approveResp->getStatusCode());
+        self::assertSame('published', $this->json($approveResp)['data']['publicationStatus']);
+        // Still 0 — approve() neither spends nor refunds, consumption already
+        // happened at submit() and is one-shot.
+        self::assertSame(0, $this->organizerPackageCredits($this->organizerA['id']));
+    }
+
     public function testAdminCanRejectEventWithReason(): void
     {
         $createResp = $this->request(
@@ -578,6 +711,26 @@ final class OrganizerEventContractTest extends HttpTestCase
     private function ensureEventStatusSchema(): void
     {
         \ZmierzymyCzas\Database\Migrator::applyAll($this->pdo);
+    }
+
+    /**
+     * E5.6: there is no public write API for organizer_package_credits other
+     * than a real shop purchase (OrderRepository::create(), covered separately
+     * in ShopOrderContractTest) — tests here that need a starting credit balance
+     * set it directly, the same way this suite already sets `eventLimit` via
+     * UserRepository::create()'s options for a different axis.
+     */
+    private function grantOrganizerPackageCredits(string $userId, int $count): void
+    {
+        $this->pdo->prepare('UPDATE users SET organizer_package_credits = organizer_package_credits + :count WHERE id = :id')
+            ->execute(['count' => $count, 'id' => $userId]);
+    }
+
+    private function organizerPackageCredits(string $userId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT organizer_package_credits FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+        return (int) $stmt->fetchColumn();
     }
 
     private function eventPayload(array $overrides = []): array

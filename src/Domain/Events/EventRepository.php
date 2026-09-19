@@ -327,6 +327,16 @@ SQL;
      * Draft -> Submitted. Also clears is_test irreversibly (E1.1: the flag only exists to
      * let an organizer walk the registration form before moderation; once submitted for
      * real, the event can never go back into test mode, even if rejected back to Draft).
+     *
+     * E5.6 (issue 16 §2, umowa §5.5): this is where the "pakiet organizatora" credit is
+     * actually spent — never at Draft creation, never at publication. An organizer may
+     * freely create and edit Drafts; the first thing that costs a credit is asking a
+     * moderator to look at it. No available credit is a 4xx business error
+     * (`event_submit_no_organizer_credit`), not a silent no-op — the event stays in
+     * Draft, untouched, same as any other failed transition here. The decrement and the
+     * status change happen in one transaction so the two can never desync (a crash
+     * between them would otherwise either spend a credit with no submission to show for
+     * it, or grant a free submission).
      */
     public function submit(string $id): ?array
     {
@@ -337,12 +347,22 @@ SQL;
         if ((string) $event['publicationStatus'] !== 'draft') {
             return null;
         }
-        $this->updateById('events', $id, [
-            'publication_status' => 'submitted',
-            'rejection_reason' => null,
-            'submitted_at' => date(DATE_ATOM),
-            'is_test' => 0,
-        ]);
+
+        $this->pdo->beginTransaction();
+        try {
+            $this->consumeOrganizerPackageCredit((string) $event['organizerId']);
+            $this->updateById('events', $id, [
+                'publication_status' => 'submitted',
+                'rejection_reason' => null,
+                'submitted_at' => date(DATE_ATOM),
+                'is_test' => 0,
+            ]);
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
         return $this->find($id);
     }
 
@@ -374,6 +394,13 @@ SQL;
      * Submitted -> Draft (with the reason kept for the organizer to see). Like `approved`,
      * `rejected` is a legal ENUM value but not a resting state the application ever writes
      * — rejecting an event is a new Draft cycle, not a persistent "Rejected" status.
+     *
+     * E5.6: rejection refunds the "pakiet organizatora" credit spent at submit() — the
+     * platform decided this Wydarzenie doesn't meet the bar, so it shouldn't cost the
+     * organizer money (issue 16 §2). Refund and status change happen in the same
+     * transaction as submit()'s consumption does, for the same desync-safety reason.
+     * approve() (below) deliberately has no equivalent — consumption is one-shot, at
+     * submission time, and approval never touches the credit.
      */
     public function reject(string $id, string $reason): ?array
     {
@@ -381,10 +408,20 @@ SQL;
         if (!$event || $event['publicationStatus'] !== 'submitted') {
             return null;
         }
-        $this->updateById('events', $id, [
-            'publication_status' => 'draft',
-            'rejection_reason' => $reason,
-        ]);
+
+        $this->pdo->beginTransaction();
+        try {
+            $this->refundOrganizerPackageCredit((string) $event['organizerId']);
+            $this->updateById('events', $id, [
+                'publication_status' => 'draft',
+                'rejection_reason' => $reason,
+            ]);
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
         return $this->find($id);
     }
 
@@ -886,6 +923,35 @@ SQL;
         if ($limit['used'] >= $limit['limit']) {
             throw new \RuntimeException('event_limit_exceeded');
         }
+    }
+
+    /**
+     * E5.6: atomic, affected-rows-guarded decrement of the "pakiet organizatora"
+     * credit — mirrors incrementRegisteredCount()'s pattern in
+     * RegistrationRepository (E1.3): one UPDATE whose WHERE clause is the check,
+     * so there is no separate read-then-write race window. Deliberately its own
+     * counter (`users.organizer_package_credits`, migration 053) rather than the
+     * pre-existing but unused organizer_event_credit_batches/usages tables above
+     * (see 053's own comment for why) or `event_limit` (a different axis).
+     */
+    private function consumeOrganizerPackageCredit(string $organizerId): void
+    {
+        $stmt = $this->pdo->prepare(
+            'UPDATE users SET organizer_package_credits = organizer_package_credits - 1
+             WHERE id = :organizerId AND organizer_package_credits > 0'
+        );
+        $stmt->execute(['organizerId' => $organizerId]);
+        if ($stmt->rowCount() !== 1) {
+            throw new \RuntimeException('event_submit_no_organizer_credit');
+        }
+    }
+
+    /** @see self::consumeOrganizerPackageCredit — the refund half, on reject(). */
+    private function refundOrganizerPackageCredit(string $organizerId): void
+    {
+        $this->pdo->prepare(
+            'UPDATE users SET organizer_package_credits = organizer_package_credits + 1 WHERE id = :organizerId'
+        )->execute(['organizerId' => $organizerId]);
     }
 
     private function releaseCredit(string $eventId): void

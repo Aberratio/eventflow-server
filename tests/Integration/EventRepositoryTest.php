@@ -25,6 +25,7 @@ final class EventRepositoryTest extends TestCase
             $this->pdo = Connection::fromEnv();
             $this->ensureEventStatusWorkflowSchema();
             $this->deletePhpUnitEvents('phpunit-event-%');
+            $this->ensurePhpUnitOrganizerHasCredits();
             $this->events = new EventRepository($this->pdo);
         } catch (\Throwable $e) {
             self::markTestSkipped('Database is not available for integration tests: ' . $e->getMessage());
@@ -50,6 +51,26 @@ final class EventRepositoryTest extends TestCase
     private function ensureEventStatusWorkflowSchema(): void
     {
         \ZmierzymyCzas\Database\Migrator::applyAll($this->pdo);
+    }
+
+    /**
+     * E5.6: this file's default event payload() uses the literal organizerId
+     * 'phpunit-organizer' (shared with several other integration test files as
+     * a placeholder — never a real `users` row anywhere else). submit() now
+     * needs a real users row with available organizer_package_credits to
+     * spend, so this test file — the only one that actually calls
+     * submit()/reject() against that placeholder id — upserts one here, reset
+     * to a generous balance before every test so run order/history never
+     * matters. No FK from events.organizer_id to users.id exists, so creating
+     * this row is purely additive and doesn't affect any other suite.
+     */
+    private function ensurePhpUnitOrganizerHasCredits(): void
+    {
+        $this->pdo->prepare(
+            "INSERT INTO users (id, name, email, password_hash, role, status, organizer_package_credits)
+             VALUES ('phpunit-organizer', 'PHPUnit Organizer', 'phpunit-organizer@example.test', :hash, 'organizer', 'active', 100)
+             ON DUPLICATE KEY UPDATE organizer_package_credits = 100"
+        )->execute(['hash' => password_hash('demo1234', PASSWORD_DEFAULT)]);
     }
 
     private function deletePhpUnitEvents(string $slugLike): void
@@ -304,6 +325,179 @@ final class EventRepositoryTest extends TestCase
         self::assertNotNull($rejected);
         self::assertSame('draft', $rejected['publicationStatus']);
         self::assertSame('Brakuje regulaminu', $rejected['rejectionReason']);
+    }
+
+    /**
+     * E5.6 (issue 16 §2): submit() spends exactly one "pakiet organizatora"
+     * credit, atomically with the Draft -> Submitted transition.
+     */
+    public function testSubmitConsumesExactlyOneOrganizerPackageCredit(): void
+    {
+        $this->setOrganizerPackageCredits('phpunit-organizer', 3);
+
+        $created = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-credit-consume',
+            'name' => 'PHPUnit Credit Consume',
+            'distances' => $this->minimalDistances($this->slugPrefix . '-credit-consume'),
+        ]));
+        // Draft creation itself never touches the credit.
+        self::assertSame(3, $this->organizerPackageCredits('phpunit-organizer'));
+
+        $submitted = $this->events->submit((string) $created['id']);
+        self::assertNotNull($submitted);
+        self::assertSame(2, $this->organizerPackageCredits('phpunit-organizer'));
+    }
+
+    /**
+     * E5.6: no available credit -> submit() throws a specific business
+     * exception, the event is left untouched in Draft (no partial status
+     * change), and the (already zero) credit counter isn't perturbed.
+     */
+    public function testSubmitWithoutAvailableCreditThrowsAndLeavesEventInDraft(): void
+    {
+        $this->setOrganizerPackageCredits('phpunit-organizer', 0);
+
+        $created = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-credit-none',
+            'name' => 'PHPUnit Credit None',
+            'distances' => $this->minimalDistances($this->slugPrefix . '-credit-none'),
+        ]));
+
+        try {
+            $this->events->submit((string) $created['id']);
+            self::fail('Expected event_submit_no_organizer_credit to be thrown.');
+        } catch (\RuntimeException $e) {
+            self::assertSame('event_submit_no_organizer_credit', $e->getMessage());
+        }
+
+        $stillDraft = $this->events->find((string) $created['id']);
+        self::assertSame('draft', $stillDraft['publicationStatus']);
+        self::assertSame(0, $this->organizerPackageCredits('phpunit-organizer'));
+    }
+
+    /**
+     * E5.6: reject() refunds exactly one credit, atomically with the
+     * Submitted -> Draft transition; approve() must never touch the credit in
+     * either direction (already spent at submit(), one-shot consumption).
+     */
+    public function testRejectRefundsOneCreditAndApproveLeavesItUntouched(): void
+    {
+        $this->setOrganizerPackageCredits('phpunit-organizer', 2);
+
+        $rejectedCandidate = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-credit-reject',
+            'name' => 'PHPUnit Credit Reject',
+            'distances' => $this->minimalDistances($this->slugPrefix . '-credit-reject'),
+        ]));
+        $this->events->submit((string) $rejectedCandidate['id']);
+        self::assertSame(1, $this->organizerPackageCredits('phpunit-organizer'));
+
+        $rejected = $this->events->reject((string) $rejectedCandidate['id'], 'Brakuje regulaminu');
+        self::assertNotNull($rejected);
+        self::assertSame(2, $this->organizerPackageCredits('phpunit-organizer'));
+
+        $approvedCandidate = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-credit-approve',
+            'name' => 'PHPUnit Credit Approve',
+            'distances' => $this->minimalDistances($this->slugPrefix . '-credit-approve'),
+        ]));
+        $this->events->submit((string) $approvedCandidate['id']);
+        self::assertSame(1, $this->organizerPackageCredits('phpunit-organizer'));
+
+        $approved = $this->events->approve((string) $approvedCandidate['id'], 'phpunit-admin');
+        self::assertNotNull($approved);
+        self::assertSame('published', $approved['publicationStatus']);
+        // Still 1 — approve() neither spends nor refunds.
+        self::assertSame(1, $this->organizerPackageCredits('phpunit-organizer'));
+    }
+
+    /**
+     * E5.6: mirrors OrderRepositoryTest::testConcurrentCreatesForSameProductSerializeOnTheRowLock()
+     * (E5.2) and RegistrationRepositoryTest's E1.3 row-lock concurrency test —
+     * with a single available credit, two simultaneous submit() calls for two
+     * different Draft events owned by the same organizer must not both
+     * succeed. The affected-rows-guarded UPDATE in
+     * consumeOrganizerPackageCredit() has no explicit SELECT ... FOR UPDATE,
+     * so this proves the UPDATE's own row lock is enough on its own: the
+     * second connection blocks until the first commits/rolls back, then reads
+     * the now-zero balance and loses, rather than both reading "1 available"
+     * concurrently and double-spending the single credit.
+     */
+    public function testConcurrentSubmitsForSameOrganizerWithOneCreditOnlyOneSucceeds(): void
+    {
+        $this->setOrganizerPackageCredits('phpunit-organizer', 1);
+
+        $eventA = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-race-a',
+            'name' => 'PHPUnit Credit Race A',
+            'distances' => $this->minimalDistances($this->slugPrefix . '-race-a'),
+        ]));
+        $eventB = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-race-b',
+            'name' => 'PHPUnit Credit Race B',
+            'distances' => $this->minimalDistances($this->slugPrefix . '-race-b'),
+        ]));
+
+        $connectionA = Connection::fromEnv();
+        $eventsA = new EventRepository($connectionA);
+
+        // Start connection A's submit transaction and hold it open past its
+        // UPDATE (still uncommitted) by driving the transaction manually here
+        // instead of through submit() directly, so connection B's competing
+        // UPDATE is guaranteed to still be blocked when we issue it below.
+        $connectionA->beginTransaction();
+        $connectionA->prepare(
+            'UPDATE users SET organizer_package_credits = organizer_package_credits - 1
+             WHERE id = :organizerId AND organizer_package_credits > 0'
+        )->execute(['organizerId' => 'phpunit-organizer']);
+
+        $connectionB = Connection::fromEnv();
+        $connectionB->exec('SET innodb_lock_wait_timeout = 1');
+        $eventsB = new EventRepository($connectionB);
+
+        try {
+            $eventsB->submit((string) $eventB['id']);
+            self::fail('Expected connection B to block on connection A\'s row lock and time out.');
+        } catch (\PDOException $e) {
+            self::assertStringContainsStringIgnoringCase('lock wait timeout', $e->getMessage());
+        } finally {
+            // Connection B's own submit() opened its own transaction before
+            // blocking on the UPDATE; that transaction is left dangling after
+            // the timeout (MySQL/MariaDB don't auto-rollback on a lock-wait
+            // timeout by default) and PDO refuses a second beginTransaction()
+            // on top of it, so this connection is done — mirrors
+            // OrderRepositoryTest's concurrency test, which never reuses its
+            // blocked connection either.
+            $connectionB->rollBack();
+            $connectionA->commit();
+        }
+
+        // Connection A's spend committed; only one credit existed, so it's
+        // gone now — a completely fresh attempt (via the main test
+        // connection) must fail with the business error rather than
+        // double-spending, and the event stays in Draft.
+        self::assertSame(0, $this->organizerPackageCredits('phpunit-organizer'));
+        try {
+            $this->events->submit((string) $eventB['id']);
+            self::fail('Expected event_submit_no_organizer_credit to be thrown.');
+        } catch (\RuntimeException $e) {
+            self::assertSame('event_submit_no_organizer_credit', $e->getMessage());
+        }
+        self::assertSame('draft', $this->events->find((string) $eventB['id'])['publicationStatus']);
+        self::assertSame(0, $this->organizerPackageCredits('phpunit-organizer'));
+    }
+
+    private function setOrganizerPackageCredits(string $userId, int $count): void
+    {
+        $this->pdo->prepare('UPDATE users SET organizer_package_credits = :count WHERE id = :id')
+            ->execute(['count' => $count, 'id' => $userId]);
+    }
+
+    private function organizerPackageCredits(string $userId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT organizer_package_credits FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+        return (int) $stmt->fetchColumn();
     }
 
     public function testManualStatusChangeCannotBypassModerationWorkflow(): void

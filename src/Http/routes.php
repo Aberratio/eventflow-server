@@ -792,7 +792,18 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if (!$canManageEvent($events->find($args['id']), $auth)) {
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
-            $event = $events->submit($args['id']);
+            try {
+                $event = $events->submit($args['id']);
+            } catch (RuntimeException $e) {
+                // E5.6 (issue 16 §2): no "pakiet organizatora" credit available to
+                // spend on this submission — a state conflict (the organizer's
+                // account, not this request), same 409 shape as event_limit_exceeded
+                // above. The event itself is left untouched in Draft.
+                if ($e->getMessage() === 'event_submit_no_organizer_credit') {
+                    return JsonResponder::error($response, 'event_submit_no_organizer_credit', 'No available organizer package credit to submit this event for moderation', 409);
+                }
+                throw $e;
+            }
             if (!$event) {
                 return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be submitted in its current status', 409);
             }

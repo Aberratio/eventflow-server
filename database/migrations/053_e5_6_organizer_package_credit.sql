@@ -1,0 +1,27 @@
+-- E5.6: "Pakiet organizatora" credit (issue 16 §2, umowa §5.5) — the right
+-- to submit ONE Wydarzenie to moderation, bought as a plain digital shop
+-- order (no delivery step), consumed exactly at Draft -> Submitted
+-- (EventRepository::submit()) and refunded exactly on moderator rejection
+-- (EventRepository::reject()). Approval never touches it — consumption is
+-- one-shot, at submission time (issue 16 §2, verbatim).
+--
+-- This is a *new*, purpose-built counter, not a repurposing of the
+-- pre-existing `organizer_event_credit_batches` / `organizer_event_credit_usages`
+-- tables: those model a different, older concept (E1.1-era per-organizer
+-- capacity, admin-granted, keyed by event "kind" standard/virtual/timing,
+-- consumed at event *creation*) whose only two call sites were removed by the
+-- "add manual events limit" commit in favour of `users.event_limit` — the
+-- `consumeCredit()`/`releaseCredit()`/`grantCredits()` methods on
+-- EventRepository are dead code today and out of scope for this ticket to
+-- touch or repurpose. `users.event_limit` itself is also a separate axis (a
+-- hard cap on concurrently *active* events, admin-managed via
+-- PATCH /organizers/{id}/event-limit) and is left untouched here.
+--
+-- A single materialized counter on `users`, mirroring `event_limit`'s own
+-- shape (same table, same "small integer counter" style) rather than a full
+-- ledger table — every write path (purchase / consume / refund) is a single
+-- atomic, affected-rows-guarded UPDATE inside the caller's existing
+-- transaction, the same "materialized counter + transactional update"
+-- pattern `event_distances.registered_count` established in E1.3.
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS organizer_package_credits INT NOT NULL DEFAULT 0 AFTER event_limit;

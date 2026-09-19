@@ -45,6 +45,20 @@ final class OrderRepository extends Repository
         'bank' => ['id' => 'bank', 'name' => 'Przelew bankowy', 'surcharge' => 0.0],
     ];
 
+    /**
+     * E5.6 (issue 16 §2): the "pakiet organizatora" digital product is a real
+     * `shop_products` catalog row (ShopRepository, E5.1) flagged via the
+     * pre-existing `service_kind` column (001_init.sql, previously unused by
+     * any application logic) rather than a new column — a service-shaped
+     * product ("no stock, no shipping") already fit the concept exactly.
+     * Ordering one grants `quantity` credits on the buyer's
+     * `users.organizer_package_credits` counter (migration 053) instead of/
+     * alongside a physical line item; it never carries a delivery method
+     * (§5, "nie przechodzi przez zadna z nich" — see isDigitalOnlyCart()
+     * below).
+     */
+    private const SERVICE_KIND_ORGANIZER_PACKAGE = 'organizer_package';
+
     private ShopRepository $shop;
 
     public function __construct(\PDO $pdo, ?ShopRepository $shop = null)
@@ -124,13 +138,29 @@ final class OrderRepository extends Repository
         $id = $this->id();
         $orderNumber = 'ORD-' . date('Y') . '-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
 
-        $deliveryMethod = $this->resolveMethod((array) ($data['deliveryMethod'] ?? []), self::DELIVERY_METHODS, 'order_invalid_delivery_method');
+        $requestedItems = array_map(static fn ($item): array => (array) $item, (array) ($data['items'] ?? []));
+
+        // E5.6: a cart made up entirely of digital (isService) products — e.g. the
+        // "pakiet organizatora" — never goes through a delivery method at all
+        // (issue 16 §2/§5), so the usual "delivery method is required" check
+        // (below) doesn't apply to it. This is an unlocked pre-check purely to
+        // decide *whether* a delivery method is required; the authoritative
+        // product data used for pricing/stock/credit-granting is always the
+        // locked read inside the transaction below.
+        $isDigitalOnlyCart = $requestedItems !== [] && $this->isDigitalOnlyCart($requestedItems);
+
+        $deliveryMethod = null;
+        $deliveryPrice = 0.0;
         $paymentMethod = $this->resolveMethod((array) ($data['paymentMethod'] ?? []), self::PAYMENT_METHODS, 'order_invalid_payment_method');
-        $deliveryPrice = (float) $deliveryMethod['price'];
         $paymentSurcharge = (float) ($paymentMethod['surcharge'] ?? 0);
 
-        if (in_array($deliveryMethod['id'], self::DELIVERY_METHODS_REQUIRING_ADDRESS, true)) {
-            $this->validateShippingAddress((array) ($data['shippingAddress'] ?? []), (string) $deliveryMethod['id']);
+        if (!$isDigitalOnlyCart) {
+            $deliveryMethod = $this->resolveMethod((array) ($data['deliveryMethod'] ?? []), self::DELIVERY_METHODS, 'order_invalid_delivery_method');
+            $deliveryPrice = (float) $deliveryMethod['price'];
+
+            if (in_array($deliveryMethod['id'], self::DELIVERY_METHODS_REQUIRING_ADDRESS, true)) {
+                $this->validateShippingAddress((array) ($data['shippingAddress'] ?? []), (string) $deliveryMethod['id']);
+            }
         }
 
         // E5.5: "chce fakture" is signalled by sending invoiceData at all —
@@ -141,8 +171,6 @@ final class OrderRepository extends Repository
         if (isset($data['invoiceData'])) {
             $this->validateInvoiceData((array) $data['invoiceData']);
         }
-
-        $requestedItems = array_map(static fn ($item): array => (array) $item, (array) ($data['items'] ?? []));
 
         $this->pdo->beginTransaction();
         try {
@@ -173,6 +201,15 @@ final class OrderRepository extends Repository
                     $this->decrementStock($productId, $quantity);
                 }
 
+                // E5.6: the credit granted here is the seam E5.7 (self-service
+                // purchase -> Organizer role) is meant to build on — deliberately
+                // just the counter, no role-granting logic, same transaction as
+                // the stock decrement above so a purchase can never charge the
+                // buyer's card (well, "succeed" here) without also crediting them.
+                if (($product['serviceKind'] ?? null) === self::SERVICE_KIND_ORGANIZER_PACKAGE) {
+                    $this->grantOrganizerPackageCredits($userId, $quantity);
+                }
+
                 $price = (float) $product['price'];
                 $productTotal += $price * $quantity;
                 $resolvedItems[] = [
@@ -197,7 +234,11 @@ final class OrderRepository extends Repository
                 // that lever stays staff-only, applied afterwards via update().
                 'price_adjustment' => 0.0,
                 'total_price' => $productTotal + $deliveryPrice + $paymentSurcharge,
-                'delivery_method' => json_encode($deliveryMethod, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                // `delivery_method` is NOT NULL (019_shop_orders.sql, default '{}')
+                // — a digital-only order (no delivery method at all, E5.6) persists
+                // the same empty-object sentinel the column already defaults to,
+                // rather than widening the column to nullable.
+                'delivery_method' => json_encode($deliveryMethod ?? (object) [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 'payment_method' => json_encode($paymentMethod, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 'shipping_address' => isset($data['shippingAddress']) ? json_encode($data['shippingAddress'], JSON_UNESCAPED_UNICODE) : null,
                 'invoice_data' => isset($data['invoiceData']) ? json_encode($data['invoiceData'], JSON_UNESCAPED_UNICODE) : null,
@@ -220,6 +261,43 @@ final class OrderRepository extends Repository
         }
 
         return $this->find($id) ?? [];
+    }
+
+    /**
+     * E5.6: true only when every requested item resolves to an active,
+     * `isService` product (an unlocked read — see create()'s call site for why
+     * that's fine here). An empty/all-invalid cart is never treated as
+     * "digital-only" by this method; create()'s caller already guards that
+     * case separately so a genuinely empty `items[]` still goes through the
+     * normal delivery-method validation and fails with the existing
+     * `order_invalid_product`/`order_invalid_delivery_method` errors instead
+     * of silently skipping delivery entirely.
+     *
+     * @param array<int, array<string, mixed>> $requestedItems
+     */
+    private function isDigitalOnlyCart(array $requestedItems): bool
+    {
+        foreach ($requestedItems as $item) {
+            $product = $this->shop->findProduct((string) ($item['productId'] ?? ''));
+            if ($product === null || ($product['status'] ?? 'active') !== 'active' || !($product['isService'] ?? false)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * E5.6: grants `count` "pakiet organizatora" credits to the buyer — the
+     * write-side half of the counter EventRepository::submit()/reject() spend
+     * and refund. Same affected-rows-free "just add" shape as
+     * EventRepository::refundOrganizerPackageCredit(); a purchase has no
+     * upper bound to guard against, unlike the decrement at submit time.
+     */
+    private function grantOrganizerPackageCredits(string $userId, int $count): void
+    {
+        $this->pdo->prepare(
+            'UPDATE users SET organizer_package_credits = organizer_package_credits + :count WHERE id = :userId'
+        )->execute(['count' => $count, 'userId' => $userId]);
     }
 
     /**

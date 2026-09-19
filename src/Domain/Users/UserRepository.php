@@ -9,7 +9,13 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class UserRepository extends Repository
 {
-    private const PUBLIC_COLUMNS = 'id, name, email, role, avatar, phone, birth_year AS birthYear, birth_date AS birthDate, gender, club, company_name AS companyName, nip, website, description, address, sos_contacts AS sosContacts, status, event_limit AS eventLimit';
+    // organizerPackageCredits (E5.6, migration 053) is intentionally read-only here —
+    // update() below has no matching input key, since the only writers are
+    // OrderRepository::create() (purchase) and EventRepository::submit()/reject()
+    // (consume/refund). Exposed on every read as a seam for E5.7 (purchase ->
+    // Organizer role) and for a future client "your credits" display, without this
+    // ticket building either.
+    private const PUBLIC_COLUMNS = 'id, name, email, role, avatar, phone, birth_year AS birthYear, birth_date AS birthDate, gender, club, company_name AS companyName, nip, website, description, address, sos_contacts AS sosContacts, status, event_limit AS eventLimit, organizer_package_credits AS organizerPackageCredits';
 
     /**
      * @param array<string, mixed> $filters

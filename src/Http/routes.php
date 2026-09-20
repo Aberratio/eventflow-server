@@ -701,6 +701,24 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             return JsonResponder::ok($response, $canManageEvent($event, $auth) ? $event : $stripBzToken($event));
         });
+        // E8.11: unauthenticated so the CLIENT's dedicated embed page
+        // (/embed/event/:id/register, a follow-up client-repo task) can check
+        // "is this event embeddable, and here is the origin allowlist" before it
+        // even renders — mirrors the existing no-auth `/events/{eventId}/form-fields/public`
+        // convention (E1.13) rather than a `/public/...`-prefixed route. A disabled
+        // event still returns 200 with enabled:false (not 404) so the embed page can
+        // show a clear "not enabled" message instead of a generic error; only a
+        // genuinely nonexistent event 404s.
+        $api->get('/events/{id}/embed/public', function (Request $request, Response $response, array $args) use ($events) {
+            $event = $events->find((string) $args['id']);
+            if (!$event) {
+                return JsonResponder::error($response, 'not_found', 'Event not found', 404);
+            }
+            return JsonResponder::ok($response, [
+                'enabled' => (bool) ($event['embedEnabled'] ?? false),
+                'allowedOrigins' => $event['embedAllowedOrigins'] ?? [],
+            ]);
+        });
         $api->post('/events', function (Request $request, Response $response) use ($events, $users, $body, $isStaffRole, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $payload = $body($request);
@@ -799,6 +817,26 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                     : trim((string) ($event['bzOrganizationToken'] ?? ''));
                 if ($bzToken === '') {
                     return JsonResponder::error($response, 'validation_error', 'bzOrganizationToken is required to enable Biuro Zawodów integration', 422);
+                }
+            }
+            // E8.11: embedAllowedOrigins is the CSP-style allowlist the CLIENT's embed
+            // page (a follow-up, client-repo task) checks before rendering inside a
+            // third-party iframe — each entry must be a bare scheme+host origin (no
+            // path/query/fragment), otherwise it can't be compared against
+            // window.location/document.referrer in a meaningful way.
+            if (array_key_exists('embedAllowedOrigins', $payload)) {
+                if (!is_array($payload['embedAllowedOrigins'])) {
+                    return JsonResponder::error($response, 'validation_error', 'embedAllowedOrigins must be an array of origins', 422);
+                }
+                foreach ($payload['embedAllowedOrigins'] as $origin) {
+                    if (!is_string($origin) || !preg_match('/^https?:\/\/[^\/\s?#]+$/i', $origin)) {
+                        return JsonResponder::error(
+                            $response,
+                            'validation_error',
+                            'Each embedAllowedOrigins entry must be a bare http(s) origin (scheme + host, no path/query), got: ' . (is_string($origin) ? $origin : json_encode($origin)),
+                            422
+                        );
+                    }
                 }
             }
             $updated = $events->update($args['id'], $payload);

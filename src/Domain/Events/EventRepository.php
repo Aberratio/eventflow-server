@@ -74,6 +74,7 @@ enable_merchandise_in_registration AS enableMerchandiseInRegistration,
 final_acceptance_html AS finalAcceptanceHtml,
 require_final_acceptance AS requireFinalAcceptance, is_private AS isPrivate, access_code AS accessCode,
 registration_embed AS registrationEmbed, registration_form_config AS registrationFormConfig,
+embed_enabled AS embedEnabled, embed_allowed_origins AS embedAllowedOrigins,
 display_options AS displayOptions, logistics_info AS logisticsInfo,
 organizer_info AS organizerInfo,
 background_id AS backgroundId
@@ -85,6 +86,7 @@ SQL;
         'paymentConfig',
         'registrationEmbed',
         'registrationFormConfig',
+        'embedAllowedOrigins',
         'displayOptions',
         'logisticsInfo',
         'organizerInfo',
@@ -638,9 +640,15 @@ SQL;
     private function hydrate(array $row): array
     {
         $event = $this->decode($row, self::EVENT_JSON);
-        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'isTest', 'isExternal', 'registrationUntilEventStart', 'enableMerchandiseInRegistration', 'bzIntegrationEnabled'] as $bool) {
+        foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'isTest', 'isExternal', 'registrationUntilEventStart', 'enableMerchandiseInRegistration', 'bzIntegrationEnabled', 'embedEnabled'] as $bool) {
             $event[$bool] = (bool) ($event[$bool] ?? false);
         }
+        // E8.11: embed_allowed_origins is nullable at the schema level (same as every
+        // other JSON config column here) - a brand-new event, or one created before
+        // this ticket, reads back as an empty allowlist rather than null, so callers
+        // (the public embed-status endpoint, the organizer settings UI) never have to
+        // null-check it.
+        $event['embedAllowedOrigins'] = is_array($event['embedAllowedOrigins'] ?? null) ? $event['embedAllowedOrigins'] : [];
         $event['distances'] = array_map(
             fn (array $distance): array => [
                 ...$distance,
@@ -878,6 +886,8 @@ SQL;
             'accessCode' => 'access_code',
             'registrationEmbed' => 'registration_embed',
             'registrationFormConfig' => 'registration_form_config',
+            'embedEnabled' => 'embed_enabled',
+            'embedAllowedOrigins' => 'embed_allowed_origins',
             'displayOptions' => 'display_options',
             'logisticsInfo' => 'logistics_info',
             'backgroundId' => 'background_id',
@@ -902,7 +912,7 @@ SQL;
         } elseif (array_key_exists('isPrivate', $data) && !array_key_exists('visibility', $data)) {
             $out['visibility'] = !empty($data['isPrivate']) ? 'private' : 'public';
         }
-        foreach (['organizer_contact', 'banner_crop_area', 'payment_config', 'registration_embed', 'registration_form_config', 'display_options', 'logistics_info', 'organizer_info', 'insurance_option'] as $jsonField) {
+        foreach (['organizer_contact', 'banner_crop_area', 'payment_config', 'registration_embed', 'registration_form_config', 'embed_allowed_origins', 'display_options', 'logistics_info', 'organizer_info', 'insurance_option'] as $jsonField) {
             if (array_key_exists($jsonField, $out) && $out[$jsonField] !== null && !is_string($out[$jsonField])) {
                 $out[$jsonField] = json_encode($out[$jsonField], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             }

@@ -1,0 +1,35 @@
+-- E8.11 ("Zewnetrzny formularz w iframe", contract §5.3): per-event config for
+-- embedding THIS platform's own registration form on external sites via iframe.
+-- The organizer (or admin) enables it per event and configures an origin
+-- allowlist; the actual embed page lives on the CLIENT (separate repo, follow-up
+-- task) at a route like /embed/event/:id/register, and browser-level CSP
+-- frame-ancestors enforcement happens client-side/at the client's hosting layer
+-- (out of scope here) - this migration only adds the *data* the client needs to
+-- read before rendering that page.
+--
+-- Two flat columns, not a JSON blob - mirrors E3.2's
+-- bz_integration_enabled/bz_organization_token shape (047_e3_2_...sql: "a single
+-- small toggle+string, not a multi-field JSON blob"), since this is likewise one
+-- toggle plus one structured value, not a multi-field settings object like
+-- payment_config.
+--
+-- Deliberately NOT reusing the pre-existing `registration_embed` JSON column
+-- (001_init.sql, present since the very first commit): that is a different,
+-- already-shipped feature with the opposite direction - the organizer pastes an
+-- EXTERNAL registration system's URL and zmierzymy_czas embeds THAT INTO this
+-- site (mode 'external_embed' + startDate/endDate window; see
+-- client/src/components/event-details/ExternalRegistrationFrame.tsx). E8.11 is
+-- zmierzymy_czas's OWN form going OUT into someone else's site, which needs an
+-- enable toggle plus an origin allowlist - neither of which `registration_embed`
+-- carries - so it gets its own columns instead of overloading that one.
+--
+-- embed_allowed_origins: JSON array of scheme+host origin strings (e.g.
+-- '["https://example.com"]'), validated server-side on write (routes.php PATCH
+-- /events/{id}) to reject anything that isn't a bare http(s) origin (no
+-- path/query). Nullable, like every other JSON config column in this schema
+-- (payment_config, registration_embed, ...) - EventRepository::hydrate()
+-- normalizes a NULL/absent value to [] on read, the same pattern
+-- withPaymentWindowDefaults() already uses for paymentConfig.
+ALTER TABLE events
+  ADD COLUMN IF NOT EXISTS embed_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER registration_embed,
+  ADD COLUMN IF NOT EXISTS embed_allowed_origins JSON NULL AFTER embed_enabled;

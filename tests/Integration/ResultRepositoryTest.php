@@ -536,6 +536,129 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
+     * TD.6 follow-up: `GET /results` (list()) is just as public/unauthenticated
+     * as `GET /events/{eventId}/results` (routes.php has no AuthMiddleware on
+     * either) and reads the exact same `results` table, so it must mask an
+     * anonymized competitor's real name the same way byEvent() already does.
+     */
+    public function testAnonymizedCompetitorsRealNameIsMaskedOnThePublicResultsList(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Lista Anonimowa');
+        $this->competitors->setAnonymization($competitorId, true);
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+
+        $created = $this->results->create($this->resultPayload($account, [
+            'registrationId' => $registrationId,
+        ]));
+
+        $page = $this->results->list(['eventId' => $this->event['id']]);
+        $entry = current(array_filter($page['data'], static fn (array $r): bool => $r['id'] === $created['id']));
+
+        self::assertNotFalse($entry);
+        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+        self::assertStringNotContainsString('Lista', $entry['userName']);
+    }
+
+    /** Non-anonymized competitor must keep appearing with their real name on the public list - no false-positive masking. */
+    public function testNonAnonymizedCompetitorsNameAppearsNormallyOnThePublicResultsList(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Lista Widoczna');
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+
+        $created = $this->results->create($this->resultPayload($account, [
+            'registrationId' => $registrationId,
+        ]));
+
+        $page = $this->results->list(['eventId' => $this->event['id']]);
+        $entry = current(array_filter($page['data'], static fn (array $r): bool => $r['id'] === $created['id']));
+
+        self::assertNotFalse($entry);
+        self::assertSame($account['name'], $entry['userName']);
+    }
+
+    /**
+     * Same registration_id-missing fallback as byEvent()'s equivalent test -
+     * falls back to results.user_id = competitors.user_id.
+     */
+    public function testAnonymizedCompetitorIsMaskedOnThePublicResultsListViaUserIdFallback(): void
+    {
+        $participant = $this->createParticipant('Lista Bez Zapisu Anonim');
+        $competitor = $this->competitors->ensureForUser($participant);
+        $this->createdCompetitorIds[] = (string) $competitor['id'];
+        $this->competitors->setAnonymization((string) $competitor['id'], true);
+
+        $created = $this->results->create($this->resultPayload($participant));
+        self::assertNull($created['registrationId']);
+
+        $page = $this->results->list(['eventId' => $this->event['id']]);
+        $entry = current(array_filter($page['data'], static fn (array $r): bool => $r['id'] === $created['id']));
+
+        self::assertNotFalse($entry);
+        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+    }
+
+    /**
+     * TD.6 follow-up: `GET /users/{userId}/results` (byUser()) is just as
+     * public/unauthenticated as byEvent() and reads the same `results` table -
+     * same leak, same fix.
+     */
+    public function testAnonymizedCompetitorsRealNameIsMaskedOnThePublicByUserResults(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Uzytkownik Anonimowy');
+        $this->competitors->setAnonymization($competitorId, true);
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+
+        $created = $this->results->create($this->resultPayload($account, [
+            'registrationId' => $registrationId,
+        ]));
+
+        $rows = $this->results->byUser((string) $account['id']);
+        $entry = current(array_filter($rows, static fn (array $r): bool => $r['id'] === $created['id']));
+
+        self::assertNotFalse($entry);
+        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+        self::assertStringNotContainsString('Uzytkownik', $entry['userName']);
+    }
+
+    /** Non-anonymized competitor must keep appearing with their real name on byUser() - no false-positive masking. */
+    public function testNonAnonymizedCompetitorsNameAppearsNormallyOnThePublicByUserResults(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Uzytkownik Widoczny');
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+
+        $created = $this->results->create($this->resultPayload($account, [
+            'registrationId' => $registrationId,
+        ]));
+
+        $rows = $this->results->byUser((string) $account['id']);
+        $entry = current(array_filter($rows, static fn (array $r): bool => $r['id'] === $created['id']));
+
+        self::assertNotFalse($entry);
+        self::assertSame($account['name'], $entry['userName']);
+    }
+
+    /**
+     * Same registration_id-missing fallback as byEvent()'s equivalent test -
+     * falls back to results.user_id = competitors.user_id.
+     */
+    public function testAnonymizedCompetitorIsMaskedOnThePublicByUserResultsViaUserIdFallback(): void
+    {
+        $participant = $this->createParticipant('Uzytkownik Bez Zapisu Anonim');
+        $competitor = $this->competitors->ensureForUser($participant);
+        $this->createdCompetitorIds[] = (string) $competitor['id'];
+        $this->competitors->setAnonymization((string) $competitor['id'], true);
+
+        $created = $this->results->create($this->resultPayload($participant));
+        self::assertNull($created['registrationId']);
+
+        $rows = $this->results->byUser((string) $participant['id']);
+        $entry = current(array_filter($rows, static fn (array $r): bool => $r['id'] === $created['id']));
+
+        self::assertNotFalse($entry);
+        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+    }
+
+    /**
      * Creates a real Konto (so results.user_id/user_name have a genuine owner,
      * matching how `AddResultDialog.tsx`/CSV import always populate them) plus
      * its auto-provisioned Zawodnik profile (CompetitorRepository::ensureForUser(),

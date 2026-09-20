@@ -20,6 +20,51 @@ final class ResultRepository extends Repository
     private const COLUMNS_R = 'r.id, r.event_id AS eventId, r.event_name AS eventName, r.distance_id AS distanceId, r.distance_name AS distanceName, r.user_id AS userId, r.registration_id AS registrationId, r.user_name AS userName, r.bib_number AS bibNumber, r.category, r.time, r.time_in_seconds AS timeInSeconds, r.net_time AS netTime, r.net_time_in_seconds AS netTimeInSeconds, r.position, r.category_position AS categoryPosition, r.status, r.is_virtual AS isVirtual, r.publication_status AS publicationStatus, r.gender, r.birth_year AS birthYear';
 
     /**
+     * Shared FROM/JOIN shape behind byEvent()'s anonymization masking (TD.6),
+     * now also reused by list() and byUser() below (TD.6 follow-up) - both
+     * are equally public/unauthenticated `GET` endpoints (routes.php has no
+     * AuthMiddleware on any of the three) reading the exact same `results`
+     * table, so they share the exact same real-name leak byEvent() was fixed
+     * for. Extracted here instead of copy-pasted so the identity-resolution
+     * SQL (registration_id -> registrations.competitor_id authoritative,
+     * user_id -> competitors.user_id fallback - see byEvent()'s own docblock
+     * for the full reasoning) exists in exactly one place.
+     */
+    private static function anonymizationJoinSql(): string
+    {
+        return 'SELECT ' . self::COLUMNS_R . ',
+                COALESCE(comp_reg.is_anonymized, comp_self.is_anonymized, 0) AS isAnonymizedFlag
+            FROM results r
+            LEFT JOIN registrations reg ON reg.id = r.registration_id
+            LEFT JOIN competitors comp_reg ON comp_reg.id = reg.competitor_id
+            LEFT JOIN competitors comp_self ON comp_self.user_id = r.user_id';
+    }
+
+    /**
+     * Applies CompetitorNamePresenter::publicName() to every row fetched via
+     * anonymizationJoinSql() above, mirroring byEvent()'s original
+     * PHP-side masking so list()/byUser() behave identically.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array<string, mixed>>
+     */
+    private static function maskAnonymizedRows(array $rows): array
+    {
+        return array_map(static function (array $row): array {
+            $isAnonymized = (bool) $row['isAnonymizedFlag'];
+            unset($row['isAnonymizedFlag']);
+            $row['userName'] = CompetitorNamePresenter::publicName((string) $row['userName'], $isAnonymized);
+            return $row;
+        }, $rows);
+    }
+
+    /**
+     * TD.6 follow-up: `GET /results` is public/unauthenticated (routes.php)
+     * just like `GET /events/{eventId}/results` - it must not leak an
+     * anonymized competitor's real name either. See
+     * anonymizationJoinSql()/maskAnonymizedRows() above for the shared
+     * identity-resolution/masking logic byEvent() introduced this fix with.
+     *
      * @param array<string, mixed> $filters
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, pageSize: int}
      */
@@ -29,22 +74,22 @@ final class ResultRepository extends Repository
         $params = [];
         foreach (['eventId' => 'event_id', 'distanceId' => 'distance_id', 'category' => 'category', 'gender' => 'gender'] as $input => $column) {
             if (!empty($filters[$input])) {
-                $where[] = "{$column} = :{$input}";
+                $where[] = "r.{$column} = :{$input}";
                 $params[$input] = $filters[$input];
             }
         }
         if (!empty($filters['search'])) {
-            $where[] = '(user_name LIKE :search OR bib_number LIKE :search)';
+            $where[] = '(r.user_name LIKE :search OR r.bib_number LIKE :search)';
             $params['search'] = '%' . $filters['search'] . '%';
         }
         $whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';
         $pagination = $this->pagination($filters);
 
-        $count = $this->pdo->prepare("SELECT COUNT(*) FROM results{$whereSql}");
+        $count = $this->pdo->prepare("SELECT COUNT(*) FROM results r{$whereSql}");
         $count->execute($params);
         $total = (int) $count->fetchColumn();
 
-        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . " FROM results{$whereSql} ORDER BY position ASC LIMIT :limit OFFSET :offset");
+        $stmt = $this->pdo->prepare(self::anonymizationJoinSql() . "{$whereSql} ORDER BY r.position ASC LIMIT :limit OFFSET :offset");
         foreach ($params as $key => $value) {
             $stmt->bindValue(':' . $key, $value);
         }
@@ -52,7 +97,7 @@ final class ResultRepository extends Repository
         $stmt->bindValue(':offset', $pagination['offset'], \PDO::PARAM_INT);
         $stmt->execute();
 
-        return ['data' => $stmt->fetchAll(), 'total' => $total, 'page' => $pagination['page'], 'pageSize' => $pagination['pageSize']];
+        return ['data' => self::maskAnonymizedRows($stmt->fetchAll()), 'total' => $total, 'page' => $pagination['page'], 'pageSize' => $pagination['pageSize']];
     }
 
     /**
@@ -75,13 +120,7 @@ final class ResultRepository extends Repository
      */
     public function byEvent(string $eventId, ?string $distanceId = null): array
     {
-        $sql = 'SELECT ' . self::COLUMNS_R . ',
-                COALESCE(comp_reg.is_anonymized, comp_self.is_anonymized, 0) AS isAnonymizedFlag
-            FROM results r
-            LEFT JOIN registrations reg ON reg.id = r.registration_id
-            LEFT JOIN competitors comp_reg ON comp_reg.id = reg.competitor_id
-            LEFT JOIN competitors comp_self ON comp_self.user_id = r.user_id
-            WHERE r.event_id = :eventId';
+        $sql = self::anonymizationJoinSql() . ' WHERE r.event_id = :eventId';
         $params = ['eventId' => $eventId];
         if ($distanceId) {
             $sql .= ' AND r.distance_id = :distanceId';
@@ -91,20 +130,21 @@ final class ResultRepository extends Repository
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
 
-        return array_map(static function (array $row): array {
-            $isAnonymized = (bool) $row['isAnonymizedFlag'];
-            unset($row['isAnonymizedFlag']);
-            $row['userName'] = CompetitorNamePresenter::publicName((string) $row['userName'], $isAnonymized);
-            return $row;
-        }, $stmt->fetchAll());
+        return self::maskAnonymizedRows($stmt->fetchAll());
     }
 
-    /** @return array<int, array<string, mixed>> */
+    /**
+     * TD.6 follow-up: `GET /users/{userId}/results` is public/unauthenticated
+     * (routes.php) just like byEvent() above - same leak, same fix. See
+     * anonymizationJoinSql()/maskAnonymizedRows() for the shared logic.
+     *
+     * @return array<int, array<string, mixed>>
+     */
     public function byUser(string $userId): array
     {
-        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM results WHERE user_id = :userId ORDER BY event_name');
+        $stmt = $this->pdo->prepare(self::anonymizationJoinSql() . ' WHERE r.user_id = :userId ORDER BY r.event_name');
         $stmt->execute(['userId' => $userId]);
-        return $stmt->fetchAll();
+        return self::maskAnonymizedRows($stmt->fetchAll());
     }
 
     public function find(string $id): ?array

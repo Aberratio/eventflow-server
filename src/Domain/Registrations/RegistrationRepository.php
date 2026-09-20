@@ -1008,6 +1008,330 @@ SQL;
     }
 
     /**
+     * E8.2 (spec 21 Answer §2): built-in organizer cross-sections — NOT from the
+     * configurable form (that's E2.5's FormFieldRepository::aggregatesForEvent(),
+     * left untouched), only from the Zapis record itself. Every number here is a
+     * live query, per spec §5 ("Zestawienia organizatora... liczą się na żywo") —
+     * no new materialized counters, the one exception (event_distances.registered_count,
+     * E1.3) is a different, already-built concern this method doesn't touch.
+     *
+     * Gender/club are genuinely OMITTED (key absent, not an empty/zeroed array)
+     * when the corresponding system Pozycja formularza (FormFieldCatalog) is
+     * `hidden` for this Event — mirrors aggregatesForEvent()'s own "no field ->
+     * no entry" behavior exactly, just checked against form_fields.state instead
+     * of "does a custom field of this type exist at all". Age category has no
+     * system form-field key at all (FormFieldCatalog's closed 13-position
+     * catalog has no "age_category" entry) — the only existing per-Distance
+     * age-classification config in the schema is `event_distances.age_categories`
+     * (written by ticket 10's distance editor, read nowhere until this ticket),
+     * so a Distance's age-category breakdown is included only when that JSON
+     * array is non-empty for that Distance, and the whole `ageCategories` key is
+     * omitted event-wide when no Distance configures any.
+     *
+     * @return array<string, mixed>
+     */
+    public function organizerStats(string $eventId): array
+    {
+        $this->lazilyExpireUnpaidRegistrations();
+
+        $stats = [
+            'byDistance' => $this->statsByDistance($eventId),
+            'byPaymentStatus' => $this->statsByPaymentStatus($eventId),
+            'signupCurve' => $this->statsSignupCurve($eventId),
+        ];
+
+        $formFields = new FormFieldRepository($this->pdo);
+        $systemFields = array_filter(
+            $formFields->listForEvent($eventId),
+            static fn (array $f): bool => $f['kind'] === 'system'
+        );
+        $stateByKey = [];
+        foreach ($systemFields as $field) {
+            $stateByKey[$field['fieldKey']] = $field['state'];
+        }
+
+        if (($stateByKey['gender'] ?? FormFieldCatalog::STATE_HIDDEN) !== FormFieldCatalog::STATE_HIDDEN) {
+            $stats['byGender'] = $this->statsByCompetitorColumn($eventId, 'gender', [
+                'M' => 'Mężczyzna',
+                'K' => 'Kobieta',
+            ]);
+        }
+
+        if (($stateByKey['club'] ?? FormFieldCatalog::STATE_HIDDEN) !== FormFieldCatalog::STATE_HIDDEN) {
+            $stats['byClub'] = $this->statsByCompetitorColumn($eventId, 'club', []);
+        }
+
+        $ageCategories = $this->statsByAgeCategory($eventId);
+        if ($ageCategories !== []) {
+            $stats['ageCategories'] = $ageCategories;
+        }
+
+        return $stats;
+    }
+
+    /** @return array<int, array{distanceId: string, distanceName: string, count: int}> */
+    private function statsByDistance(string $eventId): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT r.distance_id AS distanceId, MAX(r.distance_name) AS distanceName, COUNT(*) AS cnt
+             FROM registrations r
+             WHERE r.event_id = :eventId AND r.status NOT IN ('cancelled', 'removed', 'expired')
+             GROUP BY r.distance_id"
+        );
+        $stmt->execute(['eventId' => $eventId]);
+        return array_map(static fn (array $row): array => [
+            'distanceId' => (string) $row['distanceId'],
+            'distanceName' => (string) $row['distanceName'],
+            'count' => (int) $row['cnt'],
+        ], $stmt->fetchAll());
+    }
+
+    /**
+     * Same five-value vocabulary as exportPaymentStatusLabel() (E2.6) —
+     * refunded takes priority over the underlying `cancelled` a full refund
+     * already flips the Zapis to (markRefunded()), so a Zapis is never
+     * double-counted under both buckets. Deliberately keeps `removed` out
+     * (an organizer-deleted Zapis, same filter startListExportRows() already
+     * applies) but — unlike the other breakdowns in this class — keeps
+     * cancelled/expired IN, since the whole point of this breakdown is to
+     * show exactly those states distinctly.
+     *
+     * @return array<int, array{status: string, label: string, count: int}>
+     */
+    private function statsByPaymentStatus(string $eventId): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT
+                CASE
+                    WHEN rf.status = 'refunded' THEN 'refunded'
+                    WHEN r.status = 'confirmed' THEN 'paid'
+                    WHEN r.status = 'pending' THEN 'pending'
+                    WHEN r.status = 'expired' THEN 'expired'
+                    WHEN r.status = 'cancelled' THEN 'cancelled'
+                    ELSE r.status
+                END AS bucket,
+                COUNT(*) AS cnt
+             FROM registrations r
+             LEFT JOIN registration_refunds rf ON rf.registration_id = r.id
+             WHERE r.event_id = :eventId AND r.status != 'removed'
+             GROUP BY bucket"
+        );
+        $stmt->execute(['eventId' => $eventId]);
+        $counts = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $counts[(string) $row['bucket']] = (int) $row['cnt'];
+        }
+
+        $labels = [
+            'paid' => 'Opłacone',
+            'pending' => 'Oczekujące',
+            'expired' => 'Wygasłe',
+            'cancelled' => 'Anulowane',
+            'refunded' => 'Zwrócone',
+        ];
+
+        $result = [];
+        foreach ($labels as $key => $label) {
+            $result[] = ['status' => $key, 'label' => $label, 'count' => $counts[$key] ?? 0];
+        }
+        return $result;
+    }
+
+    /**
+     * "Krzywa zapisów w czasie" (spec 21 Answer §2) — daily registration counts
+     * since the Event's registration opened, the cross-section the spec calls
+     * out as the one organizers look at most. Bucketed on the date portion of
+     * `registered_at` (DATE_ATOM string, so the first 10 characters are always
+     * the calendar date regardless of timezone offset suffix) — a plain SQL
+     * substring + GROUP BY, no new column. Days with zero Zapisy are filled in
+     * with count 0 so a client-side line/area chart never has to guess whether
+     * a gap in the data means "zero that day" or "no data fetched for that
+     * day" — same "seed every bucket, even at zero" stance E2.5's
+     * countAnswersForField() already takes for configured option values.
+     *
+     * @return array<int, array{date: string, count: int}>
+     */
+    private function statsSignupCurve(string $eventId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT registration_open_date AS registrationOpenDate FROM events WHERE id = :id');
+        $stmt->execute(['id' => $eventId]);
+        $openDate = $stmt->fetchColumn();
+        $openDate = is_string($openDate) && $openDate !== '' ? substr($openDate, 0, 10) : null;
+
+        $stmt = $this->pdo->prepare(
+            "SELECT SUBSTRING(r.registered_at, 1, 10) AS day, COUNT(*) AS cnt
+             FROM registrations r
+             WHERE r.event_id = :eventId AND r.status NOT IN ('cancelled', 'removed', 'expired')
+             GROUP BY day
+             ORDER BY day ASC"
+        );
+        $stmt->execute(['eventId' => $eventId]);
+        $counts = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $counts[(string) $row['day']] = (int) $row['cnt'];
+        }
+
+        if ($counts === []) {
+            return [];
+        }
+
+        $days = array_keys($counts);
+        sort($days);
+        $start = $openDate !== null && $openDate <= $days[0] ? $openDate : $days[0];
+        $end = date('Y-m-d');
+        if ($end < $days[count($days) - 1]) {
+            $end = $days[count($days) - 1];
+        }
+
+        $result = [];
+        try {
+            $cursor = new \DateTimeImmutable($start);
+            $last = new \DateTimeImmutable($end);
+        } catch (\Exception) {
+            return array_map(static fn (string $day): array => ['date' => $day, 'count' => $counts[$day]], $days);
+        }
+        while ($cursor <= $last) {
+            $day = $cursor->format('Y-m-d');
+            $result[] = ['date' => $day, 'count' => $counts[$day] ?? 0];
+            $cursor = $cursor->modify('+1 day');
+        }
+
+        return $result;
+    }
+
+    /**
+     * Shared implementation for gender/club — both live on `competitors`
+     * (CompetitorRepository, not form_field_answers — see FormFieldCatalog's
+     * storageLocation for either key), joined through
+     * `registrations.competitor_id`. `$labels` seeds known values at zero
+     * (mirrors countAnswersForField()'s option-seeding for gender's closed
+     * M/K vocabulary); club is free text with no closed set, so it is left to
+     * grow from whatever distinct values are actually on file, sorted by
+     * count desc.
+     *
+     * @param array<string, string> $labels fixed key => label seed; empty for open vocabularies
+     * @return array<int, array{key: string, label: string, count: int}>
+     */
+    private function statsByCompetitorColumn(string $eventId, string $column, array $labels): array
+    {
+        if (!in_array($column, ['gender', 'club'], true)) {
+            throw new \InvalidArgumentException('Unsupported competitor column for stats.');
+        }
+
+        $stmt = $this->pdo->prepare(
+            "SELECT c.{$column} AS value, COUNT(*) AS cnt
+             FROM registrations r
+             INNER JOIN competitors c ON c.id = r.competitor_id
+             WHERE r.event_id = :eventId AND r.status NOT IN ('cancelled', 'removed', 'expired')
+               AND c.{$column} IS NOT NULL AND c.{$column} <> ''
+             GROUP BY c.{$column}"
+        );
+        $stmt->execute(['eventId' => $eventId]);
+        $counts = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $counts[(string) $row['value']] = (int) $row['cnt'];
+        }
+
+        $result = [];
+        foreach ($labels as $key => $label) {
+            $result[] = ['key' => $key, 'label' => $label, 'count' => $counts[$key] ?? 0];
+            unset($counts[$key]);
+        }
+        foreach ($counts as $key => $count) {
+            $result[] = ['key' => $key, 'label' => $key, 'count' => $count];
+        }
+
+        usort($result, static fn (array $a, array $b): int => $b['count'] <=> $a['count']);
+
+        return $result;
+    }
+
+    /**
+     * Age-category breakdown, per Distance — classifies each live Zapis's
+     * Competitor (gender + birth year, both on `competitors`) against that
+     * Distance's own `event_distances.age_categories` (ticket 10's distance
+     * editor writes {id, name, gender, birthYearFrom, birthYearTo}; this is
+     * the first code anywhere that reads it — see FormFieldCatalog's docblock,
+     * grepped before writing this). Distances with an empty/absent
+     * `age_categories` are left out of the returned array entirely, not
+     * included with an empty `counts` list — same "field not configured -> no
+     * entry" contract as the rest of this method's caller.
+     *
+     * @return array<int, array{distanceId: string, distanceName: string, counts: array<int, array{key: string, label: string, count: int}>}>
+     */
+    private function statsByAgeCategory(string $eventId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, name, age_categories AS ageCategories FROM event_distances WHERE event_id = :eventId ORDER BY sort_order ASC, id ASC'
+        );
+        $stmt->execute(['eventId' => $eventId]);
+        $distances = $stmt->fetchAll();
+
+        $result = [];
+        foreach ($distances as $distance) {
+            $raw = $distance['ageCategories'] ?? null;
+            $categories = is_string($raw) && $raw !== '' ? (json_decode($raw, true) ?: []) : [];
+            if (!is_array($categories) || $categories === []) {
+                continue;
+            }
+
+            $distanceId = (string) $distance['id'];
+            $stmt2 = $this->pdo->prepare(
+                "SELECT c.gender AS gender, c.birth_date AS birthDate
+                 FROM registrations r
+                 INNER JOIN competitors c ON c.id = r.competitor_id
+                 WHERE r.event_id = :eventId AND r.distance_id = :distanceId
+                   AND r.status NOT IN ('cancelled', 'removed', 'expired')"
+            );
+            $stmt2->execute(['eventId' => $eventId, 'distanceId' => $distanceId]);
+            $competitors = $stmt2->fetchAll();
+
+            $counts = [];
+            foreach ($categories as $category) {
+                $key = (string) ($category['id'] ?? $category['name'] ?? '');
+                if ($key === '') {
+                    continue;
+                }
+                $label = (string) ($category['name'] ?? $key);
+                $gender = (string) ($category['gender'] ?? '');
+                $from = isset($category['birthYearFrom']) ? (int) $category['birthYearFrom'] : null;
+                $to = isset($category['birthYearTo']) ? (int) $category['birthYearTo'] : null;
+
+                $count = 0;
+                foreach ($competitors as $competitor) {
+                    if ($gender !== '' && (string) ($competitor['gender'] ?? '') !== $gender) {
+                        continue;
+                    }
+                    $birthDate = (string) ($competitor['birthDate'] ?? '');
+                    if ($birthDate === '' || strlen($birthDate) < 4) {
+                        continue;
+                    }
+                    $birthYear = (int) substr($birthDate, 0, 4);
+                    if ($from !== null && $birthYear < $from) {
+                        continue;
+                    }
+                    if ($to !== null && $birthYear > $to) {
+                        continue;
+                    }
+                    $count++;
+                }
+
+                $counts[] = ['key' => $key, 'label' => $label, 'count' => $count];
+            }
+
+            if ($counts !== []) {
+                $result[] = [
+                    'distanceId' => $distanceId,
+                    'distanceName' => (string) ($distance['name'] ?? ''),
+                    'counts' => $counts,
+                ];
+            }
+        }
+
+        return $result;
+    }
+
+    /**
      * Retroactive correction ("korekta wsteczna ze śladem", spec 10 pkt 2) —
      * the ONLY way to change a finished Event's frozen form-field snapshot.
      * Correcting the live Competitor/Registration record directly is how a

@@ -337,8 +337,26 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     // Event payload which this codebase already returns unfiltered to anonymous
     // readers). Applied to every read path a participant/guest can hit; manager
     // reads (organizer-owner or the same $canManageEvent-eligible staff) keep it.
+    // E8.2 (spec 21 Answer §4): "ten sam wzorzec przełącznika co przy liście
+    // startowej publicznej/ukrytej" — mirrors `display_options.showParticipants`
+    // (events.display_options JSON, generic PATCH /events/{id}) exactly: a new
+    // key, `showFreeSlots`, in the same JSON blob, same per-Event scope (spec
+    // says "ukryć per Wydarzenie"), same generic update path, no new column.
+    // Default visible (spec: "domyślnie widoczny") — only an explicit `false`
+    // hides it, so events saved before this key existed keep showing it.
+    // Folded into $stripBzToken below (same call sites, same "redact for every
+    // non-manager read" contract as the BZ token) rather than a second function
+    // threaded through every route — one pass, one place to keep both grants in
+    // sync as this codebase's own precedent (BZ token) already established.
     $stripBzToken = static function (array $event): array {
         $event['bzOrganizationToken'] = null;
+        $showFreeSlots = (($event['displayOptions'] ?? [])['showFreeSlots'] ?? true) !== false;
+        if (!$showFreeSlots && !empty($event['distances'])) {
+            $event['distances'] = array_map(static function (array $distance): array {
+                unset($distance['slotsRemaining']);
+                return $distance;
+            }, $event['distances']);
+        }
         return $event;
     };
     $stripBzTokenFromList = static function (array $events) use ($stripBzToken): array {
@@ -1286,6 +1304,18 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
             return JsonResponder::ok($response, $formFields->aggregatesForEvent((string) $args['id']));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        // E8.2 (spec 21 Answer §2): built-in cross-sections from the Zapis record
+        // itself (distance/payment-status/signup-curve, plus gender/club/age-category
+        // when configured) — complements form-field-aggregates above rather than
+        // replacing it. Same organizer/staff gate as every other analytics route in
+        // this group.
+        $api->get('/events/{id}/registration-stats', function (Request $request, Response $response, array $args) use ($events, $registrations, $canManageEvent) {
+            $event = $events->find((string) $args['id']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            return JsonResponder::ok($response, $registrations->organizerStats((string) $args['id']));
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         // E2.6: organizer-facing start-list export (spec 21 Answer §3) — CSV
         // (Windows-1250, "realny wymóg polskiego rynku") and XLSX, one

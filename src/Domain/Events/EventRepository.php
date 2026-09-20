@@ -768,8 +768,20 @@ SQL;
 
         return array_map(static function (array $distance) use ($registered, $paid): array {
             $id = (string) ($distance['id'] ?? '');
-            $distance['registeredCount'] = $registered[$id] ?? 0;
+            $registeredCount = $registered[$id] ?? 0;
+            $distance['registeredCount'] = $registeredCount;
             $distance['paidCount'] = $paid[$id] ?? 0;
+            // E8.2 (spec 21 Answer §4): free-slots counter, computed alongside the
+            // existing live registeredCount above (no new materialized state — the
+            // one exception, event_distances.registered_count, is E1.3's separate
+            // transactional capacity counter and is not what this reads). `null`
+            // limit means unlimited, so there is no "remaining" to compute.
+            // Whether this ever reaches an anonymous reader is decided by
+            // routes.php's $stripBzToken (renamed scope, see its own doc comment)
+            // per the Event's `display_options.showFreeSlots` toggle — manager
+            // reads always keep it, same as every other field that function guards.
+            $limit = $distance['limit'] ?? null;
+            $distance['slotsRemaining'] = $limit !== null ? max(0, (int) $limit - $registeredCount) : null;
             return $distance;
         }, $distances);
     }

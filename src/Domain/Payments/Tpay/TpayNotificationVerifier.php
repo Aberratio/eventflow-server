@@ -17,7 +17,9 @@ use ZmierzymyCzas\Domain\Payments\Http\HttpClientInterface;
  *     production, secure.sandbox.tpay.com in sandbox — TpayConfig::trustedCertHost())
  *     or the notification is rejected outright, before any network call is made.
  *  3. The certificate fetched from `x5u` must itself chain to Tpay's published root
- *     CA (`{trustedCertHost}/x509/tpay-jws-root.pem`).
+ *     CA (`{trustedCertHost}/x509/tpay-jws-root.pem`) AND must currently be within
+ *     its validFrom/validTo window — a correctly-chained but expired (or
+ *     not-yet-valid) certificate is rejected just the same.
  *  4. The signature is verified as RS256 (SHA-256 with RSA) over
  *     `header_segment . '.' . payload_segment` using the leaf certificate's public key.
  *
@@ -71,6 +73,14 @@ final class TpayNotificationVerifier
             return false;
         }
 
+        // Chaining to the trusted root and being within its validity period are two
+        // separate properties of the leaf certificate — certificateIsSignedByRoot()
+        // only proves the former. An expired (or not-yet-valid) certificate can still
+        // be correctly signed by the root, so both checks must pass independently.
+        if (!$this->certificateIsCurrentlyValid($leafCertPem)) {
+            return false;
+        }
+
         if (!$this->certificateIsSignedByRoot($leafCertPem, $rootCaCertPem)) {
             return false;
         }
@@ -102,6 +112,33 @@ final class TpayNotificationVerifier
         // -1 = error. Only 1 counts as "this leaf certificate was really issued by
         // Tpay's root CA".
         return openssl_x509_verify($leaf, $rootPublicKey) === 1;
+    }
+
+    /**
+     * Rejects an expired or not-yet-valid leaf certificate. A correctly signed
+     * certificate that is outside its validFrom/validTo window must not be trusted
+     * — this mirrors the `time() < $expiresAt` style check TpayOAuthClient uses for
+     * its cached token, just against openssl_x509_parse()'s validFrom_time_t /
+     * validTo_time_t instead of an API-supplied expiry.
+     *
+     * Fails closed: any parse failure or missing/non-integer field is treated as
+     * "not valid" rather than being skipped.
+     */
+    private function certificateIsCurrentlyValid(string $leafCertPem): bool
+    {
+        $parsed = openssl_x509_parse($leafCertPem, false);
+        if ($parsed === false) {
+            return false;
+        }
+
+        $validFrom = $parsed['validFrom_time_t'] ?? null;
+        $validTo = $parsed['validTo_time_t'] ?? null;
+        if (!is_int($validFrom) || !is_int($validTo)) {
+            return false;
+        }
+
+        $now = time();
+        return $now >= $validFrom && $now <= $validTo;
     }
 
     private function fetchPem(string $url): ?string

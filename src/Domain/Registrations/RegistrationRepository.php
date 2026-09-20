@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Registrations;
 
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxService;
+use ZmierzymyCzas\Domain\Competitors\CompetitorNamePresenter;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldCatalog;
@@ -217,7 +218,83 @@ SQL;
         $stmt->execute(['eventId' => $eventId]);
         $registrations = array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
 
-        return $this->attachPublicFormFields($eventId, $registrations);
+        return $this->maskAnonymizedCompetitors($this->attachPublicFormFields($eventId, $registrations));
+    }
+
+    /**
+     * TD.6 (E6.6 follow-up, "wire anonymization masking into public
+     * start-list and results"): the public start list is a second place a
+     * competitor's real name reaches an unauthenticated caller — E6.6 wired
+     * `competitors.is_anonymized` into the Wyzwanie/Series ranking only (see
+     * CompetitorNamePresenter's own docblock). Masks both places a name
+     * actually surfaces in this response:
+     *  - the flat `userName` snapshot (`registrations.user_name`, frozen at
+     *    registration time and never re-derived from the live Competitor
+     *    otherwise);
+     *  - the `first_name`/`last_name` entries attachPublicFormFields()
+     *    resolves into `formFields` (live or frozen, see below).
+     *
+     * Deliberately a POST-PROCESSING step over attachPublicFormFields()'s
+     * output, not a parameter threaded through resolveLiveFormFields()/
+     * attachFrozenFormFields()/resolvePublicFieldValue() — those three are
+     * also shared by bzParticipantList() (BZ integration, its own
+     * API-key + org-token gate) and startListExportRows() (organizer export,
+     * $canManageEvent-gated), both staff/organizer-facing paths that must
+     * keep seeing real names. attachPublicFormFields() itself has exactly one
+     * caller (this method), so masking here can never leak into either of
+     * those two.
+     *
+     * Always reflects the competitor's CURRENT is_anonymized flag, even for a
+     * finished Event serving a pre-frozen formFields snapshot — the toggle is
+     * a live self-service action (routes.php's POST
+     * /competitors/{id}/anonymization), so a competitor flipping it after
+     * their Event finished still expects their name masked on every future
+     * read, not only a value that happened to be frozen before they opted in.
+     *
+     * @param array<int, array<string, mixed>> $registrations
+     * @return array<int, array<string, mixed>>
+     */
+    private function maskAnonymizedCompetitors(array $registrations): array
+    {
+        if ($registrations === []) {
+            return $registrations;
+        }
+
+        $competitorRepository = new CompetitorRepository($this->pdo);
+        $competitorCache = [];
+
+        return array_map(function (array $registration) use ($competitorRepository, &$competitorCache): array {
+            $competitorId = $registration['competitorId'] ?? null;
+            if ($competitorId === null) {
+                return $registration;
+            }
+            if (!array_key_exists($competitorId, $competitorCache)) {
+                $competitorCache[$competitorId] = $competitorRepository->find((string) $competitorId);
+            }
+            $competitor = $competitorCache[$competitorId];
+            if ($competitor === null || !((bool) ($competitor['isAnonymized'] ?? false))) {
+                return $registration;
+            }
+
+            $registration['userName'] = CompetitorNamePresenter::publicName((string) $registration['userName'], true);
+
+            if (isset($registration['formFields']) && is_array($registration['formFields'])) {
+                $registration['formFields'] = array_map(static function (array $field): array {
+                    if ($field['fieldKey'] === 'first_name') {
+                        $field['value'] = CompetitorNamePresenter::ANONYMIZED_LABEL;
+                    } elseif ($field['fieldKey'] === 'last_name') {
+                        // Both halves masked into one label rather than
+                        // duplicating it on both fields (see this method's
+                        // own docblock's format reasoning, mirroring
+                        // CompetitorNamePresenter's own single-label choice).
+                        $field['value'] = null;
+                    }
+                    return $field;
+                }, $registration['formFields']);
+            }
+
+            return $registration;
+        }, $registrations);
     }
 
     /**

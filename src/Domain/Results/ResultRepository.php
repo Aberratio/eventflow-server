@@ -4,11 +4,20 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Results;
 
+use ZmierzymyCzas\Domain\Competitors\CompetitorNamePresenter;
 use ZmierzymyCzas\Domain\Repository;
 
 final class ResultRepository extends Repository
 {
     private const COLUMNS = 'id, event_id AS eventId, event_name AS eventName, distance_id AS distanceId, distance_name AS distanceName, user_id AS userId, registration_id AS registrationId, user_name AS userName, bib_number AS bibNumber, category, time, time_in_seconds AS timeInSeconds, net_time AS netTime, net_time_in_seconds AS netTimeInSeconds, position, category_position AS categoryPosition, status, is_virtual AS isVirtual, publication_status AS publicationStatus, gender, birth_year AS birthYear';
+
+    /**
+     * Same column list as COLUMNS above, `r.`-qualified for byEvent()'s
+     * anonymization join below (TD.6) — needed once the query also touches
+     * `registrations`/`competitors`, both of which have their own `id`
+     * column that would otherwise collide with `results.id`.
+     */
+    private const COLUMNS_R = 'r.id, r.event_id AS eventId, r.event_name AS eventName, r.distance_id AS distanceId, r.distance_name AS distanceName, r.user_id AS userId, r.registration_id AS registrationId, r.user_name AS userName, r.bib_number AS bibNumber, r.category, r.time, r.time_in_seconds AS timeInSeconds, r.net_time AS netTime, r.net_time_in_seconds AS netTimeInSeconds, r.position, r.category_position AS categoryPosition, r.status, r.is_virtual AS isVirtual, r.publication_status AS publicationStatus, r.gender, r.birth_year AS birthYear';
 
     /**
      * @param array<string, mixed> $filters
@@ -46,19 +55,48 @@ final class ResultRepository extends Repository
         return ['data' => $stmt->fetchAll(), 'total' => $total, 'page' => $pagination['page'], 'pageSize' => $pagination['pageSize']];
     }
 
-    /** @return array<int, array<string, mixed>> */
+    /**
+     * TD.6 (E6.6 follow-up): public individual classification — `GET
+     * /events/{eventId}/results` is unauthenticated (routes.php's own
+     * comment on this endpoint), so a competitor's `is_anonymized` flag must
+     * be respected here the same way E6.6 already wired it into the
+     * Wyzwanie/Series ranking. `results.user_name` is a flat snapshot with no
+     * FK to `competitors` on its own — the join below resolves identity the
+     * same way lifetimeRecordsForCompetitor() already documents as this
+     * class's established convention: `results.registration_id` ->
+     * `registrations.competitor_id` is authoritative (migration 027,
+     * "Zawodnik jako zrodlo tozsamosci zapisu"); a result with no
+     * registration_id (older/manual entry, e.g. AddResultDialog.tsx's manual
+     * payload) falls back to `results.user_id` = `competitors.user_id`.
+     * COALESCE prefers the registration-linked competitor when both would
+     * somehow resolve (they should always agree when both exist).
+     *
+     * @return array<int, array<string, mixed>>
+     */
     public function byEvent(string $eventId, ?string $distanceId = null): array
     {
-        $sql = 'SELECT ' . self::COLUMNS . ' FROM results WHERE event_id = :eventId';
+        $sql = 'SELECT ' . self::COLUMNS_R . ',
+                COALESCE(comp_reg.is_anonymized, comp_self.is_anonymized, 0) AS isAnonymizedFlag
+            FROM results r
+            LEFT JOIN registrations reg ON reg.id = r.registration_id
+            LEFT JOIN competitors comp_reg ON comp_reg.id = reg.competitor_id
+            LEFT JOIN competitors comp_self ON comp_self.user_id = r.user_id
+            WHERE r.event_id = :eventId';
         $params = ['eventId' => $eventId];
         if ($distanceId) {
-            $sql .= ' AND distance_id = :distanceId';
+            $sql .= ' AND r.distance_id = :distanceId';
             $params['distanceId'] = $distanceId;
         }
-        $sql .= ' ORDER BY position ASC';
+        $sql .= ' ORDER BY r.position ASC';
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
+
+        return array_map(static function (array $row): array {
+            $isAnonymized = (bool) $row['isAnonymizedFlag'];
+            unset($row['isAnonymizedFlag']);
+            $row['userName'] = CompetitorNamePresenter::publicName((string) $row['userName'], $isAnonymized);
+            return $row;
+        }, $stmt->fetchAll());
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -406,6 +444,18 @@ SQL);
      * handleDeleteTeamResult only touch local React state - see git history),
      * so nothing outside fixtures ever persisted a row here through normal
      * use; this GET was the only route ever exposed for it.
+     *
+     * TD.6 KNOWN GAP (checked, not closed): `members` is an opaque JSON blob
+     * with no FK to `competitors`/`users` at all (see the CREATE TABLE in
+     * migration 001 and EventFixtureImporter::importTeamResults() — it writes
+     * whatever the fixture's `members` array already contains, verbatim).
+     * There is no identity chain here to resolve an is_anonymized flag
+     * against, unlike byEvent()'s registration_id/user_id chain above — if a
+     * member name were ever anonymization-sensitive, this table has no way to
+     * know which competitor it belongs to. Left unmasked: this is legacy,
+     * fixture/seeder-only dead code (see this docblock's own opening
+     * paragraph) superseded by teamClassification() below, which carries no
+     * individual member names at all and has nothing to mask.
      *
      * E2.7 removes TeamResultsManager.tsx from the client results view
      * entirely (replaced by the live-computed classification table) rather

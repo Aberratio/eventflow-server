@@ -8,6 +8,7 @@ use PDO;
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Database\Migrator;
+use ZmierzymyCzas\Domain\Competitors\CompetitorNamePresenter;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
@@ -468,6 +469,70 @@ final class ResultRepositoryTest extends TestCase
 
         self::assertCount(1, $records);
         self::assertSame((string) $created['id'], $records[0]['resultId']);
+    }
+
+    /**
+     * TD.6 (E6.6 follow-up): `GET /events/{eventId}/results` is public and
+     * unauthenticated (routes.php) — byEvent() must mask a competitor's real
+     * name via the registration_id -> registrations.competitor_id chain
+     * (the authoritative path per lifetimeRecordsForCompetitor()'s own
+     * docblock) once that competitor opts into anonymization.
+     */
+    public function testAnonymizedCompetitorsRealNameIsMaskedOnThePublicByEventClassification(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Rekord Anonimowy');
+        $this->competitors->setAnonymization($competitorId, true);
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+
+        $created = $this->results->create($this->resultPayload($account, [
+            'registrationId' => $registrationId,
+        ]));
+
+        $rows = $this->results->byEvent((string) $this->event['id']);
+        $entry = current(array_filter($rows, static fn (array $r): bool => $r['id'] === $created['id']));
+
+        self::assertNotFalse($entry);
+        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+        self::assertStringNotContainsString('Rekord', $entry['userName']);
+    }
+
+    /** Non-anonymized competitor must keep appearing with their real name — no false-positive masking. */
+    public function testNonAnonymizedCompetitorsNameAppearsNormallyOnThePublicByEventClassification(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Rekord Widoczny');
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+
+        $created = $this->results->create($this->resultPayload($account, [
+            'registrationId' => $registrationId,
+        ]));
+
+        $rows = $this->results->byEvent((string) $this->event['id']);
+        $entry = current(array_filter($rows, static fn (array $r): bool => $r['id'] === $created['id']));
+
+        self::assertNotFalse($entry);
+        self::assertSame($account['name'], $entry['userName']);
+    }
+
+    /**
+     * A result with no registration_id at all (older/manual entry) falls
+     * back to results.user_id = competitors.user_id — the same fallback
+     * lifetimeRecordsForCompetitor() already documents and relies on.
+     */
+    public function testAnonymizedCompetitorIsMaskedViaUserIdFallbackWhenResultHasNoRegistrationId(): void
+    {
+        $participant = $this->createParticipant('Rekord Bez Zapisu Anonim');
+        $competitor = $this->competitors->ensureForUser($participant);
+        $this->createdCompetitorIds[] = (string) $competitor['id'];
+        $this->competitors->setAnonymization((string) $competitor['id'], true);
+
+        $created = $this->results->create($this->resultPayload($participant));
+        self::assertNull($created['registrationId']);
+
+        $rows = $this->results->byEvent((string) $this->event['id']);
+        $entry = current(array_filter($rows, static fn (array $r): bool => $r['id'] === $created['id']));
+
+        self::assertNotFalse($entry);
+        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
     }
 
     /**

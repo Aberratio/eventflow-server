@@ -984,6 +984,28 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         // (getExistingTeamsForEvent()). Public/unauthenticated, same as the
         // sibling /team-results route below — no Rozliczenie/PII here.
         $api->get('/events/{eventId}/distances/{distanceId}/teams', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $teams->forDistance($args['eventId'], $args['distanceId'])));
+        // E7.2 (issue 23 Answer §1, "link do zaproszenia dla pozostałych
+        // miejsc"): a single Drużyna lookup by its own id — the read side of
+        // the invitation link a captain shares directly with a missing
+        // teammate (`/events/{eventSlug}/register?joinTeam={teamId}`). The
+        // team's own server-generated UUID (TeamRepository::create()) is
+        // reused as the invitation token itself rather than minting a
+        // separate one: it is already unguessable, and the actual join is
+        // re-validated in full by RegistrationRepository::
+        // resolveTeamForRegistration() at submit time regardless of how the
+        // client learned the id (this endpoint only lets the client resolve
+        // eventId/distanceId/completeness up front, before the invitee even
+        // opens the registration form, so a full/invalid link can show a
+        // clear message instead of a blank form). Public/unauthenticated,
+        // same stance as the sibling /teams listing above — no
+        // Rozliczenie/PII on a `teams` row. 404 when the id doesn't exist.
+        $api->get('/teams/{teamId}', function (Request $request, Response $response, array $args) use ($teams) {
+            $team = $teams->find($args['teamId']);
+            if ($team === null) {
+                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+            }
+            return JsonResponder::ok($response, $team);
+        });
         $api->get('/events/{eventId}/registrations', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->byEvent($args['eventId'])))
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->get('/events/{eventId}/start-list', function (Request $request, Response $response, array $args) use ($events, $registrations, $optionalAuth, $canViewEvent) {

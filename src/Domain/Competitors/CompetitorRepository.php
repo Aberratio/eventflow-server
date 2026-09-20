@@ -155,7 +155,32 @@ SQL;
              LIMIT ' . max(1, min(100, $limit))
         );
         $stmt->execute(['needle' => '%' . $needle . '%', 'exact' => $needle]);
-        return $stmt->fetchAll();
+        $results = $stmt->fetchAll();
+
+        // E8.1 fix-loop: this search box is the one real, existing place in
+        // this codebase where a moderator pastes a raw kod tożsamości
+        // (`zqr_...`, see the UI's own placeholder text) to find a Zawodnik —
+        // there is no separate BZ-facing "resolve a scanned code" HTTP route
+        // in this repo (BZ's own scanner/resolution logic lives in the
+        // separate biuro_zawodow repo; what this repo serves outbound,
+        // bzParticipantList(), already reflects the post-merge survivor
+        // correctly because it joins live via registrations.competitor_id,
+        // which repointCompetitor() already updates — see
+        // RegistrationRepository::bzParticipantList()). The plain query above
+        // only matches a still-active competitor's OWN current code, so
+        // pasting the OLD code of an already-merged (status = "scalony")
+        // profile — exactly the scan-an-old-printed-card scenario
+        // resolveIdentityCode() exists for — silently returned nothing.
+        // Fall back to the alias-chain-aware lookup so that case resolves to
+        // the current survivor instead.
+        if (str_starts_with($needle, QrCode::IDENTITY_PREFIX)) {
+            $resolved = $this->resolveIdentityCode($needle);
+            if ($resolved !== null && !in_array($resolved['id'], array_column($results, 'id'), true)) {
+                array_unshift($results, $resolved);
+            }
+        }
+
+        return $results;
     }
 
     /**

@@ -3293,9 +3293,15 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             // without unpacking a thrown-error's `details`). Only genuine error
             // conditions (missing ids, unknown competitor, already merged, merge
             // with self) use JsonResponder::error() above.
-            $message = match ($result['status']) {
-                'field_decisions_required' => 'Rozstrzygnij ręcznie pola, w których profile się różnią.',
-                'conflict_pending' => 'Wykryto konflikt Zapisów na ten sam Dystans — wskaż, który zostaje.',
+            $message = match (true) {
+                $result['status'] === 'field_decisions_required' => 'Rozstrzygnij ręcznie pola, w których profile się różnią.',
+                $result['status'] === 'conflict_pending' => 'Wykryto konflikt Zapisów na ten sam Dystans — wskaż, który zostaje.',
+                // Merge itself already committed successfully (survivor absorbed
+                // absorbed's data, activity log written) — a refund/cancel
+                // failure on the rejected side of a conflict is a real but
+                // SEPARATE problem that needs manual follow-up, never reported
+                // as if the merge had failed (see CompetitorMergeService::merge()).
+                !empty($result['refundFailures']) => 'Profile zostały scalone, ale rozstrzygnięcie konfliktowego Zapisu wymaga ręcznej interwencji (patrz refundFailures).',
                 default => 'Profile zostały scalone.',
             };
             return JsonResponder::ok($response, $result, $message);

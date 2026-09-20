@@ -229,17 +229,17 @@ final class CompetitorMergeService
             throw $e;
         }
 
-        // Spec Answer §2 step 6: the rejected side of a conflicting pair "goes
-        // through the standard cancellation/refund path (E1.5), never
-        // silently disappears" — reusing requestRefund()/approveRefund() for
-        // an already-paid Zapis, cancel() otherwise. Deliberately run AFTER
-        // the merge transaction commits, not nested inside it: these methods
-        // manage their own PDO transactions and PDO does not support nesting.
+        // The merge itself is already fully committed at this point — the
+        // activity-log snapshot is the ticket's ONLY recovery mechanism (no
+        // "undo" button by design), so it must not depend on anything that
+        // can still fail below. Written BEFORE the refund/cancel loop on
+        // purpose: every value it needs (survivor/absorbed before-state,
+        // field decisions, conflict resolutions, which registrations were
+        // repointed/rejected, whether the identity code was aliased) is
+        // already known here and none of it depends on a refund/cancel call
+        // succeeding. See the refund loop below for what happens if one of
+        // those calls fails anyway — this log entry is unaffected either way.
         $actingId = (string) ($auth['sub'] ?? '');
-        foreach ($rejectedRegistrationIds as $rejectedId) {
-            $this->rejectConflictingRegistration($rejectedId, $actingId);
-        }
-
         $this->admin->insertActivityLog([
             'userId' => $actingId,
             'action' => 'competitor_merged',
@@ -261,10 +261,57 @@ final class CompetitorMergeService
             ],
         ]);
 
+        // Spec Answer §2 step 6: the rejected side of a conflicting pair "goes
+        // through the standard cancellation/refund path (E1.5), never
+        // silently disappears" — reusing requestRefund()/approveRefund() for
+        // an already-paid Zapis, cancel() otherwise. Deliberately run AFTER
+        // the merge transaction commits, not nested inside it: these methods
+        // manage their own PDO transactions and PDO does not support nesting.
+        //
+        // The merge itself has ALREADY committed and been logged above by
+        // this point, so a failure here (concurrent state change on that
+        // registration, a DB hiccup, anything) must never be allowed to read
+        // back to the caller as "the merge failed" — that would be false,
+        // and previously produced a misleading 404 via routes.php's generic
+        // \RuntimeException catch while the merge had in fact already
+        // succeeded. Instead: collect failures per-registration and report
+        // them honestly alongside the successful merge result.
+        $refundFailures = [];
+        foreach ($rejectedRegistrationIds as $rejectedId) {
+            try {
+                $this->rejectConflictingRegistration($rejectedId, $actingId);
+            } catch (\Throwable $e) {
+                $refundFailures[] = [
+                    'registrationId' => $rejectedId,
+                    'error' => $e->getMessage(),
+                ];
+            }
+        }
+
+        if ($refundFailures !== []) {
+            $this->admin->insertActivityLog([
+                'userId' => $actingId,
+                'action' => 'competitor_merge_refund_issue',
+                'description' => sprintf(
+                    'Scalenie "%s %s" -> "%s %s" powiodło się, ale rozstrzygnięcie %d konfliktowego(-ych) Zapisu(-ów) wymaga ręcznej interwencji',
+                    $absorbed['firstName'],
+                    $absorbed['lastName'],
+                    $survivor['firstName'],
+                    $survivor['lastName'],
+                    count($refundFailures)
+                ),
+                'targetType' => 'competitor',
+                'targetId' => $survivorId,
+                'targetName' => trim($survivor['firstName'] . ' ' . $survivor['lastName']),
+                'metadata' => ['refundFailures' => $refundFailures],
+            ]);
+        }
+
         return [
             'status' => 'merged',
             'survivor' => $this->competitors->find($survivorId),
             'absorbed' => $this->competitors->find($absorbedId),
+            'refundFailures' => $refundFailures,
         ];
     }
 

@@ -16,6 +16,7 @@ use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
 use ZmierzymyCzas\Support\Env;
+use ZmierzymyCzas\Tests\Support\FaultInjectingRefundPdo;
 
 /**
  * E8.1 (issue 22): full rigor per the ticket brief — no-conflict repointing,
@@ -237,6 +238,116 @@ final class CompetitorMergeServiceTest extends TestCase
         self::assertSame('Ella', $log['metadata']['absorbedBefore']['firstName']);
         self::assertSame('Absorbed Club', $log['metadata']['absorbedBefore']['club']);
         self::assertTrue($log['metadata']['identityCodeAliased']);
+    }
+
+    /**
+     * E8.1 fix-loop, gap 1: a refund/cancel failure on the rejected side of a
+     * conflict must never look like "the merge failed" — the merge has
+     * already committed by the time that loop runs. Proves both halves of
+     * the fix: (a) the activity-log snapshot exists with full pre-merge data
+     * even though a refund call in the post-commit loop is forced to fail,
+     * and (b) the response says so honestly (`refundFailures`) instead of
+     * throwing/looking like total failure.
+     *
+     * Forces the failure with a fault-injecting PDO subclass wrapping the
+     * SAME connection (not a separate one — a real second connection would
+     * not see the first connection's just-committed transaction reliably
+     * under MySQL's default isolation without extra synchronization, and
+     * would also desync the merge's own beginTransaction()/commit() from the
+     * repositories it hands work to). It throws only when the exact
+     * approveRefund() UPDATE for the targeted registration runs, so the rest
+     * of the merge (which uses the same PDO/repositories) is unaffected.
+     */
+    public function testRefundFailureStillWritesActivityLogAndReportsPartialFailure(): void
+    {
+        $event = $this->createEvent('refund-failure');
+        $survivor = $this->competitors->create(['firstName' => 'Fela', 'lastName' => $this->prefix]);
+        $absorbed = $this->competitors->create(['firstName' => 'Fela', 'lastName' => $this->prefix]);
+
+        $survivorReg = $this->registrations->create($this->registrationPayload($event, (string) $survivor['id'], paid: true));
+        $absorbedReg = $this->registrations->create($this->registrationPayload($event, (string) $absorbed['id'], paid: true));
+
+        $paused = $this->merge->merge(['sub' => $this->moderatorId], (string) $survivor['id'], (string) $absorbed['id'], []);
+        self::assertSame('conflict_pending', $paused['status']);
+
+        $faultyPdo = new FaultInjectingRefundPdo((string) $absorbedReg['id']);
+        $faultyRegistrations = new RegistrationRepository($faultyPdo);
+        $faultyMerge = new CompetitorMergeService(
+            $faultyPdo,
+            new CompetitorRepository($faultyPdo),
+            new CareRepository($faultyPdo),
+            $faultyRegistrations,
+            new ResultRepository($faultyPdo),
+            new ChallengeRepository($faultyPdo),
+            new AdminRepository($faultyPdo)
+        );
+
+        $result = $faultyMerge->merge(
+            ['sub' => $this->moderatorId],
+            (string) $survivor['id'],
+            (string) $absorbed['id'],
+            [],
+            [[
+                'eventId' => $event['id'],
+                'distanceId' => $event['distances'][0]['id'],
+                'winnerRegistrationId' => $survivorReg['id'],
+            ]]
+        );
+
+        // The merge itself still fully succeeded — it must never be reported
+        // as if it had not happened.
+        self::assertSame('merged', $result['status']);
+        self::assertSame('scalony', $this->competitors->find((string) $absorbed['id'])['status']);
+
+        // But the caller is told, honestly, that the rejected registration's
+        // refund needs manual follow-up — not silence, not a false "merge
+        // failed".
+        self::assertNotEmpty($result['refundFailures']);
+        self::assertSame($absorbedReg['id'], $result['refundFailures'][0]['registrationId']);
+
+        // The ONLY recovery mechanism (the pre-merge snapshot) still exists,
+        // in full, despite the refund loop failing.
+        $log = $this->latestMergeLogFor((string) $survivor['id']);
+        self::assertNotNull($log);
+        self::assertSame('Fela', $log['metadata']['survivorBefore']['firstName']);
+        self::assertSame('Fela', $log['metadata']['absorbedBefore']['firstName']);
+        self::assertSame($absorbedReg['id'], $log['metadata']['rejectedRegistrationIds'][0]);
+
+        // And the failure itself was also logged for moderator visibility.
+        $failureLogs = $this->admin->activityLogs(['action' => 'competitor_merge_refund_issue', 'targetId' => $survivor['id']]);
+        self::assertNotEmpty($failureLogs);
+    }
+
+    /**
+     * E8.1 fix-loop, gap 2: the one real, existing place in this codebase
+     * where a moderator pastes a raw kod tożsamości (`zqr_...`) to find a
+     * Zawodnik (CompetitorMergeTab's search box, `searchForMerge()`) must
+     * resolve an OLD, now-aliased code from an already-merged profile to its
+     * current survivor — the "scan an already-printed card after the merge"
+     * scenario resolveIdentityCode() exists for, previously wired nowhere.
+     */
+    public function testSearchForMergeResolvesOldIdentityCodeToSurvivor(): void
+    {
+        $survivor = $this->competitors->create(['firstName' => 'Gina', 'lastName' => $this->prefix]);
+        $absorbed = $this->competitors->create(['firstName' => 'Gita', 'lastName' => $this->prefix]);
+        $oldIdentityCode = (string) $absorbed['identityCode'];
+
+        $result = $this->merge->merge(
+            ['sub' => $this->moderatorId],
+            (string) $survivor['id'],
+            (string) $absorbed['id'],
+            []
+        );
+        self::assertSame('merged', $result['status']);
+
+        // Before the fix, this returned [] — the absorbed profile's row is
+        // now status = "scalony" and gets filtered out, and the alias was
+        // never consulted.
+        $found = $this->competitors->searchForMerge($oldIdentityCode);
+
+        self::assertNotEmpty($found);
+        self::assertSame((string) $survivor['id'], (string) $found[0]['id']);
+        self::assertSame('active', $found[0]['status']);
     }
 
     /** @param array<string, mixed> $event */

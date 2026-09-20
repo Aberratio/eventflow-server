@@ -2765,6 +2765,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             ->add(new AuthMiddleware($jwt, ['admin']));
         $api->get('/admin/online-sessions', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->onlineSessions()))
             ->add(new AuthMiddleware($jwt, $staffRoles));
+        // E8.3 (spec 21 Answer §6): minimal platform-admin cross-section —
+        // Events by publication_status (E1.1), Organizer count, active
+        // package-credit total (E5.6). Admin-only (not moderator) per the
+        // ticket's literal "zestawienia dla admina platformy" — this is a
+        // platform-wide aggregate, not an Event-scoped operational view like
+        // online-sessions/activity-logs above that moderator also needs.
+        $api->get('/admin/platform-stats', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->platformStats()))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
 
         // Bilet is a view of Zapis, not a stored entity (E0.2) — derived from registrations.
         $api->get('/users/{userId}/tickets', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->ticketsByUser($args['userId'])))

@@ -130,4 +130,58 @@ final class AdminRepository extends Repository
         $stmt = $this->pdo->query('SELECT user_id AS userId, user_name AS userName, role, login_at AS loginAt, last_active_at AS lastActiveAt, ip_address AS ipAddress, browser, location FROM online_sessions ORDER BY last_active_at DESC');
         return $stmt->fetchAll();
     }
+
+    /**
+     * E8.3 (spec 21 Answer §6): the minimal, explicitly-closed platform-admin
+     * cross-section over Events/Organizers — "liczba Wydarzeń wg statusu
+     * publikacyjnego z ticketu 08 [E1.1], liczba Organizatorów, liczba
+     * aktywnych pakietów z ticketu 16 [E5.6]". Nothing beyond these three
+     * numbers — the spec is explicit that no more is required.
+     *
+     * eventsByStatus: GROUP BY over the E1.1 `publication_status` axis,
+     * excluding soft-deleted Events (`deleted_at IS NULL`) — same convention
+     * as every other Event count in this repository (see byOrganizer() /
+     * list()'s COUNT(*) above). Every enum value is always present, even at
+     * zero, so a client can render a stable set of buckets without probing
+     * for missing keys.
+     *
+     * organizerCount: `role = 'organizer'` exactly, not `staffRoles` — the
+     * spec's plain reading ("liczba Organizatorów") means the Organizer
+     * role, not staff who can *also* manage Events (moderator/admin/
+     * superadmin already get their own visibility elsewhere in this panel).
+     *
+     * activePackageCredits: `organizer_package_credits` (E5.6) is a
+     * materialized "right to submit one Event" counter, not a row-per-
+     * package table — "aktywne pakiety" (packages not yet consumed by a
+     * Draft -> Submitted transition, see 053_e5_6_organizer_package_credit.sql)
+     * is read here as the *sum* of that counter across all users: each unit
+     * of credit is literally one still-unconsumed package, so the sum is the
+     * total count of active packages outstanding in the system right now —
+     * a more literal reading of "liczba aktywnych pakietów" than "how many
+     * distinct organizers happen to be holding at least one".
+     *
+     * @return array{eventsByStatus: array<int, array{status: string, count: int}>, organizerCount: int, activePackageCredits: int}
+     */
+    public function platformStats(): array
+    {
+        $statuses = ['draft', 'submitted', 'approved', 'published', 'finished', 'rejected', 'cancelled'];
+        $stmt = $this->pdo->query(
+            'SELECT publication_status AS status, COUNT(*) AS cnt FROM events WHERE deleted_at IS NULL GROUP BY publication_status'
+        );
+        $counts = array_column($stmt->fetchAll(), 'cnt', 'status');
+        $eventsByStatus = array_map(static fn (string $status): array => [
+            'status' => $status,
+            'count' => (int) ($counts[$status] ?? 0),
+        ], $statuses);
+
+        $organizerCount = (int) $this->pdo->query("SELECT COUNT(*) FROM users WHERE role = 'organizer'")->fetchColumn();
+
+        $activePackageCredits = (int) $this->pdo->query('SELECT COALESCE(SUM(organizer_package_credits), 0) FROM users')->fetchColumn();
+
+        return [
+            'eventsByStatus' => $eventsByStatus,
+            'organizerCount' => $organizerCount,
+            'activePackageCredits' => $activePackageCredits,
+        ];
+    }
 }

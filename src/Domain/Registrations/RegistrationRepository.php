@@ -2416,7 +2416,7 @@ SQL;
      * and there is no `failed` state in migration 035's refund state machine
      * to move it to instead), but it must no longer vanish without a trace:
      * it is now logged (registration id, amount, gateway, transaction id,
-     * exception) the same way ChallengeRepository::evaluateConditionTree()
+     * exception) the same way ChallengeRepository::isChallengeCompletedForUser()
      * logs a swallowed \RuntimeException, and the boolean return here lets
      * approveRefund() mark the response honestly instead of a silent 200.
      * Actually retrying the gateway call is still an operational follow-up

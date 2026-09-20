@@ -1006,6 +1006,42 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             return JsonResponder::ok($response, $team);
         });
+        // E7.5 (issue 23 Answer §7, "Kategoria specjalna: deklaracja ręczna
+        // kapitana"): lets the captain change a previously declared value —
+        // see TeamRepository::updateSpecialCategory()'s doc comment for the
+        // permission model (created_by_user_id) and the editability-window
+        // judgment call (open until the Event's start date). Authenticated
+        // (any logged-in user may call this; the repository itself rejects
+        // anyone who isn't this exact team's captain) rather than gated by a
+        // role, matching resolveTeamForRegistration()'s existing stance that
+        // this is a per-resource ownership check, not a staff permission.
+        $api->patch('/teams/{teamId}/special-category', function (Request $request, Response $response, array $args) use ($teams, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $payload = $body($request);
+            $specialCategory = isset($payload['specialCategory']) ? trim((string) $payload['specialCategory']) : '';
+            try {
+                $updated = $teams->updateSpecialCategory(
+                    $args['teamId'],
+                    (string) ($auth['sub'] ?? ''),
+                    $specialCategory !== '' ? $specialCategory : null
+                );
+                return JsonResponder::ok($response, $updated, 'Team special category updated');
+            } catch (RuntimeException $e) {
+                if ($e->getMessage() === 'team_not_found') {
+                    return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+                }
+                if ($e->getMessage() === 'team_not_captain') {
+                    return JsonResponder::error($response, 'team_not_captain', 'Only the team captain can change this team\'s special category.', 403);
+                }
+                if ($e->getMessage() === 'team_special_category_locked') {
+                    return JsonResponder::error($response, 'team_special_category_locked', 'This team\'s special category can no longer be changed once the event has started.', 409);
+                }
+                if ($e->getMessage() === 'team_special_category_invalid') {
+                    return JsonResponder::error($response, 'team_special_category_invalid', 'Selected special category is not configured for this distance.', 422);
+                }
+                throw $e;
+            }
+        })->add(new AuthMiddleware($jwt));
         $api->get('/events/{eventId}/registrations', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->byEvent($args['eventId'])))
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->get('/events/{eventId}/start-list', function (Request $request, Response $response, array $args) use ($events, $registrations, $optionalAuth, $canViewEvent) {
@@ -1402,6 +1438,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                     'registration_team_distance_mismatch' => 'Selected team does not belong to this event/distance.',
                     'registration_team_requires_relay_distance' => 'Teams can only be created for a relay distance.',
                     'registration_team_name_required' => 'Team name is required to create a team.',
+                    // E7.5 (issue 23 Answer §7): the captain's optional Kategoria
+                    // specjalna, when given, must match one of the Dystans's
+                    // configured special categories.
+                    'team_special_category_invalid' => 'Selected special category is not configured for this distance.',
                 ];
                 if (array_key_exists($e->getMessage(), $teamValidationErrors)) {
                     return JsonResponder::error($response, $e->getMessage(), $teamValidationErrors[$e->getMessage()], 422);

@@ -26,6 +26,17 @@ use ZmierzymyCzas\Domain\Repository;
  *    is carried through find()/forDistance() so it is never lost, but
  *    nothing here ever sets it to anything but null.
  *
+ *    UPDATE (E7.5 implementation): create() now accepts an optional
+ *    specialCategory, validated against the Dystans's configured
+ *    event_distances.special_categories list (the SAME list ticket 10's
+ *    individual-registration "Kategorie specjalne" checkboxes read — no
+ *    separate "team categories" concept invented here). updateSpecialCategory()
+ *    lets the captain (created_by_user_id) change it later, up until the
+ *    event's start date. Both paths only ever set this column to a value the
+ *    caller explicitly asked for — nothing here recomputes or corrects it
+ *    from memberCount()/roster composition, per the ticket's own explicit
+ *    point (Answer §7) that a stale declaration is an accepted cost.
+ *
  * "Completeness" (Answer §1: "stan czysto pochodny, wyliczany z liczby
  * powiązanych Zapisów, nie osobne pole do ręcznego ustawiania") is computed
  * fresh on every read from a live COUNT(*) against `registrations`, using
@@ -51,7 +62,13 @@ final class TeamRepository extends Repository
         . 'created_by_user_id AS createdByUserId, special_category AS specialCategory, created_at AS createdAt';
 
     /**
-     * @param array<string, mixed> $data eventId, distanceId, name, createdByUserId (optional)
+     * @param array<string, mixed> $data eventId, distanceId, name, createdByUserId (optional),
+     *                                    specialCategory (optional, E7.5 — the caller
+     *                                    (RegistrationRepository::resolveTeamForRegistration())
+     *                                    is responsible for validating it against
+     *                                    specialCategoriesForDistance() BEFORE calling this,
+     *                                    exactly as it already validates startType/team size
+     *                                    there — this method itself does not re-validate.
      * @return array<string, mixed> the created team, with its (freshly zero) completeness attached
      */
     public function create(array $data): array
@@ -63,10 +80,118 @@ final class TeamRepository extends Repository
             'distance_id' => $data['distanceId'],
             'name' => $data['name'],
             'created_by_user_id' => $data['createdByUserId'] ?? null,
+            'special_category' => $data['specialCategory'] ?? null,
             'created_at' => date(DATE_ATOM),
         ]);
 
         return $this->find($id);
+    }
+
+    /**
+     * E7.5 (issue 23 Answer §7): lets the captain change a previously
+     * declared Kategoria specjalna. Editability window judgment call (the
+     * spec only fixes a deadline for the member-swap case, E7.3/Answer §2 —
+     * it says nothing about this field): open until the Event's own start
+     * date, then locked. Rationale: the spec's whole argument for making
+     * this manual in the first place is "predictability for the organizer
+     * arranging results" — the same predictability concern that justifies
+     * cutting off changes once the event is actually under way, same as any
+     * other pre-race declaration. This is a deliberately simple choice, not
+     * a new configurable deadline parameter like relay_team_completion
+     * deadline (E7.1) — nothing in the spec asks for one here.
+     *
+     * Permission model mirrors resolveTeamForRegistration()'s existing
+     * "captain" concept (issue 23 Answer §2's own words: "kapitan
+     * (uprawnienie ograniczone do Zapisów swojej Drużyny ... nie pełna
+     * Opieka)") — the only thing recorded anywhere today for "who is the
+     * captain" is teams.created_by_user_id (set once, at create()), so that
+     * is the check.
+     *
+     * @return array<string, mixed> the updated team
+     */
+    public function updateSpecialCategory(string $teamId, string $requestingUserId, ?string $specialCategory): array
+    {
+        $team = $this->find($teamId);
+        if ($team === null) {
+            throw new \RuntimeException('team_not_found');
+        }
+        if ($requestingUserId === '' || (string) ($team['createdByUserId'] ?? '') !== $requestingUserId) {
+            throw new \RuntimeException('team_not_captain');
+        }
+        if ($this->eventHasStarted((string) $team['eventId'])) {
+            throw new \RuntimeException('team_special_category_locked');
+        }
+
+        $value = $specialCategory !== null && trim($specialCategory) !== '' ? trim($specialCategory) : null;
+        self::validateSpecialCategory($value, $this->specialCategoriesForDistance((string) $team['distanceId']));
+
+        $this->pdo->prepare('UPDATE teams SET special_category = :cat WHERE id = :id')
+            ->execute(['cat' => $value, 'id' => $teamId]);
+
+        return $this->find($teamId);
+    }
+
+    /**
+     * True once the Event's own start date has passed (DATE granularity,
+     * matching EventRepository::lazilyFinishPastEvents()'s existing
+     * `CURDATE()` cutoff convention rather than inventing a new one) — the
+     * editability-window boundary for updateSpecialCategory() above.
+     */
+    private function eventHasStarted(string $eventId): bool
+    {
+        $stmt = $this->pdo->prepare('SELECT (date <= CURDATE()) AS started FROM events WHERE id = :id');
+        $stmt->execute(['id' => $eventId]);
+        $started = $stmt->fetchColumn();
+        return $started !== false && (bool) $started;
+    }
+
+    /**
+     * The organizer-configured special-category list for one Dystans — the
+     * SAME `event_distances.special_categories` JSON column ticket 10's
+     * individual-registration form already reads
+     * (EventRepository::DISTANCE_JSON), reused unchanged rather than
+     * inventing a parallel "team categories" list (issue 23 Answer §7:
+     * "analogicznie do ... ticketu 10").
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function specialCategoriesForDistance(string $distanceId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT special_categories FROM event_distances WHERE id = :id');
+        $stmt->execute(['id' => $distanceId]);
+        $raw = $stmt->fetchColumn();
+        return self::decodeSpecialCategories($raw !== false ? $raw : null);
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public static function decodeSpecialCategories(mixed $raw): array
+    {
+        if (!is_string($raw) || trim($raw) === '') {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? array_values(array_filter($decoded, 'is_array')) : [];
+    }
+
+    /**
+     * A team's Kategoria specjalna is optional (null/empty is always legal —
+     * declaring one is the captain's choice, not a requirement this ticket
+     * adds). When a value IS given, it must match one of the Dystans's
+     * configured special categories by name — exactly the set the client's
+     * own dropdown is built from, so a mismatch can only mean a stale/
+     * tampered request, matching the "reject unknown category" ask.
+     *
+     * @param array<int, array<string, mixed>> $configured
+     */
+    public static function validateSpecialCategory(?string $value, array $configured): void
+    {
+        if ($value === null || $value === '') {
+            return;
+        }
+        $names = array_map(static fn (array $c): string => (string) ($c['name'] ?? ''), $configured);
+        if (!in_array($value, $names, true)) {
+            throw new \RuntimeException('team_special_category_invalid');
+        }
     }
 
     /** @return array<string, mixed>|null */

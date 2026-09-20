@@ -82,7 +82,10 @@ final class RegistrationTeamTest extends TestCase
                     'unit' => 'km',
                     'categories' => ['Open'],
                     'ageCategories' => [],
-                    'specialCategories' => [],
+                    'specialCategories' => [
+                        ['id' => 'mixed', 'name' => 'Drużyna mieszana'],
+                        ['id' => 'women', 'name' => 'Drużyna kobieca'],
+                    ],
                     'limit' => 100,
                     'registeredCount' => 0,
                     'price' => 0,
@@ -313,6 +316,134 @@ final class RegistrationTeamTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('registration_capacity_exceeded');
         $this->registrations->create($this->registrationPayload($event, 0, ['teamId' => $captain['teamId']]));
+    }
+
+    /**
+     * E7.5 (issue 23 Answer §7): the captain declares the Kategoria
+     * specjalna at team-creation time, from the same configured list ticket
+     * 10 already validates individual `category` free text against
+     * (event_distances.special_categories) — see eventPayload()'s relay
+     * distance, which configures 'Drużyna mieszana'/'Drużyna kobieca'.
+     */
+    public function testCreateTeamWithValidSpecialCategoryStoresIt(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Tęcza',
+            'specialCategory' => 'Drużyna mieszana',
+        ]));
+
+        $team = $this->teams->find((string) $captain['teamId']);
+        self::assertSame('Drużyna mieszana', $team['specialCategory']);
+    }
+
+    public function testCreateTeamRejectsASpecialCategoryNotConfiguredOnTheDistance(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('team_special_category_invalid');
+        $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Nieznana',
+            'specialCategory' => 'Kategoria spoza listy',
+        ]));
+    }
+
+    /**
+     * The ticket's own explicit design constraint (Answer §7): a member
+     * joining/leaving the roster must never touch a previously declared
+     * Kategoria specjalna, even when the join would make the declaration
+     * look stale (here: "Drużyna kobieca" declared, then a member joins —
+     * the platform has no idea of anyone's gender at this layer and must
+     * not try to "fix" the label either way).
+     */
+    public function testRosterChangeDoesNotAlterAPreviouslyDeclaredSpecialCategory(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Stała Kategoria',
+            'specialCategory' => 'Drużyna kobieca',
+        ]));
+
+        $this->registrations->create($this->registrationPayload($event, 0, ['teamId' => $captain['teamId']]));
+
+        $team = $this->teams->find((string) $captain['teamId']);
+        self::assertSame(2, $team['memberCount']);
+        self::assertSame('Drużyna kobieca', $team['specialCategory'], 'A roster change must never auto-correct a manually declared special category.');
+    }
+
+    /**
+     * Editability judgment call: the captain may still change the
+     * declaration later (TeamRepository::updateSpecialCategory()), up until
+     * the event's own start date — see that method's doc comment. Uses a
+     * future event date explicitly (eventPayload()'s default date is
+     * "today" in this fixture, which would already read as started).
+     */
+    public function testCaptainCanUpdateSpecialCategoryBeforeTheEventStarts(): void
+    {
+        $event = $this->events->create($this->eventPayload(['date' => '2026-12-31']));
+
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Zmienna',
+        ]));
+
+        $updated = $this->teams->updateSpecialCategory(
+            (string) $captain['teamId'],
+            (string) $captain['userId'],
+            'Drużyna mieszana'
+        );
+
+        self::assertSame('Drużyna mieszana', $updated['specialCategory']);
+    }
+
+    public function testUpdateSpecialCategoryRejectsSomeoneWhoIsNotTheCaptain(): void
+    {
+        $event = $this->events->create($this->eventPayload(['date' => '2026-12-31']));
+
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Nie Twoja',
+        ]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('team_not_captain');
+        $this->teams->updateSpecialCategory((string) $captain['teamId'], 'someone-else', 'Drużyna mieszana');
+    }
+
+    public function testUpdateSpecialCategoryRejectsAnUnconfiguredValue(): void
+    {
+        $event = $this->events->create($this->eventPayload(['date' => '2026-12-31']));
+
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Zła Wartość',
+        ]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('team_special_category_invalid');
+        $this->teams->updateSpecialCategory((string) $captain['teamId'], (string) $captain['userId'], 'Nie na liście');
+    }
+
+    public function testUpdateSpecialCategoryIsLockedOnceTheEventHasStarted(): void
+    {
+        // Default eventPayload() date is "today" in this fixture, which
+        // already reads as started under the `date <= CURDATE()` rule.
+        $event = $this->events->create($this->eventPayload());
+
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Spóźniona',
+        ]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('team_special_category_locked');
+        $this->teams->updateSpecialCategory((string) $captain['teamId'], (string) $captain['userId'], 'Drużyna mieszana');
     }
 
     /** @return array<string, mixed> */

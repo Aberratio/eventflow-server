@@ -1358,7 +1358,7 @@ SQL;
                     d.price AS distancePrice, d.registered_count AS registeredCount,
                     d.participant_limit AS participantLimit, d.price_tiers AS priceTiers,
                     d.start_type AS startType, d.relay_min_team_size AS relayMinTeamSize,
-                    d.relay_max_team_size AS relayMaxTeamSize
+                    d.relay_max_team_size AS relayMaxTeamSize, d.special_categories AS specialCategories
              FROM events e INNER JOIN event_distances d ON d.event_id = e.id
              WHERE e.id = :eventId AND d.id = :distanceId
              FOR UPDATE'
@@ -1454,11 +1454,24 @@ SQL;
             if ($name === '') {
                 throw new \RuntimeException('registration_team_name_required');
             }
+            // E7.5 (issue 23 Answer §7): the captain's optional, manual
+            // Kategoria specjalna declaration, validated here against the
+            // SAME configured list ticket 10's individual-registration
+            // `category` free text is offered from (never against the
+            // roster — this ticket's whole point is that it must NOT be
+            // derived from who's on the team).
+            $specialCategoryRaw = isset($data['specialCategory']) ? trim((string) $data['specialCategory']) : '';
+            $specialCategory = $specialCategoryRaw !== '' ? $specialCategoryRaw : null;
+            TeamRepository::validateSpecialCategory(
+                $specialCategory,
+                TeamRepository::decodeSpecialCategories($distanceRow['specialCategories'] ?? null)
+            );
             $team = $teams->create([
                 'eventId' => $data['eventId'],
                 'distanceId' => $data['distanceId'],
                 'name' => $name,
                 'createdByUserId' => $data['userId'] ?? null,
+                'specialCategory' => $specialCategory,
             ]);
 
             return ['teamId' => $team['id'], 'teamName' => $team['name']];

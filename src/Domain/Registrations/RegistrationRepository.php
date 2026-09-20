@@ -1554,7 +1554,14 @@ SQL;
             $this->enforceCapacity($distanceRow);
             $team = $this->resolveTeamForRegistration($data, $distanceRow);
 
-            $pricing = $this->pricingForRegistration($data, $distanceRow);
+            // TD.8 (spec 07 pkt 10 / spec 23 §3): "za drużynę" puts the whole
+            // opłata startowa on the captain's Zapis and zeroes it for every
+            // other member — but only for a Zapis actually JOINING an
+            // existing team (teamId set, createTeam not truthy). The captain
+            // (createTeam truthy) is always priced normally, in both modes.
+            $isJoiningExistingTeam = $team['teamId'] !== null && empty($data['createTeam']);
+            $suppressStartFee = $isJoiningExistingTeam && ($distanceRow['teamPricingMode'] ?? 'per_person') === 'per_team';
+            $pricing = $this->pricingForRegistration($data, $distanceRow, $suppressStartFee);
             $paymentDetails = $data['paymentDetails'] ?? null;
             $startFeePaid = is_array($paymentDetails) && (bool) ($paymentDetails['startFeePaid'] ?? false);
             $this->insert('registrations', [
@@ -1711,7 +1718,8 @@ SQL;
                     d.price AS distancePrice, d.registered_count AS registeredCount,
                     d.participant_limit AS participantLimit, d.price_tiers AS priceTiers,
                     d.start_type AS startType, d.relay_min_team_size AS relayMinTeamSize,
-                    d.relay_max_team_size AS relayMaxTeamSize, d.special_categories AS specialCategories
+                    d.relay_max_team_size AS relayMaxTeamSize, d.special_categories AS specialCategories,
+                    d.team_pricing_mode AS teamPricingMode
              FROM events e INNER JOIN event_distances d ON d.event_id = e.id
              WHERE e.id = :eventId AND d.id = :distanceId
              FOR UPDATE'
@@ -3074,8 +3082,20 @@ SQL;
      * step; nothing here lets it go below 0 except where a single step's own
      * result is clamped to ≥0 (step 3's result, and the final total).
      *
+     * TD.8 (spec 07 pkt 10): $suppressStartFee, when true, skips steps 1–3
+     * entirely (startFeeBaseItems() is never called, and the discount-code
+     * block never runs) — $items starts empty, the running total starts at
+     * 0.0, and no discount is looked up or applied. This is how a relay
+     * team member JOINING an existing team on a `team_pricing_mode =
+     * 'per_team'` Dystans gets a zero-priced opłata startowa (the whole fee
+     * already landed on the captain's own Zapis) — see create()'s
+     * $suppressStartFee derivation. Steps 4–6 (modifiers, gadżety, NNW)
+     * always run regardless of this flag: the spec is explicit that
+     * "Gadżety, NNW i modyfikatory zawsze zostają przy Zapisie zamawiającego".
+     *
      * @param array<string, mixed> $data
      * @param array<string, mixed> $row locked Dystans row from lockDistanceForRegistration()
+     * @param bool $suppressStartFee TD.8: true suppresses steps 1–3 (opłata startowa + discount code) for a relay team member joining under 'per_team' pricing
      * @return array{
      *     eventName: string,
      *     distanceName: string,
@@ -3086,41 +3106,53 @@ SQL;
      *     usedBy: array<int, mixed>
      * }
      */
-    private function pricingForRegistration(array $data, array $row): array
+    private function pricingForRegistration(array $data, array $row, bool $suppressStartFee = false): array
     {
-        // ── Kroki 1+2: Wariant opłaty + jego własny Próg ────────────────────
-        $base = $this->startFeeBaseItems($row, isset($data['pricingVariantId']) && $data['pricingVariantId'] !== null && $data['pricingVariantId'] !== '' ? (string) $data['pricingVariantId'] : null);
-        $items = $base['items'];
-        $runningTotal = $base['resolvedPrice'];
+        if ($suppressStartFee) {
+            // TD.8: this Zapis is a relay team member joining a 'per_team'
+            // priced team — the whole opłata startowa already landed on the
+            // captain's Zapis, so steps 1–3 (and any discount code) simply
+            // never run for this one.
+            $items = [];
+            $runningTotal = 0.0;
+            $discountCode = null;
+            $discountId = null;
+            $usedBy = [];
+        } else {
+            // ── Kroki 1+2: Wariant opłaty + jego własny Próg ────────────────
+            $base = $this->startFeeBaseItems($row, isset($data['pricingVariantId']) && $data['pricingVariantId'] !== null && $data['pricingVariantId'] !== '' ? (string) $data['pricingVariantId'] : null);
+            $items = $base['items'];
+            $runningTotal = $base['resolvedPrice'];
 
-        // ── Krok 3: Kod rabatowy (tylko na wynik kroku 2, wynik ≥ 0) ────────
-        $discountCode = trim((string) ($data['discountCode'] ?? ''));
-        $discountId = null;
-        $usedBy = [];
-        if ($discountCode !== '') {
-            $discount = $this->discountForRegistration(
-                (string) $data['eventId'],
-                (string) $data['distanceId'],
-                $discountCode
-            );
-            $discountValue = (float) $discount['discount_value'];
-            $discountAmount = $discount['discount_type'] === 'percent'
-                ? $this->roundMoney($runningTotal * ($discountValue / 100))
-                : min($runningTotal, $this->roundMoney($discountValue));
-            $discountAmount = $this->roundMoney($discountAmount);
-            $runningTotal = $this->roundMoney(max(0, $runningTotal - $discountAmount));
+            // ── Krok 3: Kod rabatowy (tylko na wynik kroku 2, wynik ≥ 0) ────
+            $discountCode = trim((string) ($data['discountCode'] ?? ''));
+            $discountId = null;
+            $usedBy = [];
+            if ($discountCode !== '') {
+                $discount = $this->discountForRegistration(
+                    (string) $data['eventId'],
+                    (string) $data['distanceId'],
+                    $discountCode
+                );
+                $discountValue = (float) $discount['discount_value'];
+                $discountAmount = $discount['discount_type'] === 'percent'
+                    ? $this->roundMoney($runningTotal * ($discountValue / 100))
+                    : min($runningTotal, $this->roundMoney($discountValue));
+                $discountAmount = $this->roundMoney($discountAmount);
+                $runningTotal = $this->roundMoney(max(0, $runningTotal - $discountAmount));
 
-            if ($discountAmount !== 0.0) {
-                $items[] = [
-                    'name' => 'Kod rabatowy ' . strtoupper($discountCode),
-                    'basis' => 'discount_code',
-                    'amount' => -abs($discountAmount),
-                ];
+                if ($discountAmount !== 0.0) {
+                    $items[] = [
+                        'name' => 'Kod rabatowy ' . strtoupper($discountCode),
+                        'basis' => 'discount_code',
+                        'amount' => -abs($discountAmount),
+                    ];
+                }
+                $discountId = (string) $discount['id'];
+                $usedBy = $discount['used_by'] !== null && $discount['used_by'] !== ''
+                    ? (json_decode((string) $discount['used_by'], true) ?: [])
+                    : [];
             }
-            $discountId = (string) $discount['id'];
-            $usedBy = $discount['used_by'] !== null && $discount['used_by'] !== ''
-                ? (json_decode((string) $discount['used_by'], true) ?: [])
-                : [];
         }
         // = OPŁATA STARTOWA (zamrożona: $items so far)
 
@@ -3147,7 +3179,7 @@ SQL;
             'distanceName' => (string) $row['distanceName'],
             'settlementItems' => $items,
             'merchandiseOrders' => $merchandise['orders'],
-            'discountCode' => $discountCode !== '' ? strtoupper($discountCode) : null,
+            'discountCode' => $discountCode !== null && $discountCode !== '' ? strtoupper($discountCode) : null,
             'discountId' => $discountId,
             'usedBy' => $usedBy,
         ];

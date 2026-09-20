@@ -446,6 +446,189 @@ final class RegistrationTeamTest extends TestCase
         $this->teams->updateSpecialCategory((string) $captain['teamId'], (string) $captain['userId'], 'Drużyna mieszana');
     }
 
+    /**
+     * TD.8 (spec 07 pkt 10 / spec 23 §3): "za drużynę" puts the entire opłata
+     * startowa on the captain's Zapis and zeroes it for every other member.
+     * Uses a non-zero price (100) on the relay distance and
+     * `teamPricingMode: 'per_team'` so the suppression is actually
+     * observable, not just "0 stayed 0".
+     */
+    public function testPerTeamPricingChargesOnlyTheCaptainAndZeroesJoiningMembers(): void
+    {
+        $event = $this->events->create($this->eventPayload([
+            'distances' => [
+                ['price' => 100, 'teamPricingMode' => 'per_team'],
+            ],
+        ]));
+
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Kapitanowie',
+        ]));
+
+        self::assertEquals(100.00, (float) $captain['pricePaid']);
+        self::assertEquals(100.00, (float) $captain['totalAmount']);
+        $captainBases = array_column($captain['settlementItems'], 'amount', 'basis');
+        self::assertEquals(100.00, (float) $captainBases['distance_price']);
+
+        $member = $this->registrations->create($this->registrationPayload($event, 0, [
+            'teamId' => $captain['teamId'],
+        ]));
+
+        self::assertSame([], $member['settlementItems'], 'A joining member under per_team pricing must get no opłata-startowa-related settlement items at all.');
+        self::assertNull($member['pricePaid']);
+        self::assertEquals(0.00, (float) $member['totalAmount']);
+    }
+
+    /**
+     * TD.8: steps 4–6 (modifiers, gadżety, NNW) are explicitly unaffected by
+     * the suppression — the spec is clear that merchandise/insurance always
+     * stay with the ordering Zapis, because a t-shirt has a specific
+     * person's size.
+     */
+    public function testPerTeamPricingStillChargesAJoiningMemberForMerchandise(): void
+    {
+        $merchandiseId = $this->slugPrefix . '-shirt';
+        $event = $this->events->create($this->eventPayload([
+            'merchandise' => [
+                ['id' => $merchandiseId, 'name' => 'Koszulka techniczna', 'price' => 65, 'sizes' => ['M'], 'colors' => []],
+            ],
+            'distances' => [
+                ['price' => 100, 'teamPricingMode' => 'per_team'],
+            ],
+        ]));
+
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Zamawiający',
+        ]));
+
+        $member = $this->registrations->create($this->registrationPayload($event, 0, [
+            'teamId' => $captain['teamId'],
+            'merchandise' => [
+                ['merchandiseId' => $merchandiseId, 'size' => 'M', 'quantity' => 1, 'price' => 1.00],
+            ],
+        ]));
+
+        self::assertNull($member['pricePaid'], 'Opłata startowa stays suppressed even when merchandise is added.');
+        $memberBases = array_column($member['settlementItems'], 'amount', 'basis');
+        self::assertEquals(65.00, (float) $memberBases['merchandise']);
+        self::assertEquals(65.00, (float) $member['totalAmount']);
+        self::assertEquals(65.00, (float) $member['merchandiseOrders'][0]['price']);
+    }
+
+    /**
+     * TD.8: the discount-code block (step 3) must not run at all for a
+     * suppressed registration — proven here with an entirely bogus code
+     * that would normally throw `discount_code_invalid`. If suppression
+     * were only zeroing the amount afterwards instead of skipping the step,
+     * this would fail with that exception.
+     */
+    public function testPerTeamPricingSkipsDiscountCodeEntirelyForAJoiningMember(): void
+    {
+        $event = $this->events->create($this->eventPayload([
+            'distances' => [
+                ['price' => 100, 'teamPricingMode' => 'per_team'],
+            ],
+        ]));
+
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Bez Rabatu',
+        ]));
+
+        $member = $this->registrations->create($this->registrationPayload($event, 0, [
+            'teamId' => $captain['teamId'],
+            'discountCode' => 'DOES-NOT-EXIST',
+        ]));
+
+        self::assertNull($member['discountCode'], 'The discount-code step never ran, so no code is recorded on the suppressed Zapis.');
+        self::assertNull($member['discountAmount']);
+        self::assertEquals(0.00, (float) $member['totalAmount']);
+    }
+
+    /**
+     * Regression guard: the default `team_pricing_mode` ('per_person',
+     * either omitted entirely or set explicitly) must leave today's
+     * behavior completely unchanged — captain and joining member are both
+     * priced independently and identically.
+     */
+    public function testDefaultPricingModeChargesCaptainAndMemberIndependently(): void
+    {
+        $event = $this->events->create($this->eventPayload([
+            'distances' => [
+                ['price' => 100],
+            ],
+        ]));
+
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Niezależni',
+        ]));
+        $member = $this->registrations->create($this->registrationPayload($event, 0, [
+            'teamId' => $captain['teamId'],
+        ]));
+
+        self::assertEquals(100.00, (float) $captain['pricePaid']);
+        self::assertEquals(100.00, (float) $member['pricePaid'], 'Default per_person mode: every relay-team member is still priced independently, unchanged.');
+        self::assertEquals(100.00, (float) $captain['totalAmount']);
+        self::assertEquals(100.00, (float) $member['totalAmount']);
+    }
+
+    /**
+     * Same regression guard, with `teamPricingMode` set explicitly to
+     * 'per_person' rather than omitted, to prove the explicit value behaves
+     * identically to the implicit default.
+     */
+    public function testExplicitPerPersonPricingModeChargesCaptainAndMemberIndependently(): void
+    {
+        $event = $this->events->create($this->eventPayload([
+            'distances' => [
+                ['price' => 100, 'teamPricingMode' => 'per_person'],
+            ],
+        ]));
+
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Jawnie Osobno',
+        ]));
+        $member = $this->registrations->create($this->registrationPayload($event, 0, [
+            'teamId' => $captain['teamId'],
+        ]));
+
+        self::assertEquals(100.00, (float) $captain['pricePaid']);
+        self::assertEquals(100.00, (float) $member['pricePaid']);
+    }
+
+    /**
+     * The legacy free-text team classification path (no `teamId`, no
+     * `createTeam` — E1.13's general `collectTeam` label, unrelated to the
+     * E7.1 roster) must be completely unaffected: `team['teamId']` is
+     * always null there, so `$isJoiningExistingTeam` is false regardless of
+     * `team_pricing_mode`, on any distance, relay or not.
+     */
+    public function testLegacyFreeTextTeamClassificationIsUnaffectedByTeamPricingMode(): void
+    {
+        $event = $this->events->create($this->eventPayload([
+            'distances' => [
+                [],
+                ['price' => 100, 'teamPricingMode' => 'per_team'],
+            ],
+        ]));
+
+        $first = $this->registrations->create($this->registrationPayload($event, 1, [
+            'teamName' => 'Klasyfikacja Wolnotekstowa',
+        ]));
+        $second = $this->registrations->create($this->registrationPayload($event, 1, [
+            'teamName' => 'Klasyfikacja Wolnotekstowa',
+        ]));
+
+        self::assertNull($first['teamId']);
+        self::assertNull($second['teamId']);
+        self::assertEquals(100.00, (float) $first['pricePaid']);
+        self::assertEquals(100.00, (float) $second['pricePaid'], 'Legacy free-text team classification never sets teamId, so per_team suppression never applies to it.');
+    }
+
     /** @return array<string, mixed> */
     private function distanceRow(string $distanceId): array
     {

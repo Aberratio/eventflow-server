@@ -1,0 +1,28 @@
+-- TD.8: brakująca gałąź "za drużynę"/"za osobę" w cenniku sztafet.
+--
+-- Bug: RegistrationRepository::pricingForRegistration()/startFeeBaseItems()
+-- nie miały żadnej gałęzi per-drużyna — każdy członek sztafety był wyceniany
+-- jako niezależny Zapis, mimo że model cenowy (spec 07) i cykl życia
+-- Drużyny (spec 23 / ticket E7.1) od dawna formalnie zakładają inaczej.
+--
+-- Spec 07-model-cenowy-zapisu.md, rozstrzygnięcie 10: "Na Dystansie
+-- sztafetowym organizator wybiera: cena za drużynę albo za osobę. Przy „za
+-- drużynę" cała opłata startowa ląduje na Zapisie kapitana, pozostałe Zapisy
+-- mają opłatę zerową — to zapowiadany przez słownik Zapis o cenie zerowej.
+-- Gadżety, NNW i modyfikatory zawsze zostają przy Zapisie zamawiającego, bo
+-- koszulka ma rozmiar konkretnego człowieka."
+--
+-- Spec 23-druzyna-sztafeta-sklad-i-wymiana.md §3 potwierdza tę samą
+-- arytmetykę: "za drużynę" — jedna transakcja kapitana pokrywa wszystko, nie
+-- istnieje stan "częściowo opłacona drużyna", bo płatność jest atomowa
+-- względem pojedynczego Rozliczenia kapitana; "za osobę" — każdy Zapis ma
+-- własne, niezależne Rozliczenie i cykl płatności (dzisiejsze, niezmienione
+-- zachowanie).
+--
+-- Do tej pory nie istniała żadna kolumna pozwalająca organizatorowi wybrać
+-- między tymi dwoma trybami. Domyślna wartość 'per_person' jest celowa: bez
+-- zmian zachowuje dzisiejszą, niezależną wycenę każdej istniejącej i nowo
+-- tworzonej Drużyny sztafetowej, dopóki organizator świadomie nie przełączy
+-- jej na 'per_team'.
+ALTER TABLE event_distances
+  ADD COLUMN IF NOT EXISTS team_pricing_mode ENUM('per_person','per_team') NOT NULL DEFAULT 'per_person' AFTER relay_team_completion_deadline;

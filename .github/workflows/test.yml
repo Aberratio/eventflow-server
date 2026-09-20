@@ -19,6 +19,10 @@ jobs:
           coverage: none
       - run: composer install --no-interaction --no-progress --prefer-dist
       - run: composer lint
+      - run: composer stan
+      - name: PHP_CodeSniffer (PSR-12, informational)
+        run: composer cs
+        continue-on-error: true
       - run: composer test -- --testsuite Unit
 
   integration:

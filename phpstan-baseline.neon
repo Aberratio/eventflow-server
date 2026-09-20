@@ -1,0 +1,211 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Call to sprintf contains 8 placeholders, 9 values given\.$#'
+			identifier: argument.sprintf
+			count: 1
+			path: database/seeders/generate_events.php
+
+		-
+			message: '#^Strict comparison using \!\=\= between mixed and null will always evaluate to true\.$#'
+			identifier: notIdentical.alwaysTrue
+			count: 1
+			path: src/Domain/Challenges/ChallengePointThresholdScorer.php
+
+		-
+			message: '#^Variable \$oldFlatEventIds on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.variable
+			count: 1
+			path: src/Domain/Challenges/ChallengeRepository.php
+
+		-
+			message: '#^Offset ''distanceId'' on array\{eventId\: string, distanceId\: string, winnerRegistrationId\: string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Competitors/CompetitorMergeService.php
+
+		-
+			message: '#^Offset ''eventId'' on array\{eventId\: string, distanceId\: string, winnerRegistrationId\: string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Competitors/CompetitorMergeService.php
+
+		-
+			message: '#^Offset ''winnerRegistrationId'' on array\{eventId\: string, distanceId\: string, winnerRegistrationId\: string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Competitors/CompetitorMergeService.php
+
+		-
+			message: '#^Method ZmierzymyCzas\\Domain\\Events\\EventRepository\:\:consumeCredit\(\) is unused\.$#'
+			identifier: method.unused
+			count: 1
+			path: src/Domain/Events/EventRepository.php
+
+		-
+			message: '#^Method ZmierzymyCzas\\Domain\\Events\\EventRepository\:\:releaseCredit\(\) is unused\.$#'
+			identifier: method.unused
+			count: 1
+			path: src/Domain/Events/EventRepository.php
+
+		-
+			message: '#^Method ZmierzymyCzas\\Domain\\Events\\EventRepository\:\:updateStatus\(\) never returns array so it can be removed from the return type\.$#'
+			identifier: return.unusedType
+			count: 1
+			path: src/Domain/Events/EventRepository.php
+
+		-
+			message: '#^Strict comparison using \!\=\= between string and null will always evaluate to true\.$#'
+			identifier: notIdentical.alwaysTrue
+			count: 1
+			path: src/Domain/Mailer/CentralMailer/CentralMailerClient.php
+
+		-
+			message: '#^Offset 1 on array\{list\<string\>, list\<non\-empty\-string\>\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Mailer/CriticalMails/MailRenderer.php
+
+		-
+			message: '#^Call to function is_array\(\) with array\<mixed, mixed\> will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 1
+			path: src/Domain/Registrations/RegistrationRepository.php
+
+		-
+			message: '#^Call to function is_array\(\) with array\{value\: mixed, changedAt\: string\} will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 2
+			path: src/Domain/Registrations/RegistrationRepository.php
+
+		-
+			message: '#^Call to function is_string\(\) with string will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 1
+			path: src/Domain/Registrations/RegistrationRepository.php
+
+		-
+			message: '#^Offset ''changedAt'' on array\{value\: mixed, changedAt\: string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Registrations/RegistrationRepository.php
+
+		-
+			message: '#^Strict comparison using \!\=\= between mixed and null will always evaluate to true\.$#'
+			identifier: notIdentical.alwaysTrue
+			count: 1
+			path: src/Domain/Registrations/RegistrationRepository.php
+
+		-
+			message: '#^Offset 0 on array\{list\<string\>\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Results/ResultImportRepository.php
+
+		-
+			message: '#^Offset 1 on array\{0\: non\-falsy\-string, 1\: ''''\|numeric\-string, 2\: ''''\|numeric\-string, 3\: non\-empty\-string, 4\: non\-falsy\-string, 5\?\: non\-empty\-string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Results/ResultImportRepository.php
+
+		-
+			message: '#^Offset 1 on array\{string, string, string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Results/ResultImportRepository.php
+
+		-
+			message: '#^Offset 2 on array\{0\: non\-falsy\-string, 1\: ''''\|numeric\-string, 2\: ''''\|numeric\-string, 3\: non\-empty\-string, 4\: non\-falsy\-string, 5\?\: non\-empty\-string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Results/ResultImportRepository.php
+
+		-
+			message: '#^Offset 2 on array\{string, string, string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Results/ResultImportRepository.php
+
+		-
+			message: '#^Offset 3 on array\{0\: non\-falsy\-string, 1\: ''''\|numeric\-string, 2\: ''''\|numeric\-string, 3\: non\-empty\-string, 4\: non\-falsy\-string, 5\?\: non\-empty\-string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Results/ResultImportRepository.php
+
+		-
+			message: '#^Offset 4 on array\{0\: non\-falsy\-string, 1\: ''''\|numeric\-string, 2\: ''''\|numeric\-string, 3\: non\-empty\-string, 4\: non\-falsy\-string, 5\?\: non\-empty\-string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Domain/Results/ResultImportRepository.php
+
+		-
+			message: '#^Ternary operator condition is always true\.$#'
+			identifier: ternary.alwaysTrue
+			count: 1
+			path: src/Domain/Results/ResultImportRepository.php
+
+		-
+			message: '#^Anonymous function has an unused use \$isStaffRole\.$#'
+			identifier: closure.unusedUse
+			count: 1
+			path: src/Http/routes.php
+
+		-
+			message: '#^Anonymous function has an unused use \$jwt\.$#'
+			identifier: closure.unusedUse
+			count: 1
+			path: src/Http/routes.php
+
+		-
+			message: '#^Anonymous function has an unused use \$logActivity\.$#'
+			identifier: closure.unusedUse
+			count: 1
+			path: src/Http/routes.php
+
+		-
+			message: '#^Anonymous function has an unused use \$publisherRoles\.$#'
+			identifier: closure.unusedUse
+			count: 1
+			path: src/Http/routes.php
+
+		-
+			message: '#^Comparison operation "\>" between 5\|10\|21\.097\|25\|42\.195\|50\|100 and 0 is always true\.$#'
+			identifier: greater.alwaysTrue
+			count: 1
+			path: src/Http/routes.php
+
+		-
+			message: '#^Strict comparison using \!\=\= between mixed and null will always evaluate to true\.$#'
+			identifier: notIdentical.alwaysTrue
+			count: 1
+			path: src/Http/routes.php
+
+		-
+			message: '#^Undefined variable\: \$challengeRanking$#'
+			identifier: variable.undefined
+			count: 2
+			path: src/Http/routes.php
+
+		-
+			message: '#^Comparison operation "\<\=" between int\<1, max\> and 0 is always false\.$#'
+			identifier: smallerOrEqual.alwaysFalse
+			count: 1
+			path: src/Support/UploadedFileStorage.php
+
+		-
+			message: '#^Offset ''mime'' on array\{0\: int\<0, max\>, 1\: int\<0, max\>, 2\: int, 3\: string, mime\: string, channels\?\: int, bits\?\: int\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Support/UploadedFileStorage.php
+
+		-
+			message: '#^Offset 0 on array\{0\: int\<0, max\>, 1\: int\<0, max\>, 2\: int, 3\: string, mime\: string, channels\?\: int, bits\?\: int\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Support/UploadedFileStorage.php
+
+		-
+			message: '#^Offset 1 on array\{0\: int\<0, max\>, 1\: int\<0, max\>, 2\: int, 3\: string, mime\: string, channels\?\: int, bits\?\: int\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: src/Support/UploadedFileStorage.php

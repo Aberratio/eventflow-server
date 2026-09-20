@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<ruleset name="ZmierzymyCzasServer">
+    <description>
+        Code style ruleset for the Zmierzymy Czas server API. No project style precedent existed
+        (no prior PHPCS/PHP-CS-Fixer config), so this adopts PSR-12 as a widely-used, uncontroversial
+        default (see TD.15). Only the paths that ship as application code are checked; vendored,
+        generated and fixture data are excluded.
+    </description>
+
+    <arg name="basepath" value="."/>
+    <arg name="colors"/>
+    <arg name="extensions" value="php"/>
+    <arg value="p"/>
+
+    <file>src</file>
+    <file>bin</file>
+    <file>public</file>
+    <file>tests</file>
+
+    <exclude-pattern>*/vendor/*</exclude-pattern>
+    <exclude-pattern>database/seeders/.generated/*</exclude-pattern>
+    <exclude-pattern>database/.attic/*</exclude-pattern>
+
+    <rule ref="PSR12"/>
+</ruleset>

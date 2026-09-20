@@ -661,6 +661,73 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
+     * TD.7: a Zapis on a trasa B (`organizer_bank`) event freezes its deadline from
+     * the event's configured *transfer* window (days), not the gateway window
+     * (minutes) — before this fix, paymentExpiryDeadline() ignored
+     * `transferWindowDays` entirely and always used the ~45-minute gateway
+     * default, expiring a bank-transfer Zapis and releasing its slot long before
+     * the organizer's configured window elapsed.
+     */
+    public function testCreateFreezesPaymentExpiryUsingEventsTransferWindowDefaultForOrganizerBank(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-exp-transfer-def',
+            'paymentConfig' => ['type' => 'organizer_bank'],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        self::assertSame('pending', $registration['status']);
+        $expiresAt = new \DateTimeImmutable((string) $this->rawRegistration($registration['id'])['paymentExpiresAt']);
+        $expectedAt = new \DateTimeImmutable('+3 days');
+        self::assertEqualsWithDelta($expectedAt->getTimestamp(), $expiresAt->getTimestamp(), 30);
+    }
+
+    /**
+     * TD.7: an organizer-configured `transferWindowDays` on a trasa B event is
+     * honored, not just the hardcoded 3-day default.
+     */
+    public function testCreateFreezesPaymentExpiryUsingOrganizerConfiguredTransferWindow(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-exp-transfer-cst',
+            'paymentConfig' => ['type' => 'organizer_bank', 'gatewayWindowMinutes' => 10, 'transferWindowDays' => 7],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+
+        $expiresAt = new \DateTimeImmutable((string) $this->rawRegistration($registration['id'])['paymentExpiresAt']);
+        $expectedAt = new \DateTimeImmutable('+7 days');
+        self::assertEqualsWithDelta($expectedAt->getTimestamp(), $expiresAt->getTimestamp(), 30);
+    }
+
+    /**
+     * TD.7: retryPayment() re-freezes the deadline through the same
+     * paymentExpiryDeadline() path — an expired trasa B Zapis that gets retried
+     * must get a fresh *transfer*-window deadline, not a gateway one.
+     */
+    public function testRetryPaymentReFreezesUsingTransferWindowForOrganizerBank(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-exp-transfer-retry',
+            'paymentConfig' => ['type' => 'organizer_bank', 'transferWindowDays' => 4],
+        ]));
+
+        $registration = $this->registrations->create($this->registrationPayload($event, ''));
+        $this->backdatePaymentExpiry($registration['id'], (new \DateTimeImmutable('-1 minute'))->format(DATE_ATOM));
+        // Force the lazy expiry to run so retryPayment() sees an 'expired' Zapis.
+        self::assertSame('expired', $this->registrations->find($registration['id'])['status']);
+
+        $retried = $this->registrations->retryPayment($registration['id']);
+
+        self::assertNotNull($retried);
+        self::assertSame('pending', $retried['status']);
+        $expiresAt = new \DateTimeImmutable((string) $this->rawRegistration($registration['id'])['paymentExpiresAt']);
+        $expectedAt = new \DateTimeImmutable('+4 days');
+        self::assertEqualsWithDelta($expectedAt->getTimestamp(), $expiresAt->getTimestamp(), 30);
+    }
+
+    /**
      * A Zapis created already paid (startFeePaid true, born 'confirmed' — the
      * existing create() behavior from before this ticket) has nothing to expire:
      * it never gets a payment-window deadline at all, so the lazy check can never

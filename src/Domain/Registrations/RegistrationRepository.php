@@ -1656,17 +1656,19 @@ SQL;
     private const NOT_COUNTED_STATUSES = ['cancelled', 'removed', 'expired'];
 
     /**
-     * E1.4 pragmatic default (documented in migration 034 and the ticket's commit
-     * message): payment *method* selection on a Zapis doesn't exist yet
-     * (E1.6-E1.8), so this always freezes the shorter gateway window as the expiry
-     * deadline, whatever the event's paymentConfig.type is today — never the
-     * longer transfer window. This is the safe side to guess wrong on: it only
-     * ever frees a slot *sooner* than a transfer-paying registrant might have
-     * wanted, never holds one longer than the organizer configured. Once E1.6-E1.8
-     * add a real per-Zapis payment method, this is the one method that needs to
-     * change to pick between gatewayWindowMinutes/transferWindowDays.
+     * E1.4 default gateway window (trasa A / `admin_gateway`), used whenever the
+     * event's `paymentConfig.gatewayWindowMinutes` is missing or non-positive —
+     * mirrors EventRepository::DEFAULT_GATEWAY_WINDOW_MINUTES's fallback.
      */
     private const DEFAULT_GATEWAY_WINDOW_MINUTES = 45;
+
+    /**
+     * TD.7 (fixes E1.4's pragmatic placeholder, cleared once E1.6-E1.8 landed a
+     * real per-Zapis payment method): default transfer window (trasa B /
+     * `organizer_bank`), used whenever `paymentConfig.transferWindowDays` is
+     * missing or non-positive — mirrors EventRepository::DEFAULT_TRANSFER_WINDOW_DAYS.
+     */
+    private const DEFAULT_TRANSFER_WINDOW_DAYS = 3;
 
     /**
      * E1.11 (spec 11, "Kod startowy"): the platform-generated QR token that belongs to
@@ -1869,13 +1871,15 @@ SQL;
     }
 
     /**
-     * E1.4: the frozen payment-window deadline for a brand-new pending Zapis —
-     * `registered_at` (now) plus the event's configured gateway window (see
-     * DEFAULT_GATEWAY_WINDOW_MINUTES doc for why gateway, not transfer). Reads the
-     * event's `payment_config` straight off the already-locked Dystans row
-     * (lockDistanceForRegistration() joins it in), so this never issues an extra
-     * query and can't observe a different row than the one create() just priced
-     * against.
+     * E1.4/TD.7: the frozen payment-window deadline for a brand-new pending Zapis —
+     * `registered_at` (now) plus the event's configured window for whichever route
+     * this event's `paymentConfig.type` actually uses: the (short) gateway window
+     * for trasa A, or the (longer, day-granularity) transfer window for trasa B
+     * (`organizer_bank`, the same check `paymentConfigType()` makes, inlined here
+     * to avoid its extra query — see below). Reads the event's `payment_config`
+     * straight off the already-locked Dystans row (lockDistanceForRegistration()
+     * joins it in), so this never issues an extra query and can't observe a
+     * different row than the one create() just priced against.
      *
      * @param array<string, mixed> $distanceRow
      */
@@ -1883,6 +1887,17 @@ SQL;
     {
         $raw = $distanceRow['paymentConfig'] ?? null;
         $paymentConfig = is_string($raw) && trim($raw) !== '' ? (json_decode($raw, true) ?: []) : [];
+        $type = is_array($paymentConfig) ? (string) ($paymentConfig['type'] ?? '') : '';
+
+        if ($type === 'organizer_bank') {
+            $days = is_array($paymentConfig) ? (int) ($paymentConfig['transferWindowDays'] ?? 0) : 0;
+            if ($days <= 0) {
+                $days = self::DEFAULT_TRANSFER_WINDOW_DAYS;
+            }
+
+            return (new \DateTimeImmutable())->modify("+{$days} days")->format(DATE_ATOM);
+        }
+
         $minutes = is_array($paymentConfig) ? (int) ($paymentConfig['gatewayWindowMinutes'] ?? 0) : 0;
         if ($minutes <= 0) {
             $minutes = self::DEFAULT_GATEWAY_WINDOW_MINUTES;

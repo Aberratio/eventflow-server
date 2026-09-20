@@ -54,6 +54,7 @@ use ZmierzymyCzas\Domain\Mailer\Http\CurlHttpClient as MailerCurlHttpClient;
 use ZmierzymyCzas\Domain\Shop\OrderRepository;
 use ZmierzymyCzas\Domain\Shop\ShopRepository;
 use ZmierzymyCzas\Domain\Care\CareRepository;
+use ZmierzymyCzas\Domain\Competitors\CompetitorMergeService;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
@@ -188,6 +189,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $orders = new OrderRepository($pdo, $shop);
     $certificates = new CertificateRepository($pdo);
     $care = new CareRepository($pdo);
+    // E8.1: scalanie profili Zawodnika — orkiestruje repozytoria powyżej,
+    // sama nie zna się na autoryzacji wywołującego (patrz klasy docblock).
+    $competitorMerge = new CompetitorMergeService($pdo, $competitors, $care, $registrations, $results, $challenges, $admin);
     // E1.13: "Pozycja formularza" — jeden byt dla pól systemowych i własnych.
     // ensureSystemCatalog() jest wywoływane per-request (a nie tylko w migracji)
     // żeby wydarzenia utworzone po migracji 041 (w tym w testach, które nie
@@ -349,7 +353,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     // JWT (`$auth`), never from the request body, so an entry can't be forged as someone
     // else. `targetName` is a deliberate snapshot of the target's name at the time of the
     // action, not a foreign-key lookup — keep it that way.
-    $logActivity = static function (array $auth, string $action, string $description, ?string $targetType = null, ?string $targetId = null, ?string $targetName = null) use ($admin): void {
+    // $metadata (E8.1): optional rich JSON snapshot, used today only by the
+    // competitor-merge log entry (see CompetitorMergeService) — every other
+    // caller keeps omitting it and behaves exactly as before.
+    $logActivity = static function (array $auth, string $action, string $description, ?string $targetType = null, ?string $targetId = null, ?string $targetName = null, ?array $metadata = null) use ($admin): void {
         $admin->insertActivityLog([
             'userId' => (string) ($auth['sub'] ?? ''),
             'action' => $action,
@@ -357,6 +364,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             'targetType' => $targetType,
             'targetId' => $targetId,
             'targetName' => $targetName,
+            'metadata' => $metadata,
         ]);
     };
 
@@ -376,7 +384,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
             'status' => 'ok',
             'env' => (string) Env::get('APP_ENV', ''),
@@ -3221,6 +3229,77 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $updated = $competitors->setAnonymization($id, $isAnonymized);
             return JsonResponder::ok($response, $updated, $isAnonymized ? 'Anonimizacja włączona.' : 'Anonimizacja wyłączona.');
         })->add(new AuthMiddleware($jwt));
+
+        // --- E8.1: Scalanie profili Zawodnika (wyłącznie Moderator/Admin) ---
+        // Spec Answer §1: samoobsługa jest wykluczona nawet dla opiekuna sprawującego
+        // Opiekę nad oboma profilami — stąd `AuthMiddleware($jwt, ['admin', 'moderator'])`
+        // na każdym z tych trzech endpointów, nie `$care->canRegister()`, i nie
+        // `$isStaffRole` (który celowo NIE jest użyty tutaj — organizer nie kwalifikuje
+        // się, mimo że jest "staff" gdzie indziej w tym pliku).
+
+        // Wyszukiwanie kandydatów do porównania — nie ma formalnego mechanizmu
+        // "zgłoszenia duplikatu" (spec Answer §2 krok 1); moderator po prostu szuka.
+        $api->get('/admin/competitors/search', function (Request $request, Response $response) use ($competitors, $query): Response {
+            $q = (string) ($query($request)['q'] ?? '');
+            return JsonResponder::ok($response, $competitors->searchForMerge($q));
+        })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
+
+        // Widok "obok siebie" (spec Answer §2 krok 2) — oba profile, wszystko co
+        // niosą, plus lista konfliktów Zapisów (ten sam Dystans/Wydarzenie), jeszcze
+        // bez wskazania, który profil przeżywa.
+        $api->get('/admin/competitors/{idA}/merge-comparison/{idB}', function (Request $request, Response $response, array $args) use ($competitorMerge): Response {
+            try {
+                return JsonResponder::ok($response, $competitorMerge->comparison((string) $args['idA'], (string) $args['idB']));
+            } catch (\RuntimeException $e) {
+                return JsonResponder::error($response, 'not_found', 'Jeden z profili Zawodnika nie istnieje.', 404);
+            }
+        })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
+
+        // Wykonuje scalenie — albo wstrzymuje je, jeśli brakuje decyzji pole-po-polu
+        // (`field_decisions_required`) albo rozstrzygnięcia konfliktu Zapisów
+        // (`conflict_pending`, spec Answer §2 krok 6). Permanentne po sukcesie
+        // (`merged`) — brak przycisku "cofnij", patrz snapshot w logu aktywności.
+        $api->post('/admin/competitors/merge', function (Request $request, Response $response) use ($competitorMerge, $body, $logActivity): Response {
+            $auth = (array) $request->getAttribute('auth');
+            $data = $body($request);
+
+            $survivorId = (string) ($data['survivorId'] ?? '');
+            $absorbedId = (string) ($data['absorbedId'] ?? '');
+            if ($survivorId === '' || $absorbedId === '') {
+                return JsonResponder::error($response, 'validation_error', 'Podaj survivorId i absorbedId.', 422);
+            }
+
+            $fieldDecisions = is_array($data['fieldDecisions'] ?? null) ? $data['fieldDecisions'] : [];
+            $conflictResolutions = is_array($data['conflictResolutions'] ?? null) ? $data['conflictResolutions'] : [];
+
+            try {
+                $result = $competitorMerge->merge($auth, $survivorId, $absorbedId, $fieldDecisions, $conflictResolutions);
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', 'Nie można scalić profilu z samym sobą.', 422);
+            } catch (\RuntimeException $e) {
+                $code = $e->getMessage();
+                $message = $code === 'competitor_already_merged'
+                    ? 'Jeden z profili jest już scalony.'
+                    : 'Jeden z profili Zawodnika nie istnieje.';
+                return JsonResponder::error($response, $code, $message, $code === 'competitor_already_merged' ? 409 : 404);
+            }
+
+            // Deliberately 200 for every outcome here, `field_decisions_required`
+            // and `conflict_pending` included — these are not error conditions,
+            // they are normal, expected pauses in a multi-step admin flow (same
+            // idiom this file already uses for POST /care's `duplicateWarnings`:
+            // a non-terminal, informational result travels in a success payload,
+            // not as an HTTP error, so the client can switch on `data.status`
+            // without unpacking a thrown-error's `details`). Only genuine error
+            // conditions (missing ids, unknown competitor, already merged, merge
+            // with self) use JsonResponder::error() above.
+            $message = match ($result['status']) {
+                'field_decisions_required' => 'Rozstrzygnij ręcznie pola, w których profile się różnią.',
+                'conflict_pending' => 'Wykryto konflikt Zapisów na ten sam Dystans — wskaż, który zostaje.',
+                default => 'Profile zostały scalone.',
+            };
+            return JsonResponder::ok($response, $result, $message);
+        })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
 
         // E1.10 §5 (model szablonów) — minimal server-side CRUD, no frontend in
         // this ticket (server-only, like E1.6-E1.9 before it). Reuses the same

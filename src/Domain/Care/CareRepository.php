@@ -91,6 +91,27 @@ final class CareRepository extends Repository
         return $stmt->rowCount() > 0;
     }
 
+    /**
+     * E8.1 (competitor merge): moves every Opieka over the absorbed profile onto
+     * the survivor. `care_relations` has a UNIQUE (konto_id, zawodnik_id) pair —
+     * a caregiver who already cares for the survivor (common case: the same
+     * confused parent created both duplicate profiles and cares for both) would
+     * collide on a straight repoint, so an existing row for that pair is simply
+     * dropped instead of duplicated; every other row is repointed.
+     */
+    public function repointForMerge(string $absorbedId, string $survivorId): void
+    {
+        $this->pdo->prepare(
+            'DELETE FROM care_relations
+             WHERE zawodnik_id = :absorbedId
+               AND konto_id IN (SELECT konto_id FROM (SELECT konto_id FROM care_relations WHERE zawodnik_id = :survivorId) AS existing)'
+        )->execute(['absorbedId' => $absorbedId, 'survivorId' => $survivorId]);
+
+        $this->pdo->prepare(
+            'UPDATE care_relations SET zawodnik_id = :survivorId WHERE zawodnik_id = :absorbedId'
+        )->execute(['survivorId' => $survivorId, 'absorbedId' => $absorbedId]);
+    }
+
     /** Czy dane Konto może zapisywać danego Zawodnika (opieka albo to jego własny profil). */
     public function canRegister(string $kontoId, string $zawodnikId): bool
     {

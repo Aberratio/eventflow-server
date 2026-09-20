@@ -33,9 +33,9 @@ final class AdminRepository extends Repository
             $params['dateTo'] = $filters['dateTo'];
         }
         $whereSql = ' WHERE ' . implode(' AND ', $where);
-        $stmt = $this->pdo->prepare("SELECT id, user_id AS userId, action, description, target_type AS targetType, target_id AS targetId, target_name AS targetName, ip_address AS ipAddress, user_agent AS userAgent, timestamp FROM activity_logs{$whereSql} ORDER BY timestamp DESC");
+        $stmt = $this->pdo->prepare("SELECT id, user_id AS userId, action, description, target_type AS targetType, target_id AS targetId, target_name AS targetName, metadata, ip_address AS ipAddress, user_agent AS userAgent, timestamp FROM activity_logs{$whereSql} ORDER BY timestamp DESC");
         $stmt->execute($params);
-        return $stmt->fetchAll();
+        return array_map(fn (array $row): array => $this->decode($row, ['metadata']) ?? $row, $stmt->fetchAll());
     }
 
     /**
@@ -98,9 +98,18 @@ final class AdminRepository extends Repository
     }
 
     /** @param array<string, mixed> $data */
+    /**
+     * `metadata` (E8.1): the sole exception to Z2 ("źródłem prawdy jest
+     * identyfikator, nie kopia") in this whole log — a nullable JSON blob for
+     * event types where the source records themselves stop being editable
+     * bytes after the action (today: only competitor merges), so the log
+     * becomes the only place the pre-action state survives. Every other
+     * action keeps passing null here and relying on targetId/targetType,
+     * exactly as before.
+     */
     public function insertActivityLog(array $data): void
     {
-        $this->insert('activity_logs', [
+        $this->insert('activity_logs', $this->encode([
             'id' => $data['id'] ?? $this->id(),
             'user_id' => (string) ($data['userId'] ?? ''),
             'action' => (string) ($data['action'] ?? 'server_action'),
@@ -108,10 +117,11 @@ final class AdminRepository extends Repository
             'target_type' => $data['targetType'] ?? null,
             'target_id' => $data['targetId'] ?? null,
             'target_name' => $data['targetName'] ?? null,
+            'metadata' => $data['metadata'] ?? null,
             'ip_address' => null,
             'user_agent' => null,
             'timestamp' => $data['timestamp'] ?? date(DATE_ATOM),
-        ]);
+        ], ['metadata']));
     }
 
     /** @return array<int, array<string, mixed>> */

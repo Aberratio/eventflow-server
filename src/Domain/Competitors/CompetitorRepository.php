@@ -15,7 +15,8 @@ final class CompetitorRepository extends Repository
 {
     private const COLUMNS = <<<'SQL'
 id, first_name AS firstName, last_name AS lastName, birth_date AS birthDate, gender,
-email, phone, club, identity_code AS identityCode, is_anonymized AS isAnonymized, user_id AS userId, created_at AS createdAt, updated_at AS updatedAt
+email, phone, club, identity_code AS identityCode, status, merged_into_competitor_id AS mergedIntoCompetitorId,
+is_anonymized AS isAnonymized, user_id AS userId, created_at AS createdAt, updated_at AS updatedAt
 SQL;
 
     public function find(string $id): ?array
@@ -122,6 +123,108 @@ SQL;
         return $created;
     }
 
+    /**
+     * E8.1: Moderator/Admin szuka dwóch profili do porównania przed scaleniem.
+     * Celowo prosty (imię/nazwisko/kod tożsamości, LIKE) — to nie jest publiczne
+     * wyszukiwanie uczestników, tylko narzędzie obsługi do znalezienia podejrzanego
+     * duplikatu zgłoszonego przez opiekuna/organizatora (spec Answer §2 krok 1: nie
+     * ma formalnego mechanizmu "zgłoszenia", moderator po prostu wyszukuje). Nie
+     * zwraca już scalonych profili — te są martwym archiwum, nie kandydatami do
+     * kolejnego scalenia.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function searchForMerge(string $q, int $limit = 20): array
+    {
+        $needle = trim($q);
+        if ($needle === '') {
+            return [];
+        }
+
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::COLUMNS . '
+             FROM competitors
+             WHERE status = "active"
+               AND (
+                 first_name LIKE :needle
+                 OR last_name LIKE :needle
+                 OR CONCAT(first_name, " ", last_name) LIKE :needle
+                 OR identity_code = :exact
+               )
+             ORDER BY last_name, first_name
+             LIMIT ' . max(1, min(100, $limit))
+        );
+        $stmt->execute(['needle' => '%' . $needle . '%', 'exact' => $needle]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * E8.1 (spec Answer §3): odczyt wsteczny — zwraca Zawodnika, do którego
+     * dziś faktycznie trafia dany kod tożsamości (`zqr_`), niezależnie od tego,
+     * czy ten dokładny kod jest jego WŁASNYM, aktywnym kodem, czy starym aliasem
+     * po scaleniu (ewentualnie łańcuchu kilku scaleń — profil A scalony w B,
+     * B później scalony w C: kod A ma nadal trafiać w C). Alias nigdy nie jest
+     * promowany w UI (spec: "wyłącznie ścieżka odczytu wstecznego") — to jedyne
+     * miejsce, które go czyta.
+     */
+    public function resolveIdentityCode(string $code): ?array
+    {
+        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM competitors WHERE identity_code = :code');
+        $stmt->execute(['code' => $code]);
+        $competitor = $stmt->fetch() ?: null;
+
+        if ($competitor === null) {
+            $aliasStmt = $this->pdo->prepare('SELECT competitor_id FROM identity_code_aliases WHERE old_identity_code = :code');
+            $aliasStmt->execute(['code' => $code]);
+            $competitorId = $aliasStmt->fetchColumn();
+            if ($competitorId === false) {
+                return null;
+            }
+            $competitor = $this->find((string) $competitorId);
+            if ($competitor === null) {
+                return null;
+            }
+        }
+
+        return $this->resolveToActive($competitor);
+    }
+
+    /** @param array<string, mixed> $competitor */
+    private function resolveToActive(array $competitor, int $depth = 0): ?array
+    {
+        if ($depth > 20) {
+            // Cycle guard — should be structurally impossible (a chain only ever
+            // grows by pointing to a *newer* survivor), but a live query loop
+            // must never spin forever on corrupted data.
+            return null;
+        }
+        if (($competitor['status'] ?? 'active') !== 'scalony' || empty($competitor['mergedIntoCompetitorId'])) {
+            return $competitor;
+        }
+
+        $next = $this->find((string) $competitor['mergedIntoCompetitorId']);
+        return $next === null ? $competitor : $this->resolveToActive($next, $depth + 1);
+    }
+
+    /**
+     * E8.1: przełącza wchłonięty profil w stan archiwalny `scalony` z odsyłaczem
+     * do przeżywającego (spec Answer §2 krok 7) — nigdy nie jest to usuwane.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function markMerged(string $absorbedId, string $survivorId): ?array
+    {
+        if ($this->find($absorbedId) === null) {
+            return null;
+        }
+
+        $this->updateById('competitors', $absorbedId, [
+            'status' => 'scalony',
+            'merged_into_competitor_id' => $survivorId,
+        ]);
+        return $this->find($absorbedId);
+    }
+
     /** @param array<string, mixed> $data */
     public function update(string $id, array $data): ?array
     {
@@ -184,6 +287,21 @@ SQL;
 
         $this->updateById('competitors', $id, ['identity_code' => $this->generateIdentityCode()]);
         return $this->find($id);
+    }
+
+    /**
+     * E8.1: zapisuje stary kod tożsamości wchłoniętego profilu jako alias
+     * wskazujący na przeżywającego — patrz `resolveIdentityCode()` i migracja
+     * 059 dla pełnego uzasadnienia (spec Answer §3: nie natychmiastowe
+     * unieważnienie, bo scalanie inicjuje obsługa bez wiedzy Zawodnika).
+     */
+    public function addIdentityCodeAlias(string $oldIdentityCode, string $survivorId): void
+    {
+        $this->insert('identity_code_aliases', [
+            'id' => $this->id(),
+            'old_identity_code' => $oldIdentityCode,
+            'competitor_id' => $survivorId,
+        ]);
     }
 
     /**

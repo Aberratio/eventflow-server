@@ -1137,6 +1137,33 @@ SQL;
     }
 
     /**
+     * E8.1 (competitor merge): every Zapis carrying this Zawodnik as its
+     * identity — the side-by-side merge comparison's "co niesie ten profil"
+     * list, and the repointing/conflict-detection pass both start here.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listByCompetitor(string $competitorId): array
+    {
+        $this->lazilyExpireUnpaidRegistrations();
+        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE competitor_id = :competitorId ORDER BY registered_at ASC');
+        $stmt->execute(['competitorId' => $competitorId]);
+        return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
+    }
+
+    /**
+     * E8.1: the repointing half of a competitor merge — moves one Zapis from
+     * the absorbed profile onto the surviving one. Deliberately a raw column
+     * write, not routed through update() (which only accepts the identity
+     * *display* fields a registrant fills in, not this administrative
+     * ownership change).
+     */
+    public function repointCompetitor(string $registrationId, string $survivorCompetitorId): void
+    {
+        $this->updateById('registrations', $registrationId, ['competitor_id' => $survivorCompetitorId]);
+    }
+
+    /**
      * Bilet is not a stored entity (E0.2) — it is this Zapis, read as a ticket.
      * There is a 1:1 relationship, so the Zapis id doubles as the ticket id.
      *

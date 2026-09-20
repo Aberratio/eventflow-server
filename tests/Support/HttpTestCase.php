@@ -28,7 +28,7 @@ abstract class HttpTestCase extends TestCase
 
         try {
             $this->pdo = Connection::fromEnv();
-            $this->jwt = new JwtService('phpunit-http-secret', 3600);
+            $this->jwt = new JwtService('phpunit-http-secret-at-least-32-bytes', 3600);
             $this->app = $this->createApp();
         } catch (\Throwable $e) {
             self::markTestSkipped('Database is not available for HTTP integration tests: ' . $e->getMessage());

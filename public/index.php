@@ -23,7 +23,7 @@ $app->add(new CorsMiddleware((string) Env::get('APP_CORS_ORIGIN', '*')));
 
 $pdo = Connection::fromEnv();
 $jwt = new JwtService(
-    (string) Env::get('JWT_SECRET', 'change-me'),
+    (string) Env::get('JWT_SECRET', 'change-me-please-32-bytes-min!!!'),
     (int) Env::get('JWT_TTL_SECONDS', 86400)
 );
 

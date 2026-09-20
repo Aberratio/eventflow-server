@@ -17,7 +17,7 @@ final class AuthMiddlewareTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->jwt = new JwtService('test-secret', 3600);
+        $this->jwt = new JwtService('test-secret-at-least-32-bytes-long', 3600);
     }
 
     public function testMissingAuthorizationHeaderReturns401(): void

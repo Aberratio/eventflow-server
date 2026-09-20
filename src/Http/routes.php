@@ -41,6 +41,7 @@ use ZmierzymyCzas\Domain\Results\ResultImportRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
 use ZmierzymyCzas\Domain\Results\VirtualResultRepository;
 use ZmierzymyCzas\Domain\Series\SeriesRepository;
+use ZmierzymyCzas\Domain\Teams\TeamRepository;
 use ZmierzymyCzas\Domain\Certificate\CertificateRepository;
 use ZmierzymyCzas\Domain\Insurance\InsuranceRepository;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerClient;
@@ -116,6 +117,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         ? new BzWebhookOutboxService(new BzWebhookClient(new BzCurlHttpClient(), $bzWebhookConfig), new BzWebhookOutboxRepository($pdo))
         : null;
     $registrations = new RegistrationRepository($pdo, $tpayGateway, $payNowGateway, $mailer, $bzWebhookOutbox);
+    $teams = new TeamRepository($pdo);
     // E1.10 mail #8 ("Zmiana/odwołanie Wydarzenia", 17 §1 row 8) — one call per
     // registered Zapis. Lives here (not inside EventRepository) for the same
     // reason bulkApproveRefundsForEvent() is orchestrated from routes.php
@@ -374,7 +376,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
             'status' => 'ok',
             'env' => (string) Env::get('APP_ENV', ''),
@@ -974,6 +976,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $page = $registrations->list($query($request));
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
         })->add(new AuthMiddleware($jwt));
+        // E7.1 (issue 23 Answer §1): joinable Drużyny for one relay Dystans,
+        // each with its derived completeness (memberCount vs
+        // relay_min_team_size/relay_max_team_size) — the server-side source
+        // of truth the client's "join an existing team" step reads instead
+        // of its old purely client-side text-grouping heuristic
+        // (getExistingTeamsForEvent()). Public/unauthenticated, same as the
+        // sibling /team-results route below — no Rozliczenie/PII here.
+        $api->get('/events/{eventId}/distances/{distanceId}/teams', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $teams->forDistance($args['eventId'], $args['distanceId'])));
         $api->get('/events/{eventId}/registrations', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->byEvent($args['eventId'])))
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->get('/events/{eventId}/start-list', function (Request $request, Response $response, array $args) use ($events, $registrations, $optionalAuth, $canViewEvent) {
@@ -1355,6 +1365,24 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 // rather than the 422s below.
                 if ($e->getMessage() === 'registration_capacity_exceeded') {
                     return JsonResponder::error($response, 'registration_capacity_exceeded', 'This distance has reached its participant limit.', 409);
+                }
+                // E7.1 (issue 23 Answer §1): "team full" is a distinct,
+                // legitimate rejection reason from the Dystans' own capacity
+                // above — a Drużyna can be full while the Dystans still has
+                // free slots, and vice versa.
+                if ($e->getMessage() === 'registration_team_full') {
+                    return JsonResponder::error($response, 'registration_team_full', 'This team already has its maximum number of members.', 409);
+                }
+                if ($e->getMessage() === 'registration_team_not_found') {
+                    return JsonResponder::error($response, 'registration_team_not_found', 'Selected team was not found.', 404);
+                }
+                $teamValidationErrors = [
+                    'registration_team_distance_mismatch' => 'Selected team does not belong to this event/distance.',
+                    'registration_team_requires_relay_distance' => 'Teams can only be created for a relay distance.',
+                    'registration_team_name_required' => 'Team name is required to create a team.',
+                ];
+                if (array_key_exists($e->getMessage(), $teamValidationErrors)) {
+                    return JsonResponder::error($response, $e->getMessage(), $teamValidationErrors[$e->getMessage()], 422);
                 }
                 $discountErrors = [
                     'discount_code_invalid' => 'Discount code is invalid.',

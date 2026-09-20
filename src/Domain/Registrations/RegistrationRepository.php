@@ -13,6 +13,7 @@ use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
 use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Domain\Teams\TeamRepository;
 use ZmierzymyCzas\Support\QrCode;
 
 final class RegistrationRepository extends Repository
@@ -1200,6 +1201,7 @@ SQL;
             // there still catches an overrun even if isolation level ever changes).
             $distanceRow = $this->lockDistanceForRegistration((string) $data['eventId'], (string) $data['distanceId']);
             $this->enforceCapacity($distanceRow);
+            $team = $this->resolveTeamForRegistration($data, $distanceRow);
 
             $pricing = $this->pricingForRegistration($data, $distanceRow);
             $paymentDetails = $data['paymentDetails'] ?? null;
@@ -1221,8 +1223,8 @@ SQL;
                 // BZ, patrz generateStartCode()'s docblock), więc nigdy nie ma Zapisu bez
                 // kodu i nie ma osobnej operacji "wygeneruj kody" po stronie organizatora.
                 'qr_code' => $this->generateStartCode(),
-                'team_name' => $data['teamName'] ?? null,
-                'team_id' => $data['teamId'] ?? null,
+                'team_name' => $team['teamName'],
+                'team_id' => $team['teamId'],
                 'registered_by_id' => $data['registeredById'] ?? null,
                 'discount_code' => $pricing['discountCode'],
                 // E1.4: frozen at creation, same moment the price itself freezes
@@ -1354,7 +1356,9 @@ SQL;
             'SELECT e.name AS eventName, e.date AS eventDate, e.payment_config AS paymentConfig,
                     d.id AS distanceId, d.name AS distanceName,
                     d.price AS distancePrice, d.registered_count AS registeredCount,
-                    d.participant_limit AS participantLimit, d.price_tiers AS priceTiers
+                    d.participant_limit AS participantLimit, d.price_tiers AS priceTiers,
+                    d.start_type AS startType, d.relay_min_team_size AS relayMinTeamSize,
+                    d.relay_max_team_size AS relayMaxTeamSize
              FROM events e INNER JOIN event_distances d ON d.event_id = e.id
              WHERE e.id = :eventId AND d.id = :distanceId
              FOR UPDATE'
@@ -1382,6 +1386,86 @@ SQL;
         if ($limit !== null && $limit > 0 && (int) $distanceRow['registeredCount'] >= $limit) {
             throw new \RuntimeException('registration_capacity_exceeded');
         }
+    }
+
+    /**
+     * E7.1 (issue 23 Answer §1): resolves what this new Zapis's
+     * `team_id`/`team_name` should actually be, formalizing what used to be
+     * two free-text fields the client could set to anything.
+     *
+     * Two real, server-validated intents, both keyed off the same
+     * `teams` entity (TeamRepository):
+     *  - `data['teamId']` set — JOINING an existing Drużyna. Must exist,
+     *    must belong to this exact event+distance, and must not already be
+     *    at `relay_max_team_size` ("team full" — a distinct, legitimate
+     *    rejection, not a capacity/limit error: the Dystans' own limit,
+     *    E1.3, is completely unaffected by a team being full).
+     *  - `data['createTeam']` truthy (no `teamId`) — CREATING a brand-new
+     *    Drużyna out of this Zapis. Only legal on a `start_type='relay'`
+     *    Dystans (Answer §1's roster concept doesn't exist on an individual
+     *    Dystans) — rejected otherwise.
+     *
+     * Anything else (no `teamId`, no `createTeam`) is the pre-existing,
+     * UNCHANGED "za drużynę" classification label some organizers collect
+     * on ANY Dystans via the general `collectTeam` form option (E1.13) —
+     * plain free text, no roster, no size limit, no `teams` row, exactly as
+     * it worked before this ticket. This is deliberate: E7.1 only formalizes
+     * the relay roster case (issue 23), not that unrelated general-purpose
+     * team-name-for-classification feature, which `ResultRepository::
+     * teamClassification()` (E2.7) and the public start list already read
+     * straight off `registrations.team_name` regardless of whether a real
+     * `teams` row exists behind it.
+     *
+     * Runs after enforceCapacity()/inside the still-locked Dystans row (see
+     * create()) — every check here (team full, in particular) is therefore
+     * already serialized against every other concurrent Zapis for the same
+     * Dystans, with no separate lock needed on `teams` itself.
+     *
+     * @param array<string, mixed> $data
+     * @param array<string, mixed> $distanceRow
+     * @return array{teamId: ?string, teamName: ?string}
+     */
+    private function resolveTeamForRegistration(array $data, array $distanceRow): array
+    {
+        $teams = new TeamRepository($this->pdo);
+
+        $teamId = isset($data['teamId']) ? trim((string) $data['teamId']) : '';
+        if ($teamId !== '') {
+            $team = $teams->find($teamId);
+            if ($team === null) {
+                throw new \RuntimeException('registration_team_not_found');
+            }
+            if ((string) $team['eventId'] !== (string) $data['eventId'] || (string) $team['distanceId'] !== (string) $data['distanceId']) {
+                throw new \RuntimeException('registration_team_distance_mismatch');
+            }
+            $maxSize = $distanceRow['relayMaxTeamSize'] !== null ? (int) $distanceRow['relayMaxTeamSize'] : null;
+            if ($maxSize !== null && $team['memberCount'] >= $maxSize) {
+                throw new \RuntimeException('registration_team_full');
+            }
+
+            return ['teamId' => $team['id'], 'teamName' => $team['name']];
+        }
+
+        if (!empty($data['createTeam'])) {
+            if ((string) ($distanceRow['startType'] ?? 'individual') !== 'relay') {
+                throw new \RuntimeException('registration_team_requires_relay_distance');
+            }
+            $name = trim((string) ($data['teamName'] ?? ''));
+            if ($name === '') {
+                throw new \RuntimeException('registration_team_name_required');
+            }
+            $team = $teams->create([
+                'eventId' => $data['eventId'],
+                'distanceId' => $data['distanceId'],
+                'name' => $name,
+                'createdByUserId' => $data['userId'] ?? null,
+            ]);
+
+            return ['teamId' => $team['id'], 'teamName' => $team['name']];
+        }
+
+        // Legacy/general classification path — unchanged.
+        return ['teamId' => null, 'teamName' => $data['teamName'] ?? null];
     }
 
     /**

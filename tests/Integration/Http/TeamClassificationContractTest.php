@@ -103,10 +103,19 @@ final class TeamClassificationContractTest extends HttpTestCase
         $distanceId = (string) $this->event['distances'][0]['id'];
         $eventId = (string) $this->event['id'];
 
-        $this->createTeamMember($eventId, $distanceId, 'team-a', 'Drużyna A', '0:10:00', 600, 'finished');
-        $this->createTeamMember($eventId, $distanceId, 'team-a', 'Drużyna A', '0:11:00', 660, 'finished');
-        $this->createTeamMember($eventId, $distanceId, 'team-b', 'Drużyna B', '0:09:00', 540, 'finished');
-        $this->createTeamMember($eventId, $distanceId, 'team-b', 'Drużyna B', '0:09:30', 570, 'finished');
+        // E7.1: `registrations.team_id` is now FK-constrained to a real
+        // `teams` row — createTeamMember()/createRegistrationOnly() below
+        // insert straight into `registrations` (bypassing
+        // RegistrationRepository::create()'s own team validation, which this
+        // contract test doesn't exercise), so the row it points at must be
+        // created for real first via createTeam().
+        $teamA = $this->createTeam($eventId, $distanceId, 'Drużyna A');
+        $teamB = $this->createTeam($eventId, $distanceId, 'Drużyna B');
+
+        $this->createTeamMember($eventId, $distanceId, $teamA, 'Drużyna A', '0:10:00', 600, 'finished');
+        $this->createTeamMember($eventId, $distanceId, $teamA, 'Drużyna A', '0:11:00', 660, 'finished');
+        $this->createTeamMember($eventId, $distanceId, $teamB, 'Drużyna B', '0:09:00', 540, 'finished');
+        $this->createTeamMember($eventId, $distanceId, $teamB, 'Drużyna B', '0:09:30', 570, 'finished');
 
         $response = $this->request('GET', "/api/v1/events/{$eventId}/distances/{$distanceId}/team-results");
         $payload = $this->json($response);
@@ -115,10 +124,10 @@ final class TeamClassificationContractTest extends HttpTestCase
         self::assertTrue($payload['success']);
         self::assertCount(2, $payload['data']);
         // Team B: 540 + 570 = 1110s, faster than Team A's 600 + 660 = 1260s.
-        self::assertSame('team-b', $payload['data'][0]['teamId']);
+        self::assertSame($teamB, $payload['data'][0]['teamId']);
         self::assertSame(1, $payload['data'][0]['position']);
         self::assertEqualsWithDelta(1110.0, $payload['data'][0]['aggregatedTimeInSeconds'], 0.001);
-        self::assertSame('team-a', $payload['data'][1]['teamId']);
+        self::assertSame($teamA, $payload['data'][1]['teamId']);
         self::assertSame(2, $payload['data'][1]['position']);
     }
 
@@ -128,20 +137,22 @@ final class TeamClassificationContractTest extends HttpTestCase
         $eventId = (string) $this->event['id'];
 
         // Team with one finished + one still without any result at all.
-        $this->createTeamMember($eventId, $distanceId, 'team-partial', 'Drużyna Niekompletna', '0:10:00', 600, 'finished');
-        $this->createRegistrationOnly($eventId, $distanceId, 'team-partial', 'Drużyna Niekompletna');
+        $teamPartial = $this->createTeam($eventId, $distanceId, 'Drużyna Niekompletna');
+        $this->createTeamMember($eventId, $distanceId, $teamPartial, 'Drużyna Niekompletna', '0:10:00', 600, 'finished');
+        $this->createRegistrationOnly($eventId, $distanceId, $teamPartial, 'Drużyna Niekompletna');
 
         // Complete team, should still show up.
-        $this->createTeamMember($eventId, $distanceId, 'team-complete', 'Drużyna Kompletna', '0:09:00', 540, 'finished');
-        $this->createTeamMember($eventId, $distanceId, 'team-complete', 'Drużyna Kompletna', '0:09:30', 570, 'finished');
+        $teamComplete = $this->createTeam($eventId, $distanceId, 'Drużyna Kompletna');
+        $this->createTeamMember($eventId, $distanceId, $teamComplete, 'Drużyna Kompletna', '0:09:00', 540, 'finished');
+        $this->createTeamMember($eventId, $distanceId, $teamComplete, 'Drużyna Kompletna', '0:09:30', 570, 'finished');
 
         $response = $this->request('GET', "/api/v1/events/{$eventId}/distances/{$distanceId}/team-results");
         $payload = $this->json($response);
 
         self::assertSame(200, $response->getStatusCode());
         $teamIds = array_column($payload['data'], 'teamId');
-        self::assertContains('team-complete', $teamIds);
-        self::assertNotContains('team-partial', $teamIds, 'A team missing a member result must be excluded, not shown partially.');
+        self::assertContains($teamComplete, $teamIds);
+        self::assertNotContains($teamPartial, $teamIds, 'A team missing a member result must be excluded, not shown partially.');
     }
 
     public function testTeamWithADnfMemberIsExcludedButTheMembersIndividualResultIsUnaffected(): void
@@ -149,17 +160,35 @@ final class TeamClassificationContractTest extends HttpTestCase
         $distanceId = (string) $this->event['distances'][0]['id'];
         $eventId = (string) $this->event['id'];
 
-        $this->createTeamMember($eventId, $distanceId, 'team-dnf', 'Drużyna DNF', '0:10:00', 600, 'finished');
-        $dnfResult = $this->createTeamMember($eventId, $distanceId, 'team-dnf', 'Drużyna DNF', '', 0, 'dnf');
+        $teamDnf = $this->createTeam($eventId, $distanceId, 'Drużyna DNF');
+        $this->createTeamMember($eventId, $distanceId, $teamDnf, 'Drużyna DNF', '0:10:00', 600, 'finished');
+        $dnfResult = $this->createTeamMember($eventId, $distanceId, $teamDnf, 'Drużyna DNF', '', 0, 'dnf');
 
         $response = $this->request('GET', "/api/v1/events/{$eventId}/distances/{$distanceId}/team-results");
         $payload = $this->json($response);
 
         $teamIds = array_column($payload['data'], 'teamId');
-        self::assertNotContains('team-dnf', $teamIds, 'A dnf member must disqualify the team aggregate.');
+        self::assertNotContains($teamDnf, $teamIds, 'A dnf member must disqualify the team aggregate.');
 
         $individual = $this->results->find((string) $dnfResult['id']);
         self::assertSame('dnf', $individual['status'], "The member's own individual result must be untouched by team exclusion.");
+    }
+
+    /** E7.1: creates a real `teams` row, returning its server-generated id. */
+    private function createTeam(string $eventId, string $distanceId, string $name): string
+    {
+        $id = $this->prefix . '-team-' . bin2hex(random_bytes(4));
+        $this->pdo->prepare(
+            'INSERT INTO teams (id, event_id, distance_id, name, created_at) VALUES (:id, :eventId, :distanceId, :name, :createdAt)'
+        )->execute([
+            'id' => $id,
+            'eventId' => $eventId,
+            'distanceId' => $distanceId,
+            'name' => $name,
+            'createdAt' => date(DATE_ATOM),
+        ]);
+
+        return $id;
     }
 
     /** @return array<string, mixed> the created Result */

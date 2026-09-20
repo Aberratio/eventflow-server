@@ -219,6 +219,59 @@ final class RegistrationRepositoryTpayTest extends TestCase
         self::assertSame(30.0, $this->gateway->refundCalls[0]['amount']);
     }
 
+    /**
+     * TD.13: $gateway->refund() throwing must no longer vanish silently. It
+     * must (a) be logged, (b) not be reported to the caller as a plain
+     * success, and (c) leave the refund cycle's persisted status exactly
+     * where the pre-fix code already left it (`approved` — see
+     * initiateGatewayRefund()'s docblock for why the state itself isn't
+     * rolled back: there is no `failed` state in the migration-035 state
+     * machine, and platform-side approval isn't supposed to flip-flop on a
+     * gateway hiccup). This test forces the fake gateway's refund() call to
+     * throw and asserts all three.
+     */
+    public function testApproveRefundLogsAndReportsAGatewayRefundFailureWithoutClaimingSuccess(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-refund-fail']));
+        $this->gateway->nextSession = ['transactionId' => 'TX-refund-fail', 'redirectUrl' => 'https://pay.example.test/refund-fail'];
+        $registration = $this->registrations->create($this->registrationPayload($event));
+        $this->registrations->applyGatewayNotification('TX-refund-fail', true, 80.0);
+        $this->registrations->requestRefund($registration['id'], 'phpunit-participant');
+
+        $this->gateway->throwOnRefund = true;
+
+        $previousErrorLog = ini_get('error_log');
+        $logFile = tempnam(sys_get_temp_dir(), 'td13-error-log-');
+        ini_set('error_log', $logFile);
+        try {
+            $result = $this->registrations->approveRefund($registration['id'], 'phpunit-organizer', 30.0);
+        } finally {
+            ini_set('error_log', $previousErrorLog === false ? '' : $previousErrorLog);
+        }
+        $logged = (string) file_get_contents($logFile);
+        @unlink($logFile);
+
+        // (a) the failure is actually logged, with enough to investigate it.
+        self::assertStringContainsString('initiateGatewayRefund', $logged);
+        self::assertStringContainsString($registration['id'], $logged);
+        self::assertStringContainsString('TX-refund-fail', $logged);
+        self::assertStringContainsString('fake_gateway_refund_unreachable', $logged);
+
+        // (c) the caller gets an honest signal, not a silent "it worked".
+        self::assertTrue($result['refund']['gatewayRefundError'] ?? false);
+
+        // (b) the gateway call really was attempted with the approved amount.
+        self::assertCount(1, $this->gateway->refundCalls);
+        self::assertSame(30.0, $this->gateway->refundCalls[0]['amount']);
+
+        // The refund cycle is left exactly where the pre-fix code already
+        // left it (no new, worse state introduced by this fix): `approved`,
+        // not silently promoted to `refunded` despite the gateway call
+        // failing, and not left dangling as `requested` either.
+        self::assertSame('approved', $result['refund']['status']);
+        self::assertSame(30.0, $result['refund']['amount']);
+    }
+
     public function testApproveRefundOnOrganizerBankRouteNeverCallsTheGateway(): void
     {
         $event = $this->events->create($this->payload([
@@ -327,6 +380,7 @@ final class FakeGateway implements PaymentGatewayInterface
     /** @var array{transactionId: string, redirectUrl: string} */
     public array $nextSession = ['transactionId' => 'TX-default', 'redirectUrl' => 'https://pay.example.test/default'];
     public bool $throwOnStartSession = false;
+    public bool $throwOnRefund = false;
 
     /** @var array<int, array{registrationId: string, amount: float}> */
     public array $startSessionCalls = [];
@@ -347,5 +401,8 @@ final class FakeGateway implements PaymentGatewayInterface
     public function refund(string $transactionId, float $amount): void
     {
         $this->refundCalls[] = ['transactionId' => $transactionId, 'amount' => $amount];
+        if ($this->throwOnRefund) {
+            throw new \RuntimeException('fake_gateway_refund_unreachable');
+        }
     }
 }

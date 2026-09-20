@@ -2283,8 +2283,9 @@ SQL;
         // itself is safely committed — same "never hold the row lock across an
         // outbound HTTP call" reasoning as startGatewaySessionIfNeeded(). Trasa B
         // stays exactly as before (organizator marks it done by hand later).
+        $gatewayRefundFailed = false;
         if ($route === 'gateway') {
-            $this->initiateGatewayRefund($id);
+            $gatewayRefundFailed = !$this->initiateGatewayRefund($id);
         }
 
         // E3.4: "zwrot" trigger, "do zwrotu" sub-state — one push per approval,
@@ -2293,7 +2294,18 @@ SQL;
         // already-`approved` cycle never reaches this line).
         $this->pushBzCriticalChange((string) $registration['eventId'], $id, 'refund_approved');
 
-        return $this->find($id);
+        $result = $this->find($id);
+        if ($gatewayRefundFailed && $result !== null && isset($result['refund']) && is_array($result['refund'])) {
+            // TD.13: the approval itself did commit (see docblock on
+            // initiateGatewayRefund() for why that's deliberately not rolled
+            // back), but the caller must not get a plain 200 that reads as
+            // "refund succeeded end to end" when the actual gateway call
+            // failed — this is a response-only, non-persisted flag, not a new
+            // refund-state-machine state.
+            $result['refund']['gatewayRefundError'] = true;
+        }
+
+        return $result;
     }
 
     /**
@@ -2397,12 +2409,27 @@ SQL;
      * transition that already happened on our side" stance; approveRefund()/
      * markRefunded() remain the source of truth for whether a refund is
      * recorded as done on this platform.
+     *
+     * TD.13: a thrown exception from $gateway->refund() itself is still not
+     * allowed to unwind approveRefund() (same reasoning as above — the
+     * platform-side `approved` state must not flip-flop on a gateway hiccup,
+     * and there is no `failed` state in migration 035's refund state machine
+     * to move it to instead), but it must no longer vanish without a trace:
+     * it is now logged (registration id, amount, gateway, transaction id,
+     * exception) the same way ChallengeRepository::evaluateConditionTree()
+     * logs a swallowed \RuntimeException, and the boolean return here lets
+     * approveRefund() mark the response honestly instead of a silent 200.
+     * Actually retrying the gateway call is still an operational follow-up
+     * (no retry endpoint exists yet) — out of scope for this fix.
+     *
+     * @return bool false only when a paid transaction and a configured
+     *     gateway both existed and the actual refund() call to it threw.
      */
-    public function initiateGatewayRefund(string $id): void
+    public function initiateGatewayRefund(string $id): bool
     {
         $refund = $this->refund($id);
         if ($refund === null || $refund['amount'] === null) {
-            return;
+            return true;
         }
 
         // The provider that actually took the payment — read off the paid
@@ -2416,28 +2443,41 @@ SQL;
         $stmt->execute(['id' => $id]);
         $transaction = $stmt->fetch();
         if ($transaction === false) {
-            return;
+            return true;
         }
         $transactionId = (string) $transaction['transactionId'];
         if ($transactionId === '') {
-            return;
+            return true;
         }
 
-        $gateway = $this->gatewayForProvider((string) $transaction['gateway']);
+        $gatewayProvider = (string) $transaction['gateway'];
+        $gateway = $this->gatewayForProvider($gatewayProvider);
         if ($gateway === null) {
-            return;
+            return true;
         }
 
         try {
             $gateway->refund($transactionId, (float) $refund['amount']);
-        } catch (\Throwable) {
-            // Deliberately swallowed: the platform-side refund state (approved) is
-            // already recorded regardless of Tpay's reachability, exactly as
-            // startGatewaySessionIfNeeded() treats a gateway-side failure as
-            // non-fatal to the state that already committed on our side. Retrying
-            // the gateway call itself is an operational concern (organizer/admin
-            // can re-trigger via the same approve action), not this method's job.
+        } catch (\Throwable $e) {
+            // TD.13: was silently swallowed — a failed gateway refund call had
+            // no log, no alert, nothing beyond a customer complaint. The
+            // platform-side `approved` state is deliberately left as-is (see
+            // docblock above), but the failure itself must be investigable.
+            error_log(sprintf(
+                '[RegistrationRepository::initiateGatewayRefund] Gateway refund call failed for registration %s '
+                . '(transactionId=%s, gateway=%s, amount=%s): %s: %s',
+                $id,
+                $transactionId,
+                $gatewayProvider,
+                (string) $refund['amount'],
+                get_class($e),
+                $e->getMessage()
+            ));
+
+            return false;
         }
+
+        return true;
     }
 
     /**

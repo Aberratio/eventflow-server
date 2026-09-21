@@ -181,12 +181,6 @@ parameters:
 			path: src/Http/routes.php
 
 		-
-			message: '#^Undefined variable\: \$challengeRanking$#'
-			identifier: variable.undefined
-			count: 2
-			path: src/Http/routes.php
-
-		-
 			message: '#^Comparison operation "\<\=" between int\<1, max\> and 0 is always false\.$#'
 			identifier: smallerOrEqual.alwaysFalse
 			count: 1

@@ -45,6 +45,19 @@ jobs:
     name: Deploy API ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target || 'staging' }}
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target || 'staging' }}
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: zmierzymy_czas_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
     steps:
       - name: Checkout
@@ -57,13 +70,47 @@ jobs:
           extensions: pdo_mysql, zlib
           tools: composer:v2
 
-      - name: Build API artifact
+      - name: Install dependencies (with dev, for test gate)
         run: |
           set -Eeuo pipefail
           composer validate --no-check-publish
+          composer install --prefer-dist --optimize-autoloader --no-interaction
+
+      - name: Configure test env
+        run: |
+          cat > .env <<'ENV'
+          APP_ENV=local
+          DB_HOST=127.0.0.1
+          DB_PORT=3306
+          DB_DATABASE=zmierzymy_czas_test
+          DB_USERNAME=root
+          DB_PASSWORD=
+          JWT_SECRET=ci-test-secret
+          APP_CORS_ORIGIN=*
+          ENV
+      # APP_ENV=local above is required: bin/seed.php refuses to run against a
+      # database whose APP_ENV is production, which is the default when unset.
+
+      - name: Lint
+        run: composer lint
+
+      - name: Migrate test database
+        run: composer migrate
+
+      - name: Seed test database
+        run: composer seed
+
+      - name: Run Unit tests
+        run: composer test -- --testsuite Unit
+
+      - name: Run Integration tests
+        run: composer test -- --testsuite Integration
+
+      - name: Build API artifact
+        run: |
+          set -Eeuo pipefail
+          rm -f .env
           composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
-          composer lint
-          composer test -- --testsuite Unit
           find public src bin database/migrations -name '*.php' -print0 | xargs -0 -n1 php -l
           mkdir -p artifact
           rsync -a ./ artifact/api/ \

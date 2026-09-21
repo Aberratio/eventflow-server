@@ -288,6 +288,12 @@ final class FormFieldRepository extends Repository
      * only changes if both match), same 1-based `sortOrder`, same no-op on
      * an empty list.
      *
+     * Native prepares (PDO::ATTR_EMULATE_PREPARES => false, see Connection)
+     * reject a named placeholder used more than once in the same query, so
+     * each id needs a distinct binding for the CASE branch and another for
+     * the IN() list even though the value is identical (see the same
+     * pattern in ShopRepository).
+     *
      * @param array<int, string> $orderedIds
      */
     public function reorder(string $eventId, array $orderedIds): void
@@ -298,20 +304,22 @@ final class FormFieldRepository extends Repository
         }
 
         $cases = [];
-        $placeholders = [];
+        $inPlaceholders = [];
         $params = ['eventId' => $eventId];
         foreach ($ids as $index => $id) {
-            $idParam = 'id' . $index;
-            $cases[] = "WHEN :{$idParam} THEN :sortOrder{$index}";
-            $placeholders[] = ':' . $idParam;
-            $params[$idParam] = $id;
+            $caseIdParam = 'caseId' . $index;
+            $inIdParam = 'inId' . $index;
+            $cases[] = "WHEN :{$caseIdParam} THEN :sortOrder{$index}";
+            $inPlaceholders[] = ':' . $inIdParam;
+            $params[$caseIdParam] = $id;
+            $params[$inIdParam] = $id;
             $params['sortOrder' . $index] = $index + 1;
         }
 
         $sql = sprintf(
             'UPDATE form_fields SET sort_order = CASE id %s END WHERE event_id = :eventId AND id IN (%s)',
             implode(' ', $cases),
-            implode(', ', $placeholders)
+            implode(', ', $inPlaceholders)
         );
         $this->pdo->prepare($sql)->execute($params);
     }

@@ -169,6 +169,12 @@ final class SeriesRepository extends Repository
      * same transaction create()/update() already wrap this call in, same as
      * before.
      *
+     * Native prepares (PDO::ATTR_EMULATE_PREPARES => false, see Connection)
+     * reject a named placeholder used more than once in the same query, so
+     * `:seriesId` needs its own binding per VALUES group in the INSERT
+     * (same pattern as ShopRepository/FormFieldRepository::reorder()) — the
+     * single UPDATE only uses `:seriesId` once, so it doesn't need this.
+     *
      * @param array<int, string> $eventIds
      */
     private function replaceEvents(string $seriesId, array $eventIds): void
@@ -186,9 +192,12 @@ final class SeriesRepository extends Repository
         }
 
         $insertGroups = [];
-        $insertParams = ['seriesId' => $seriesId] + $eventIdParams;
+        $insertParams = [];
         foreach (array_keys($eventIdParams) as $index => $paramName) {
-            $insertGroups[] = "(:seriesId, :{$paramName}, :sortOrder{$index})";
+            $seriesIdParam = 'seriesId' . $index;
+            $insertGroups[] = "(:{$seriesIdParam}, :{$paramName}, :sortOrder{$index})";
+            $insertParams[$seriesIdParam] = $seriesId;
+            $insertParams[$paramName] = $eventIdParams[$paramName];
             $insertParams['sortOrder' . $index] = $index;
         }
         $this->pdo->prepare(

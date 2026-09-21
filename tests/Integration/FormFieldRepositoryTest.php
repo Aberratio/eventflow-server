@@ -571,6 +571,54 @@ final class FormFieldRepositoryTest extends TestCase
         self::assertSame([], $aggregates, 'No choice-type custom field exists yet — aggregate list must be empty.');
     }
 
+    /**
+     * TD.23: reorder() was converted from a per-row UPDATE loop to a single
+     * batched `UPDATE ... CASE WHEN`. Five fields (more than one row) so a
+     * wrong id→sortOrder mapping in the CASE construction would show up as
+     * a scrambled order rather than accidentally passing.
+     */
+    public function testReorderWithFiveFieldsAppliesTheExactGivenOrder(): void
+    {
+        $fields = [];
+        for ($i = 0; $i < 5; $i++) {
+            $fields[] = $this->fields->createCustom($this->eventId, [
+                'label' => 'Pole ' . $i,
+                'fieldType' => FormFieldType::SHORT_TEXT,
+            ]);
+        }
+        $ids = array_column($fields, 'id');
+        $reversed = array_reverse($ids);
+
+        $this->fields->reorder($this->eventId, $reversed);
+
+        $ordered = array_column($this->fields->listForEvent($this->eventId), 'id');
+        // listForEvent() orders by sort_order ASC — must match the reversed
+        // list exactly, proving each id got its own distinct position.
+        self::assertSame($reversed, array_values(array_filter($ordered, static fn (string $id): bool => in_array($id, $ids, true))));
+
+        $expectedSortOrders = array_flip($reversed);
+        foreach ($this->fields->listForEvent($this->eventId) as $field) {
+            if (!in_array($field['id'], $ids, true)) {
+                continue;
+            }
+            self::assertSame($expectedSortOrders[$field['id']] + 1, $field['sortOrder']);
+        }
+    }
+
+    /** reorder() with an empty list must be a no-op, not an error. */
+    public function testReorderWithEmptyListIsANoOp(): void
+    {
+        $field = $this->fields->createCustom($this->eventId, [
+            'label' => 'Pole',
+            'fieldType' => FormFieldType::SHORT_TEXT,
+        ]);
+
+        $this->fields->reorder($this->eventId, []);
+
+        $reloaded = $this->fields->find($field['id']);
+        self::assertSame($field['sortOrder'], $reloaded['sortOrder']);
+    }
+
     private function findByKey(string $key): array
     {
         foreach ($this->fields->listForEvent($this->eventId) as $field) {

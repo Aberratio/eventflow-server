@@ -160,21 +160,47 @@ final class SeriesRepository extends Repository
         return $out;
     }
 
-    /** @param array<int, string> $eventIds */
+    /**
+     * TD.23: batched into one multi-row INSERT and one multi-row UPDATE
+     * instead of two queries per event — same 0-based `sort_order`
+     * (unchanged from the original `$index`), same `events.series_id`
+     * backfill for every listed event, same no-op on an empty list (beyond
+     * the DELETE, which always runs). Both statements execute inside the
+     * same transaction create()/update() already wrap this call in, same as
+     * before.
+     *
+     * @param array<int, string> $eventIds
+     */
     private function replaceEvents(string $seriesId, array $eventIds): void
     {
         $this->pdo->prepare('DELETE FROM series_events WHERE series_id = :id')->execute(['id' => $seriesId]);
-        foreach (array_values($eventIds) as $index => $eventId) {
-            $this->insert('series_events', [
-                'series_id' => $seriesId,
-                'event_id' => (string) $eventId,
-                'sort_order' => $index,
-            ]);
-            $this->pdo->prepare('UPDATE events SET series_id = :seriesId WHERE id = :eventId')->execute([
-                'seriesId' => $seriesId,
-                'eventId' => (string) $eventId,
-            ]);
+
+        $ids = array_values($eventIds);
+        if ($ids === []) {
+            return;
         }
+
+        $eventIdParams = [];
+        foreach ($ids as $index => $eventId) {
+            $eventIdParams['eventId' . $index] = (string) $eventId;
+        }
+
+        $insertGroups = [];
+        $insertParams = ['seriesId' => $seriesId] + $eventIdParams;
+        foreach (array_keys($eventIdParams) as $index => $paramName) {
+            $insertGroups[] = "(:seriesId, :{$paramName}, :sortOrder{$index})";
+            $insertParams['sortOrder' . $index] = $index;
+        }
+        $this->pdo->prepare(
+            'INSERT INTO series_events (series_id, event_id, sort_order) VALUES ' . implode(', ', $insertGroups)
+        )->execute($insertParams);
+
+        $eventPlaceholders = implode(', ', array_map(
+            static fn (string $param): string => ':' . $param,
+            array_keys($eventIdParams)
+        ));
+        $this->pdo->prepare('UPDATE events SET series_id = :seriesId WHERE id IN (' . $eventPlaceholders . ')')
+            ->execute(['seriesId' => $seriesId] + $eventIdParams);
     }
 
     /** @param array<int, array<string, mixed>> $products */

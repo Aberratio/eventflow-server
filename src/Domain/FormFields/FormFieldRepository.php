@@ -282,12 +282,38 @@ final class FormFieldRepository extends Repository
         return $this->find($id) ?? [];
     }
 
+    /**
+     * TD.23: batched into a single `UPDATE ... CASE WHEN` instead of one
+     * query per row — same per-row `id AND event_id` guard as before (a row
+     * only changes if both match), same 1-based `sortOrder`, same no-op on
+     * an empty list.
+     *
+     * @param array<int, string> $orderedIds
+     */
     public function reorder(string $eventId, array $orderedIds): void
     {
-        foreach (array_values($orderedIds) as $index => $id) {
-            $this->pdo->prepare('UPDATE form_fields SET sort_order = :sortOrder WHERE id = :id AND event_id = :eventId')
-                ->execute(['sortOrder' => $index + 1, 'id' => $id, 'eventId' => $eventId]);
+        $ids = array_values($orderedIds);
+        if ($ids === []) {
+            return;
         }
+
+        $cases = [];
+        $placeholders = [];
+        $params = ['eventId' => $eventId];
+        foreach ($ids as $index => $id) {
+            $idParam = 'id' . $index;
+            $cases[] = "WHEN :{$idParam} THEN :sortOrder{$index}";
+            $placeholders[] = ':' . $idParam;
+            $params[$idParam] = $id;
+            $params['sortOrder' . $index] = $index + 1;
+        }
+
+        $sql = sprintf(
+            'UPDATE form_fields SET sort_order = CASE id %s END WHERE event_id = :eventId AND id IN (%s)',
+            implode(' ', $cases),
+            implode(', ', $placeholders)
+        );
+        $this->pdo->prepare($sql)->execute($params);
     }
 
     /**

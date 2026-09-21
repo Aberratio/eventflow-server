@@ -67,7 +67,7 @@ final class EventBackgroundRepository extends Repository
     public function usages(string $id): array
     {
         $stmt = $this->pdo->prepare(
-            "SELECT id, name, slug, status FROM events WHERE background_id = :id ORDER BY date ASC"
+            "SELECT id, name, slug, publication_status AS status FROM events WHERE background_id = :id ORDER BY date ASC"
         );
         $stmt->execute(['id' => $id]);
         return $stmt->fetchAll();

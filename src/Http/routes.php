@@ -57,6 +57,8 @@ use ZmierzymyCzas\Domain\Care\CareRepository;
 use ZmierzymyCzas\Domain\Competitors\CompetitorMergeService;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
+use ZmierzymyCzas\Domain\Users\UserUpdatePolicy;
+use ZmierzymyCzas\Domain\Registrations\RegistrationPatchPolicy;
 use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
 use ZmierzymyCzas\Support\Env;
@@ -251,6 +253,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $publicEventStatuses = ['published', 'finished'];
     $isSuperAdmin = static fn (Request $request): bool => ((string) (((array) $request->getAttribute('auth'))['role'] ?? '')) === 'superadmin';
     $isStaffRole = static fn (string $role): bool => in_array($role, ['admin', 'superadmin', 'moderator'], true);
+    // PP.1/PP.2: identity helpers. "self" is a strict JWT-subject match, never a body field.
+    $isSelf = static fn (string $userId, array $auth): bool =>
+        $userId !== '' && (string) ($auth['sub'] ?? '') === $userId;
+    // Matrix §3: moderator reads the account list but never edits other accounts.
+    $isAccountManager = static fn (array $auth): bool =>
+        in_array((string) ($auth['role'] ?? ''), ['admin', 'superadmin'], true);
+    // PP.2: per-user data (registrations, tickets, certificates) — the user themself or staff.
+    // Arrow functions auto-capture the enclosing scope by value, so $isSelf/$isStaffRole
+    // need no explicit `use` here.
+    $canReadUserScopedData = static fn (string $userId, array $auth): bool =>
+        $isSelf($userId, $auth) || $isStaffRole((string) ($auth['role'] ?? ''));
     $optionalAuth = static function (Request $request) use ($jwt): array {
         $header = $request->getHeaderLine('Authorization');
         if (!preg_match('/^Bearer\s+(.+)$/i', $header, $matches)) {
@@ -332,6 +345,37 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         return $canManageEvent($event, $auth)
             && in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished'], true);
     };
+    // PP.2: registration owner — moved here (was defined locally next to the
+    // refund-request route) so $authorizeRegistration below can also use it.
+    $isRegistrationOwner = static function (?array $registration, array $auth): bool {
+        if (!$registration) {
+            return false;
+        }
+        $callerId = (string) ($auth['sub'] ?? '');
+        return $callerId !== '' && (
+            (string) $registration['userId'] === $callerId
+            || (string) ($registration['registeredById'] ?? '') === $callerId
+        );
+    };
+    /**
+     * PP.2: the single gate for any route addressing one Zapis by id. Loads the
+     * Zapis and decides, or returns the ready-made error response. New routes that
+     * take a registration id MUST go through this.
+     *
+     * @return array{registration: array<string, mixed>, isManager: bool}|Response
+     */
+    $authorizeRegistration = static function (Response $response, string $registrationId, array $auth, bool $managerOnly = false)
+        use ($registrations, $events, $isRegistrationOwner, $canManageEvent): array|Response {
+        $registration = $registrations->find($registrationId);
+        if ($registration === null) {
+            return JsonResponder::error($response, 'not_found', 'Nie znaleziono zapisu.', 404);
+        }
+        $isManager = $canManageEvent($events->find((string) $registration['eventId']), $auth);
+        if (!$isManager && ($managerOnly || !$isRegistrationOwner($registration, $auth))) {
+            return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+        }
+        return ['registration' => $registration, 'isManager' => $isManager];
+    };
     // E3.2: the pasted BZ organization token must never reach a non-manager read
     // (issue 12 §3 — it is a credential-shaped identifier, unlike the rest of the
     // Event payload which this codebase already returns unfiltered to anonymous
@@ -402,7 +446,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct): void {
         $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
             'status' => 'ok',
             'env' => (string) Env::get('APP_ENV', ''),
@@ -543,7 +587,16 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if ($users->findByEmail((string) $payload['email'])) {
                 return JsonResponder::error($response, 'email_taken', 'Email is already registered', 409);
             }
-            $created = $users->create($payload);
+            // PP.1: self-registration is never trusted with role/status/eventLimit —
+            // an anonymous caller must never be able to mint a staff account. Role
+            // changes go exclusively through the staff-only /users/{id}/role route,
+            // and Organizer only comes from buying the package (E5.7) or from an admin.
+            $created = $users->create([
+                'name' => $payload['name'],
+                'email' => $payload['email'],
+                'password' => $payload['password'],
+                'role' => 'participant',
+            ]);
             // E1.10 mail #1 ("Weryfikacja adresu e-mail", 17 §1 row 1). This
             // ticket does not build a full email-verification feature (no
             // `email_verified_at` column, no consuming endpoint exists in this
@@ -588,7 +641,16 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $page = $users->list($query($request));
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->get('/users/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $users->find($args['id'])));
+        // PP.1: no public profile DTO — a full profile is self or staff only.
+        // Nothing in the client reads another Account's profile through this route
+        // (AthleteProfilePage uses GET /users/{userId}/results instead).
+        $api->get('/users/{id}', function (Request $request, Response $response, array $args) use ($users, $isSelf, $isStaffRole) {
+            $auth = (array) $request->getAttribute('auth');
+            if (!$isSelf((string) $args['id'], $auth) && !$isStaffRole((string) ($auth['role'] ?? ''))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            return JsonResponder::ok($response, $users->find((string) $args['id']));
+        })->add(new AuthMiddleware($jwt));
         $api->post('/users', function (Request $request, Response $response) use ($users, $body, $isSuperAdmin, $logActivity) {
             $payload = $body($request);
             if (in_array((string) ($payload['role'] ?? ''), ['admin', 'superadmin'], true) && !$isSuperAdmin($request)) {
@@ -599,15 +661,56 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $created, 'User created', 201);
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->patch('/users/{id}', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount, $logActivity) {
-            $payload = $body($request);
-            unset($payload['eventLimit']);
-            $existing = $users->find($args['id']);
-            if ($touchesAdminAccount($existing, $payload) && !$isSuperAdmin($request)) {
+        // PP.1: self or an account manager (admin/superadmin) editing someone else.
+        // Each side gets an explicit field whitelist (UserUpdatePolicy) — role,
+        // status, eventLimit, organizerPackageCredits and password* are never
+        // accepted here; those go through the dedicated staff endpoints.
+        $api->patch('/users/{id}', function (Request $request, Response $response, array $args) use ($users, $body, $isSelf, $isAccountManager, $isSuperAdmin, $touchesAdminAccount, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $targetId = (string) $args['id'];
+            $self = $isSelf($targetId, $auth);
+            if (!$self && !$isAccountManager($auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $existing = $users->find($targetId);
+            if ($existing === null) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono konta.', 404);
+            }
+            // Skipped for self: today this wrongly blocks an admin from saving their
+            // own profile. An admin's own admin-touching edits still follow the
+            // self rules below (no role/status/email escalation possible anyway).
+            if (!$self && $touchesAdminAccount($existing, []) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can modify admin accounts', 403);
             }
-            $updated = $users->update($args['id'], $payload);
-            $logActivity((array) $request->getAttribute('auth'), 'user_updated', 'Zaktualizowano konto użytkownika', 'user', (string) $args['id'], (string) ($updated['name'] ?? ''));
+            $asManager = !$self && $isAccountManager($auth);
+            $policyResult = UserUpdatePolicy::filter($body($request), $asManager, (string) ($existing['email'] ?? ''));
+            $rejected = $policyResult['rejected'];
+            if ($rejected !== []) {
+                if ($rejected === ['email']) {
+                    return JsonResponder::error(
+                        $response,
+                        'email_change_not_allowed',
+                        'Zmiana adresu e-mail wymaga weryfikacji i nie jest jeszcze dostępna. Skontaktuj się z obsługą.',
+                        422
+                    );
+                }
+                return JsonResponder::error(
+                    $response,
+                    'field_not_editable',
+                    'Tych pól nie można zmienić w tym miejscu: ' . implode(', ', $rejected) . '.',
+                    422,
+                    ['fields' => $rejected]
+                );
+            }
+            $allowed = $policyResult['allowed'];
+            if (isset($allowed['email']) && strtolower(trim((string) $allowed['email'])) !== strtolower(trim((string) ($existing['email'] ?? '')))) {
+                $existingWithEmail = $users->findByEmail((string) $allowed['email']);
+                if ($existingWithEmail !== null && (string) $existingWithEmail['id'] !== $targetId) {
+                    return JsonResponder::error($response, 'email_taken', 'Ten adres e-mail jest już zajęty.', 409);
+                }
+            }
+            $updated = $users->update($targetId, $allowed);
+            $logActivity($auth, 'user_updated', 'Zaktualizowano konto użytkownika', 'user', $targetId, (string) ($updated['name'] ?? ''));
             return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt));
@@ -653,14 +756,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt, $staffRoles));
+        // PP.1: previously fully anonymous, returning UserRepository::PUBLIC_COLUMNS
+        // (e-mail, phone, birth date, address, SOS contacts, NIP) for up to 100
+        // accounts with no id needed at all — worse than the profile IDOR itself.
         $api->get('/participants', function (Request $request, Response $response) use ($users) {
             $page = $users->list(['role' => 'participant', 'pageSize' => 100]);
             return JsonResponder::ok($response, $page['data']);
-        });
+        })->add(new AuthMiddleware($jwt, $staffRoles));
         $api->get('/organizers', function (Request $request, Response $response) use ($users) {
             $page = $users->list(['role' => 'organizer', 'pageSize' => 100]);
             return JsonResponder::ok($response, $page['data']);
-        });
+        })->add(new AuthMiddleware($jwt, $staffRoles));
 
         $api->get('/events', function (Request $request, Response $response) use ($events, $query, $optionalAuth, $isStaffRole, $stripBzTokenFromList) {
             $filters = $query($request);
@@ -1036,10 +1142,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
         })->add(new AuthMiddleware($jwt, $adminRoles));
 
+        // PP.2: a full platform-wide dump of every Zapis (any event) — staff only.
         $api->get('/registrations', function (Request $request, Response $response) use ($registrations, $query) {
             $page = $registrations->list($query($request));
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
-        })->add(new AuthMiddleware($jwt));
+        })->add(new AuthMiddleware($jwt, $staffRoles));
         // E7.1 (issue 23 Answer §1): joinable Drużyny for one relay Dystans,
         // each with its derived completeness (memberCount vs
         // relay_min_team_size/relay_max_team_size) — the server-side source
@@ -1106,7 +1213,19 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 throw $e;
             }
         })->add(new AuthMiddleware($jwt));
-        $api->get('/events/{eventId}/registrations', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->byEvent($args['eventId'])))
+        // PP.2: middleware alone only checked global role membership — an organizer of
+        // event B could read event A's full registration list. $canManageEvent scopes
+        // it to the caller's own event (or staff on a published/finished/cancelled one).
+        $api->get('/events/{eventId}/registrations', function (Request $request, Response $response, array $args) use ($registrations, $events, $canManageEvent) {
+            $event = $events->find((string) $args['eventId']);
+            if ($event === null) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono wydarzenia.', 404);
+            }
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            return JsonResponder::ok($response, $registrations->byEvent((string) $args['eventId']));
+        })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->get('/events/{eventId}/start-list', function (Request $request, Response $response, array $args) use ($events, $registrations, $optionalAuth, $canViewEvent) {
             $event = $events->find($args['eventId']);
@@ -1433,7 +1552,22 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         // celowo nie przerabia tworzenia Zapisu (poza zakresem — patrz raport
         // ticketu), to jedynie udowadnia "create, validate, persist an answer"
         // end-to-end z acceptance criteria.
-        $api->put('/registrations/{registrationId}/form-field-answers/{fieldId}', function (Request $request, Response $response, array $args) use ($formFields, $formFieldAnswers, $body) {
+        // PP.2: registration owner or event manager only — otherwise a stranger could
+        // read or write another Zapis's answers.
+        $api->put('/registrations/{registrationId}/form-field-answers/{fieldId}', function (Request $request, Response $response, array $args) use ($formFields, $formFieldAnswers, $authorizeRegistration, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $gate = $authorizeRegistration($response, (string) $args['registrationId'], $auth);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            // Required: FormFieldAnswerRepository::saveAnswer() only checks
+            // kind === 'custom', not that the field belongs to THIS registration's
+            // event — without this an owner could attach event X's field answers to
+            // their own Zapis on event Y.
+            $field = $formFields->find((string) $args['fieldId']);
+            if ($field === null || (string) ($field['eventId'] ?? '') !== (string) $gate['registration']['eventId']) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono pola formularza.', 404);
+            }
             try {
                 $saved = $formFieldAnswers->saveAnswer(
                     $formFields,
@@ -1446,10 +1580,22 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
             return JsonResponder::ok($response, $saved);
         })->add(new AuthMiddleware($jwt));
-        $api->get('/registrations/{registrationId}/form-field-answers', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $formFieldAnswers->forRegistration((string) $args['registrationId'])))
+        $api->get('/registrations/{registrationId}/form-field-answers', function (Request $request, Response $response, array $args) use ($formFieldAnswers, $authorizeRegistration) {
+            $gate = $authorizeRegistration($response, (string) $args['registrationId'], (array) $request->getAttribute('auth'));
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            return JsonResponder::ok($response, $formFieldAnswers->forRegistration((string) $args['registrationId']));
+        })
             ->add(new AuthMiddleware($jwt));
 
-        $api->get('/users/{userId}/registrations', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->byUser($args['userId'])))
+        // PP.2: self or staff — a participant must never read another user's registrations.
+        $api->get('/users/{userId}/registrations', function (Request $request, Response $response, array $args) use ($registrations, $canReadUserScopedData) {
+            if (!$canReadUserScopedData((string) $args['userId'], (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            return JsonResponder::ok($response, $registrations->byUser((string) $args['userId']));
+        })
             ->add(new AuthMiddleware($jwt));
         $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $competitors, $care, $body) {
             $auth = (array) $request->getAttribute('auth');
@@ -1537,27 +1683,54 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 throw $e;
             }
         })->add(new AuthMiddleware($jwt));
-        $api->patch('/registrations/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->update($args['id'], $body($request))))
+        // PP.2: previously any logged-in caller could PATCH any Zapis (IDOR + payment
+        // bypass: status=confirmed without paying). Authorization comes first, so a
+        // stranger always gets 403, never a 422 that would leak the field policy.
+        $api->patch('/registrations/{id}', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $gate = $authorizeRegistration($response, (string) $args['id'], $auth);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            $policyResult = RegistrationPatchPolicy::filter($body($request), $gate['isManager']);
+            if ($policyResult['rejected'] !== []) {
+                return JsonResponder::error(
+                    $response,
+                    'field_not_editable',
+                    'Tych pól nie można zmienić w tym miejscu: ' . implode(', ', $policyResult['rejected']) . '.',
+                    422,
+                    ['fields' => $policyResult['rejected']]
+                );
+            }
+            return JsonResponder::ok($response, $registrations->update((string) $args['id'], $policyResult['allowed']));
+        })
             ->add(new AuthMiddleware($jwt));
-        $api->post('/registrations/{id}/cancel', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->cancel($args['id'])))
+        $api->post('/registrations/{id}/cancel', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations) {
+            $gate = $authorizeRegistration($response, (string) $args['id'], (array) $request->getAttribute('auth'));
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            return JsonResponder::ok($response, $registrations->cancel((string) $args['id']));
+        })
             ->add(new AuthMiddleware($jwt));
-        $api->patch('/registrations/{id}/payment-details', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->updatePaymentDetails($args['id'], $body($request))))
+        // PP.2: $eventManagerRoles alone only checked global role — an organizer of a
+        // different event could mark another organizer's Zapis paid. managerOnly:
+        // true rejects the owner too (payment-details is manager-only by design).
+        $api->patch('/registrations/{id}/payment-details', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations, $body) {
+            $gate = $authorizeRegistration($response, (string) $args['id'], (array) $request->getAttribute('auth'), managerOnly: true);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            return JsonResponder::ok($response, $registrations->updatePaymentDetails((string) $args['id'], $body($request)));
+        })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
         // E1.5: Maszyna stanów płatności — zwroty. Zawodnik (właściciel Zapisu, albo
         // kto go zapisał — registeredById) może tylko poprosić; organizator (własne
         // Wydarzenie) lub admin/moderator zatwierdza i wykonuje (trasa B, ręcznie —
         // trasa A/bramka to E1.6/E1.7, zob. RegistrationRepository::initiateGatewayRefund()).
-        $isRegistrationOwner = static function (?array $registration, array $auth): bool {
-            if (!$registration) {
-                return false;
-            }
-            $callerId = (string) ($auth['sub'] ?? '');
-            return $callerId !== '' && (
-                (string) $registration['userId'] === $callerId
-                || (string) ($registration['registeredById'] ?? '') === $callerId
-            );
-        };
+        // PP.2: $isRegistrationOwner is now defined at the top level (next to
+        // $canManageEvent) and arrives here through the group `use (...)`.
         $api->post('/registrations/{id}/refund-request', function (Request $request, Response $response, array $args) use ($registrations, $events, $canManageEvent, $isRegistrationOwner, $body) {
             $auth = (array) $request->getAttribute('auth');
             $registration = $registrations->find($args['id']);
@@ -2813,9 +2986,20 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             ->add(new AuthMiddleware($jwt, $adminRoles));
 
         // Bilet is a view of Zapis, not a stored entity (E0.2) — derived from registrations.
-        $api->get('/users/{userId}/tickets', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $registrations->ticketsByUser($args['userId'])))
+        // PP.2: self or staff — same as /users/{userId}/registrations.
+        $api->get('/users/{userId}/tickets', function (Request $request, Response $response, array $args) use ($registrations, $canReadUserScopedData) {
+            if (!$canReadUserScopedData((string) $args['userId'], (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            return JsonResponder::ok($response, $registrations->ticketsByUser((string) $args['userId']));
+        })
             ->add(new AuthMiddleware($jwt, []));
-        $api->get('/users/{userId}/certificates', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $certificates->byUser($args['userId'])))
+        $api->get('/users/{userId}/certificates', function (Request $request, Response $response, array $args) use ($certificates, $canReadUserScopedData) {
+            if (!$canReadUserScopedData((string) $args['userId'], (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            return JsonResponder::ok($response, $certificates->byUser((string) $args['userId']));
+        })
             ->add(new AuthMiddleware($jwt, []));
 
         // ── Dev seed endpoint (local, and staging for signed-in staff) ─────────────

@@ -57,6 +57,8 @@
             "php -l src/Domain/Care/CareRepository.php",
             "php -l src/Domain/Registrations/RegistrationRepository.php",
             "php -l src/Domain/Registrations/StartListExportFormatter.php",
+            "php -l src/Domain/Registrations/RegistrationPatchPolicy.php",
+            "php -l src/Domain/Users/UserUpdatePolicy.php",
             "php -l src/Http/routes.php",
             "php -l database/seeders/generate_events.php",
             "php -l src/Database/ShopFixtureImporter.php",

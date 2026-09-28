@@ -72,19 +72,14 @@ final class TpayNotificationVerifierTest extends TestCase
     }
 
     /** @param array{key: \OpenSSLAsymmetricKey, cert: \OpenSSLCertificate, pem: string} $issuer @return array{key: \OpenSSLAsymmetricKey, pem: string} */
-    private function generateLeafSignedBy(array $issuer, int $days = 365): array
+    private function generateLeafSignedBy(array $issuer): array
     {
         $opts = ['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA, 'config' => $this->opensslConfig];
         $key = openssl_pkey_new($opts);
         self::assertNotFalse($key);
         $csr = openssl_csr_new(['commonName' => 'secure.sandbox.tpay.com'], $key, $opts);
         self::assertNotFalse($csr);
-        // $days negative is a deliberate trick to get an *already-expired* leaf
-        // cert straight out of openssl_csr_sign(): PHP always sets notBefore to
-        // "now" and notAfter to "now + days*86400", so a negative $days puts
-        // notAfter in the past while still producing a real, correctly-signed
-        // certificate (used by testRejectsAnAlreadyExpiredCertificate()).
-        $cert = openssl_csr_sign($csr, $issuer['cert'], $issuer['key'], $days, ['digest_alg' => 'sha256', 'config' => $this->opensslConfig]);
+        $cert = openssl_csr_sign($csr, $issuer['cert'], $issuer['key'], 365, ['digest_alg' => 'sha256', 'config' => $this->opensslConfig]);
         self::assertNotFalse($cert);
         openssl_x509_export($cert, $pem);
 
@@ -288,14 +283,29 @@ final class TpayNotificationVerifierTest extends TestCase
     public function testRejectsAnAlreadyExpiredCertificate(): void
     {
         $root = $this->generateCa();
-        // notBefore = now, notAfter = now - 5 days: a real, correctly-signed
-        // certificate that is simply expired.
-        $leaf = $this->generateLeafSignedBy($root, -5);
+        // notBefore = -30 days, notAfter = -5 days: a real, correctly-signed
+        // certificate that is simply expired. Built via withPatchedValidity()
+        // (the same patch-and-resign path as the not-yet-valid / accept tests)
+        // rather than a negative $days straight out of openssl_csr_sign():
+        // PHP's OpenSSL binding on CI (8.2.33) returns false for a negative
+        // $days there, while a locally installed OpenSSL/PHP build may still
+        // accept it — an environment difference in openssl_csr_sign() itself,
+        // not in TpayNotificationVerifier under test.
+        $leaf = $this->generateLeafSignedBy($root);
+        $expiredLeafPem = $this->withPatchedValidity(
+            $leaf['pem'],
+            $root,
+            new \DateTimeImmutable('-30 days'),
+            new \DateTimeImmutable('-5 days')
+        );
+
         $rawBody = (string) json_encode(['transactionId' => 'TX-1']);
+        // Still signed with the original leaf key — withPatchedValidity() only
+        // patches and re-signs the certificate itself, not the JWS.
         $jws = $this->buildJws($rawBody, self::X5U, $leaf['key']);
 
         $http = new FakeHttpClient();
-        $http->queueResponse(new HttpResponse(200, $leaf['pem']));
+        $http->queueResponse(new HttpResponse(200, $expiredLeafPem));
         $http->queueResponse(new HttpResponse(200, $root['pem']));
 
         $verifier = new TpayNotificationVerifier($http, $this->config);

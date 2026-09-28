@@ -11,12 +11,13 @@
 -- Zawodów, osobny ticket) — tylko żeby nie zgubić informacji "czy i kiedy".
 -- VARCHAR(64) storing DATE_ATOM, matching registered_at/removed_at's convention
 -- in this table (app-level ISO-8601 strings, not native DATETIME columns).
-ALTER TABLE registrations
-  ADD COLUMN IF NOT EXISTS checked_in_at VARCHAR(64) NULL AFTER removed_at;
+-- @guard: column-missing registrations.checked_in_at
+ALTER TABLE registrations ADD COLUMN checked_in_at VARCHAR(64) NULL AFTER removed_at;
 
--- Best-effort backfill z tickets, zanim tabela zniknie poniżej. Migrator uruchamia
--- wszystkie pliki przy każdym starcie (brak osobnego ledgera migracji), więc po
--- pierwszym przebiegu `tickets` już nie istnieje — stąd sprawdzenie przez
+-- Best-effort backfill z tickets, zanim tabela zniknie poniżej. Ten plik musi
+-- zostać idempotentny niezależnie od ledgera migracji (bootstrap, odzyskiwanie po
+-- awarii, edycja pliku — patrz Migrator.php), więc po pierwszym przebiegu
+-- `tickets` już nie istnieje — stąd sprawdzenie przez
 -- information_schema + dynamiczne SQL, żeby kolejne przebiegi nie wywaliły się na
 -- referencji do usuniętej tabeli. `issued_at` to jedyny dostępny timestamp — sama
 -- tabela nigdy nie zapisywała momentu odprawy, więc to przybliżenie, nie prawda.

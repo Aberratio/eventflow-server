@@ -43,5 +43,5 @@ LEFT JOIN teams t ON t.id = r.team_id
 SET r.team_id = NULL
 WHERE r.team_id IS NOT NULL AND t.id IS NULL;
 
-ALTER TABLE registrations
-  ADD CONSTRAINT fk_registrations_team FOREIGN KEY IF NOT EXISTS (team_id) REFERENCES teams(id) ON DELETE SET NULL;
+-- @guard: foreign-key-missing registrations.fk_registrations_team
+ALTER TABLE registrations ADD CONSTRAINT fk_registrations_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL;

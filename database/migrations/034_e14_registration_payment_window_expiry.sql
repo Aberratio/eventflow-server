@@ -25,14 +25,14 @@
 ALTER TABLE registrations
   MODIFY status ENUM('pending','confirmed','cancelled','removed','expired') NOT NULL DEFAULT 'pending';
 
-ALTER TABLE registrations
-  ADD COLUMN IF NOT EXISTS payment_expires_at VARCHAR(64) NULL AFTER removed_at;
+-- @guard: column-missing registrations.payment_expires_at
+ALTER TABLE registrations ADD COLUMN payment_expires_at VARCHAR(64) NULL AFTER removed_at;
 
 -- Speeds up the lazy expiry scan (status = 'pending' AND payment_expires_at < now)
 -- the same way 033's idx_registrations_distance_status speeds up the capacity
 -- population predicate.
-ALTER TABLE registrations
-  ADD INDEX IF NOT EXISTS idx_registrations_status_payment_expiry (status, payment_expires_at);
+-- @guard: index-missing registrations.idx_registrations_status_payment_expiry
+ALTER TABLE registrations ADD INDEX idx_registrations_status_payment_expiry (status, payment_expires_at);
 
 -- Deliberately no backfill: a Zapis created before this migration never had a real
 -- payment window to freeze, so its `payment_expires_at` stays NULL — the lazy expiry

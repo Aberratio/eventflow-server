@@ -8,4 +8,5 @@
 -- / `relay_max_team_size` / `relay_team_completion_deadline` / `start_type`
 -- zostają — to konfiguracja rozmiaru drużyny na Dystansie, niezależna od tego, jak
 -- modelowane jest Zapisanie się na nią.
-ALTER TABLE registrations DROP COLUMN IF EXISTS relay_members;
+-- @guard: column-exists registrations.relay_members
+ALTER TABLE registrations DROP COLUMN relay_members;

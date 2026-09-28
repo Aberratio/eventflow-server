@@ -29,6 +29,7 @@
 -- Typ kolumny czasu — VARCHAR(64), nie TIMESTAMP — mirror istniejącej konwencji
 -- tej tabeli dla znaczników czasu zapisywanych przez `date(DATE_ATOM)`
 -- (checked_in_at w 028, payment_expires_at w 034), nie nowy wybór.
-ALTER TABLE registrations
-  ADD COLUMN IF NOT EXISTS form_data_snapshot JSON NULL AFTER checked_in_at,
-  ADD COLUMN IF NOT EXISTS form_snapshot_captured_at VARCHAR(64) NULL AFTER form_data_snapshot;
+-- @guard: column-missing registrations.form_data_snapshot
+ALTER TABLE registrations ADD COLUMN form_data_snapshot JSON NULL AFTER checked_in_at;
+-- @guard: column-missing registrations.form_snapshot_captured_at
+ALTER TABLE registrations ADD COLUMN form_snapshot_captured_at VARCHAR(64) NULL AFTER form_data_snapshot;

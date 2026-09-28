@@ -23,5 +23,5 @@
 -- atomic, affected-rows-guarded UPDATE inside the caller's existing
 -- transaction, the same "materialized counter + transactional update"
 -- pattern `event_distances.registered_count` established in E1.3.
-ALTER TABLE users
-    ADD COLUMN IF NOT EXISTS organizer_package_credits INT NOT NULL DEFAULT 0 AFTER event_limit;
+-- @guard: column-missing users.organizer_package_credits
+ALTER TABLE users ADD COLUMN organizer_package_credits INT NOT NULL DEFAULT 0 AFTER event_limit;

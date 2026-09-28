@@ -1,5 +1,5 @@
-ALTER TABLE registrations
-  ADD COLUMN IF NOT EXISTS registered_by_id VARCHAR(36) NULL COMMENT 'Upoważniony, który dokonał zapisu w imieniu uczestnika';
+-- @guard: column-missing registrations.registered_by_id
+ALTER TABLE registrations ADD COLUMN registered_by_id VARCHAR(36) NULL COMMENT 'Upoważniony, który dokonał zapisu w imieniu uczestnika';
 
-ALTER TABLE registrations
-  ADD INDEX IF NOT EXISTS idx_registrations_registered_by (registered_by_id);
+-- @guard: index-missing registrations.idx_registrations_registered_by
+ALTER TABLE registrations ADD INDEX idx_registrations_registered_by (registered_by_id);

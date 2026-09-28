@@ -10,5 +10,5 @@
 --
 -- Migracje nie mają ledgera i uruchamiają się przy każdym starcie (Migrator.php) —
 -- ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtórzenia.
-ALTER TABLE form_fields
-  ADD COLUMN IF NOT EXISTS visible_to_bz TINYINT(1) NOT NULL DEFAULT 0 AFTER public_list_visible;
+-- @guard: column-missing form_fields.visible_to_bz
+ALTER TABLE form_fields ADD COLUMN visible_to_bz TINYINT(1) NOT NULL DEFAULT 0 AFTER public_list_visible;

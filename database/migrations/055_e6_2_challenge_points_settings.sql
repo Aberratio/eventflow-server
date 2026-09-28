@@ -23,7 +23,8 @@
 -- extended to a plausible mountain-running-style length), floor 0 beyond
 -- that - an admin can reshape both freely via PATCH /challenge-points-settings.
 --
--- Migrations have no ledger and re-run on every boot (see Migrator.php) -
+-- Every migration file must stay idempotent regardless of the ledger (bootstrap,
+-- crash recovery, an edited file all replay it — see Migrator.php) -
 -- CREATE TABLE IF NOT EXISTS + INSERT IGNORE on a fixed id is this project's
 -- established idempotent-singleton pattern (insurance_settings mirrors it).
 CREATE TABLE IF NOT EXISTS challenge_points_settings (

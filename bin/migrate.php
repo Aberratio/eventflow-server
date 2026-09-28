@@ -16,7 +16,12 @@ $pdo = Connection::fromEnv();
 $env = (string) Env::get('APP_ENV', 'production');
 
 $applied = Migrator::applyAll($pdo);
+$total = count(glob(Migrator::migrationsDir() . '/*.sql') ?: []);
 echo 'Migrations applied: ' . count($applied) . " file(s).\n";
+foreach ($applied as $file) {
+    echo "  {$file}\n";
+}
+echo 'Up to date: ' . ($total - count($applied)) . " file(s).\n";
 
 // Deploying to production must leave no demo data behind, whatever state the database
 // was in beforehand. Seeding is a separate, explicit command that refuses to run here.

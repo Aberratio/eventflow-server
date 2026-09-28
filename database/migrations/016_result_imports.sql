@@ -1,9 +1,13 @@
-ALTER TABLE results
-  ADD COLUMN IF NOT EXISTS registration_id VARCHAR(36) NULL AFTER user_id,
-  ADD COLUMN IF NOT EXISTS source_import_batch_id VARCHAR(36) NULL AFTER created_at,
-  ADD COLUMN IF NOT EXISTS source_import_row_id VARCHAR(36) NULL AFTER source_import_batch_id,
-  ADD INDEX IF NOT EXISTS idx_results_registration (registration_id),
-  ADD INDEX IF NOT EXISTS idx_results_import_batch (source_import_batch_id);
+-- @guard: column-missing results.registration_id
+ALTER TABLE results ADD COLUMN registration_id VARCHAR(36) NULL AFTER user_id;
+-- @guard: column-missing results.source_import_batch_id
+ALTER TABLE results ADD COLUMN source_import_batch_id VARCHAR(36) NULL AFTER created_at;
+-- @guard: column-missing results.source_import_row_id
+ALTER TABLE results ADD COLUMN source_import_row_id VARCHAR(36) NULL AFTER source_import_batch_id;
+-- @guard: index-missing results.idx_results_registration
+ALTER TABLE results ADD INDEX idx_results_registration (registration_id);
+-- @guard: index-missing results.idx_results_import_batch
+ALTER TABLE results ADD INDEX idx_results_import_batch (source_import_batch_id);
 
 CREATE TABLE IF NOT EXISTS result_import_batches (
   id VARCHAR(36) PRIMARY KEY,

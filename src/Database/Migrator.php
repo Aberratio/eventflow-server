@@ -9,37 +9,109 @@ use PDO;
 /**
  * Applies the schema migrations from database/migrations.
  *
- * Migrations are re-runnable: every statement uses IF NOT EXISTS / ON DUPLICATE KEY,
- * so applying the whole directory twice is a no-op. There is deliberately no ledger
- * table — introducing one would need a backfill on the already-migrated production
- * database, and the idempotent style makes it unnecessary.
+ * A `schema_migrations` ledger (filename, sha256 checksum, applied_at) tracks which
+ * files have already run. `applyAll()` bootstraps the ledger on any database — on a
+ * database that has never seen it (every dev DB today, staging until its first deploy
+ * with this class), every file is missing from the ledger, so the first run applies
+ * everything and records it, exactly like the old no-ledger behaviour. A later run only
+ * (re)applies a file that is missing from the ledger or whose checksum changed, so
+ * backfills stop re-executing against live data on every deploy.
+ *
+ * Every migration file must still be idempotent regardless of the ledger: MySQL/MariaDB
+ * DDL is not transactional, so a crash mid-file leaves it unrecorded and it is retried
+ * from the top; the ledger can also be bootstrapped mid-history if a file was already
+ * applied by hand or by an older deploy. `MigrationIdempotencyTest` enforces this by
+ * forcing a full re-apply (`applyAll($pdo, reapplyAll: true)`) and checking nothing in
+ * the schema or the data changes.
+ *
+ * Idempotent ALTER sub-clauses use a `-- @guard: <kind> <table>.<object>` marker
+ * evaluated against `information_schema` by {@see MigrationGuard}, never MariaDB-only
+ * `ADD COLUMN IF NOT EXISTS` / `DROP COLUMN IF EXISTS` syntax: production and staging
+ * run MySQL, which rejects that syntax outright. A guard marker applies to exactly the
+ * next SQL statement. `CREATE TABLE IF NOT EXISTS` / `DROP TABLE IF EXISTS` are portable
+ * on both engines and stay as plain SQL, no guard needed.
  */
 final class Migrator
 {
+    public const LEDGER_TABLE = 'schema_migrations';
+
     public static function migrationsDir(): string
     {
         return dirname(__DIR__, 2) . '/database/migrations';
     }
 
     /**
-     * @return list<string> applied file names, in order
+     * @return list<string> files applied by THIS call, in order (empty = everything was
+     *     already up to date)
      */
-    public static function applyAll(PDO $pdo): array
+    public static function applyAll(PDO $pdo, bool $reapplyAll = false): array
     {
+        self::ensureLedger($pdo);
+        $recorded = self::recordedChecksums($pdo);
+
         $files = glob(self::migrationsDir() . '/*.sql') ?: [];
         sort($files);
 
+        $applied = [];
         foreach ($files as $file) {
+            $name = basename($file);
+            $checksum = self::checksum($file);
+
+            if (!$reapplyAll && ($recorded[$name] ?? null) === $checksum) {
+                continue;
+            }
+
             self::applyFile($pdo, $file);
+            self::record($pdo, $name, $checksum);
+            $applied[] = $name;
         }
 
         // E1.14 verification fix: migration 041's legacy customFields JSON
         // backfill moved out of SQL (see that file's own comment — it needed
         // JSON_TABLE/JSON_ARRAYAGG, unavailable on this environment's MariaDB).
-        // Runs after every .sql file so `form_fields` always already exists.
+        // Runs after every applyAll() call, ledger or not, so `form_fields`
+        // always already exists and any newly added field is backfilled.
         CustomFormFieldsBackfill::run($pdo);
 
-        return array_map('basename', $files);
+        return $applied;
+    }
+
+    private static function ensureLedger(PDO $pdo): void
+    {
+        $pdo->exec(
+            'CREATE TABLE IF NOT EXISTS ' . self::LEDGER_TABLE . ' ('
+            . 'filename VARCHAR(191) NOT NULL PRIMARY KEY, '
+            . 'checksum CHAR(64) NOT NULL, '
+            . 'applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP'
+            . ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+        );
+    }
+
+    /** @return array<string, string> filename => checksum */
+    private static function recordedChecksums(PDO $pdo): array
+    {
+        $stmt = $pdo->query('SELECT filename, checksum FROM ' . self::LEDGER_TABLE);
+
+        /** @var array<string, string> $rows */
+        $rows = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+
+        return $rows;
+    }
+
+    /** sha256 of the file's contents with "\r\n" normalised to "\n", so line endings never change the checksum. */
+    private static function checksum(string $file): string
+    {
+        $contents = (string) file_get_contents($file);
+
+        return hash('sha256', str_replace("\r\n", "\n", $contents));
+    }
+
+    private static function record(PDO $pdo, string $filename, string $checksum): void
+    {
+        // REPLACE INTO, not ON DUPLICATE KEY UPDATE: the VALUES() alias form is deprecated
+        // on MySQL 8.4, and MariaDB does not support the "AS new" alias replacement either.
+        $stmt = $pdo->prepare('REPLACE INTO ' . self::LEDGER_TABLE . ' (filename, checksum) VALUES (?, ?)');
+        $stmt->execute([$filename, $checksum]);
     }
 
     /**
@@ -63,34 +135,163 @@ final class Migrator
     private const PHP_STEP_PATTERN = '/^[ \t]*--[ \t]*@php:[ \t]*([A-Za-z0-9_]+::[A-Za-z0-9_]+)[ \t\r]*$/m';
 
     /**
-     * Applies one migration script, running any `-- @php:` step it declares at the
-     * point in the file where the marker sits.
+     * A whole line that is nothing but a guard marker: `-- @guard: <kind> <table>.<object>`.
+     * Applies to exactly the next SQL statement in the file.
+     */
+    private const GUARD_PATTERN
+        = '/^[ \t]*--[ \t]*@guard:[ \t]*([a-z-]+)[ \t]+([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)[ \t\r]*$/m';
+
+    /** Anything starting like a guard but not matching GUARD_PATTERN is an error, never a silent comment. */
+    private const GUARD_PREFIX_PATTERN = '/^[ \t]*--[ \t]*@guard\b/m';
+
+    /**
+     * Parses a migration file's contents into an ordered list of steps: PHP steps
+     * (`-- @php:`) and SQL statements, each optionally carrying the guard that must
+     * hold (evaluated by {@see MigrationGuard}) for it to run.
      *
-     * The marker exists because a few backfills cannot be written in SQL that this
-     * environment's MariaDB supports (see QrCodeBackfill), and yet have to run
+     * @return list<array{type: 'php', step: string}
+     *   |array{type: 'sql', statement: string, guard: array{kind: string, table: string, object: string}|null}>
+     * @throws \InvalidArgumentException on a malformed guard line, an unknown guard kind,
+     *     or a guard marker not immediately followed by a SQL statement
+     */
+    public static function parse(string $sql): array
+    {
+        $prefixCount = preg_match_all(self::GUARD_PREFIX_PATTERN, $sql);
+        $guardCount = preg_match_all(self::GUARD_PATTERN, $sql);
+        if ($prefixCount !== $guardCount) {
+            throw new \InvalidArgumentException(
+                'Malformed "-- @guard:" marker (expected "-- @guard: <kind> <table>.<object>")'
+            );
+        }
+
+        $steps = [];
+        $chunks = preg_split(self::PHP_STEP_PATTERN, $sql, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [$sql];
+
+        foreach ($chunks as $offset => $chunk) {
+            if ($offset % 2 === 1) {
+                $steps[] = ['type' => 'php', 'step' => $chunk];
+                continue;
+            }
+
+            foreach (self::parseGuardedSql($chunk) as $step) {
+                $steps[] = $step;
+            }
+        }
+
+        return $steps;
+    }
+
+    /**
+     * @return list<array{type: 'sql', statement: string, guard: array{kind: string, table: string, object: string}|null}>
+     */
+    private static function parseGuardedSql(string $sql): array
+    {
+        // PREG_SPLIT_DELIM_CAPTURE with 3 capture groups yields groups of 4:
+        // [sql, kind, table, object, sql, kind, table, object, sql, ...].
+        $parts = preg_split(self::GUARD_PATTERN, $sql, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [$sql];
+
+        $steps = [];
+        $pendingGuard = null;
+        $pendingKind = null;
+        $pendingTable = null;
+
+        foreach ($parts as $index => $part) {
+            switch ($index % 4) {
+                case 1:
+                    $pendingKind = $part;
+                    continue 2;
+                case 2:
+                    $pendingTable = $part;
+                    continue 2;
+                case 3:
+                    if (!in_array($pendingKind, MigrationGuard::KINDS, true)) {
+                        throw new \InvalidArgumentException(sprintf(
+                            'Unknown guard kind "%s" (known: %s)',
+                            (string) $pendingKind,
+                            implode(', ', MigrationGuard::KINDS)
+                        ));
+                    }
+                    $pendingGuard = ['kind' => $pendingKind, 'table' => $pendingTable, 'object' => $part];
+                    continue 2;
+            }
+
+            $statements = self::statements($part);
+
+            if ($pendingGuard !== null) {
+                if ($statements === []) {
+                    throw new \InvalidArgumentException(sprintf(
+                        'Guard "-- @guard: %s %s.%s" is not followed by a SQL statement',
+                        $pendingGuard['kind'],
+                        $pendingGuard['table'],
+                        $pendingGuard['object']
+                    ));
+                }
+
+                $first = array_shift($statements);
+                $steps[] = ['type' => 'sql', 'statement' => $first, 'guard' => $pendingGuard];
+                $pendingGuard = null;
+            }
+
+            foreach ($statements as $statement) {
+                $steps[] = ['type' => 'sql', 'statement' => $statement, 'guard' => null];
+            }
+        }
+
+        return $steps;
+    }
+
+    /**
+     * Applies one migration script, running any `-- @php:` step and evaluating any
+     * `-- @guard:` marker at the point in the file where it sits.
+     *
+     * The `-- @php:` marker exists because a few backfills cannot be written in SQL that
+     * this environment's MariaDB supports (see QrCodeBackfill), and yet have to run
      * *between* two DDL statements of the same migration — after the column is added,
      * before it is made NOT NULL. Keeping that ordering inside the .sql file is the
      * point: it sits next to the statements it is ordered against, and a single-file
      * apply (which several tests use) behaves exactly like a full run.
-     *
-     * A marker must sit between complete statements, on a line of its own. Placed
-     * mid-statement it splits that statement in two and the migration fails — loudly,
-     * which is the intended outcome for a malformed marker.
      */
     public static function applyFile(PDO $pdo, string $file): void
     {
         $sql = (string) file_get_contents($file);
 
-        // Odd offsets are the captured step names, even offsets the SQL around them.
-        $chunks = preg_split(self::PHP_STEP_PATTERN, $sql, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [$sql];
+        try {
+            $steps = self::parse($sql);
+        } catch (\InvalidArgumentException $e) {
+            throw new \RuntimeException(
+                sprintf('Migration failed in %s: %s', basename($file), $e->getMessage()),
+                0,
+                $e
+            );
+        }
 
-        foreach ($chunks as $offset => $chunk) {
-            if ($offset % 2 === 1) {
-                self::applyPhpStep($pdo, $file, $chunk);
+        foreach ($steps as $step) {
+            if ($step['type'] === 'php') {
+                self::applyPhpStep($pdo, $file, $step['step']);
                 continue;
             }
 
-            self::applyStatements($pdo, $file, $chunk);
+            $guard = $step['guard'];
+            if ($guard !== null && !MigrationGuard::holds($pdo, $guard['kind'], $guard['table'], $guard['object'])) {
+                continue;
+            }
+
+            try {
+                $pdo->exec($step['statement']);
+            } catch (\PDOException $e) {
+                // Without this, a broken statement aborts the whole migration
+                // run silently mid-file (no per-file try/catch upstream) and
+                // every caller sees only the raw driver message, with no clue
+                // which file/statement caused it — exactly what let migration
+                // 041's JSON_TABLE statement block 042 for a long time before
+                // anyone noticed (E1.14 verification fix).
+                throw new \RuntimeException(sprintf(
+                    'Migration failed in %s: %s (statement: %s)',
+                    basename($file),
+                    $e->getMessage(),
+                    self::truncate($step['statement'])
+                ), 0, $e);
+            }
         }
     }
 
@@ -115,28 +316,6 @@ final class Migrator
                 $step,
                 $e->getMessage()
             ), 0, $e);
-        }
-    }
-
-    private static function applyStatements(PDO $pdo, string $file, string $sql): void
-    {
-        foreach (self::statements($sql) as $statement) {
-            try {
-                $pdo->exec($statement);
-            } catch (\PDOException $e) {
-                // Without this, a broken statement aborts the whole migration
-                // run silently mid-file (no ledger, no per-file try/catch
-                // upstream) and every caller sees only the raw driver message,
-                // with no clue which file/statement caused it — exactly what
-                // let migration 041's JSON_TABLE statement block 042 for a
-                // long time before anyone noticed (E1.14 verification fix).
-                throw new \RuntimeException(sprintf(
-                    'Migration failed in %s: %s (statement: %s)',
-                    basename($file),
-                    $e->getMessage(),
-                    self::truncate($statement)
-                ), 0, $e);
-            }
         }
     }
 
@@ -228,8 +407,8 @@ final class Migrator
     }
 
     /**
-     * Drops every base table in the current database. Callers are responsible for
-     * making sure this is not pointed at anything that matters.
+     * Drops every base table in the current database, including the ledger, so a fresh
+     * `seed --fresh` re-applies (and re-records) every migration.
      */
     public static function dropAllTables(PDO $pdo): int
     {

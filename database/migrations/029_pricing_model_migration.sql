@@ -17,8 +17,10 @@
 -- JSON w `price_tiers` już obsługuje dowolne pola na próg (endDate,
 -- participantLimit) — nic tam nie trzeba zmieniać, znikają tylko kolumny
 -- trybu.
-ALTER TABLE event_distances DROP COLUMN IF EXISTS price_tier_mode;
-ALTER TABLE event_distances DROP COLUMN IF EXISTS participant_count_type;
+-- @guard: column-exists event_distances.price_tier_mode
+ALTER TABLE event_distances DROP COLUMN price_tier_mode;
+-- @guard: column-exists event_distances.participant_count_type
+ALTER TABLE event_distances DROP COLUMN participant_count_type;
 
 -- ── 2. `office_price` staje się Wariantem opłaty ────────────────────────────
 -- Wariant oznaczony jako dostępny wyłącznie przy zapisie w biurze zawodów i
@@ -55,16 +57,19 @@ PREPARE office_variant_stmt FROM @backfill_office_variant_sql;
 EXECUTE office_variant_stmt;
 DEALLOCATE PREPARE office_variant_stmt;
 
-ALTER TABLE event_distances DROP COLUMN IF EXISTS office_price;
+-- @guard: column-exists event_distances.office_price
+ALTER TABLE event_distances DROP COLUMN office_price;
 
 -- ── 3. `insurance_settings` z jednego wiersza na katalog wariantów ──────────
 -- Admin definiuje warianty NNW (nazwa + własne parametry składki), organizator
 -- wybiera oferowane na wydarzeniu. Istniejący jeden wiersz dostaje nazwę i
 -- zostaje pierwszą pozycją katalogu — nic z niego nie ginie.
-ALTER TABLE insurance_settings
-  ADD COLUMN IF NOT EXISTS name VARCHAR(180) NOT NULL DEFAULT '' AFTER id,
-  ADD COLUMN IF NOT EXISTS active TINYINT(1) NOT NULL DEFAULT 1 AFTER info_html,
-  ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 0 AFTER active;
+-- @guard: column-missing insurance_settings.name
+ALTER TABLE insurance_settings ADD COLUMN name VARCHAR(180) NOT NULL DEFAULT '' AFTER id;
+-- @guard: column-missing insurance_settings.active
+ALTER TABLE insurance_settings ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1 AFTER info_html;
+-- @guard: column-missing insurance_settings.sort_order
+ALTER TABLE insurance_settings ADD COLUMN sort_order INT NOT NULL DEFAULT 0 AFTER active;
 
 UPDATE insurance_settings SET name = 'Podstawowe' WHERE name = '';
 
@@ -142,6 +147,9 @@ PREPARE insurance_stmt FROM @backfill_insurance_sql;
 EXECUTE insurance_stmt;
 DEALLOCATE PREPARE insurance_stmt;
 
-ALTER TABLE registrations DROP COLUMN IF EXISTS price_paid;
-ALTER TABLE registrations DROP COLUMN IF EXISTS discount_amount;
-ALTER TABLE registrations DROP COLUMN IF EXISTS insurance_paid;
+-- @guard: column-exists registrations.price_paid
+ALTER TABLE registrations DROP COLUMN price_paid;
+-- @guard: column-exists registrations.discount_amount
+ALTER TABLE registrations DROP COLUMN discount_amount;
+-- @guard: column-exists registrations.insurance_paid
+ALTER TABLE registrations DROP COLUMN insurance_paid;

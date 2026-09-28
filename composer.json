@@ -39,6 +39,7 @@
             "php -l bin/seed.php",
             "php -l bin/prune-demo.php",
             "php -l src/Database/Migrator.php",
+            "php -l src/Database/MigrationGuard.php",
             "php -l src/Database/CustomFormFieldsBackfill.php",
             "php -l src/Database/QrCodeBackfill.php",
             "php -l src/Database/CompetitorProfileBackfill.php",
@@ -95,6 +96,7 @@
         "seed:fresh": "php bin/seed.php --fresh",
         "seed:purge": "php bin/seed.php --purge",
         "prune-demo": "php bin/prune-demo.php --dry-run",
+        "test:prepare": "php tests/bin/test-db.php prepare",
         "stan": "phpstan analyse --no-progress",
         "cs": "phpcs"
     }

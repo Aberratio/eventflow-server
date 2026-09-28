@@ -22,6 +22,7 @@
 -- Migracje nie maja ledgera i uruchamiaja sie przy kazdym starcie (patrz
 -- Migrator.php) - ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtorzenia.
 
-ALTER TABLE events
-  ADD COLUMN IF NOT EXISTS bz_integration_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER insurance_option,
-  ADD COLUMN IF NOT EXISTS bz_organization_token VARCHAR(255) NULL AFTER bz_integration_enabled;
+-- @guard: column-missing events.bz_integration_enabled
+ALTER TABLE events ADD COLUMN bz_integration_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER insurance_option;
+-- @guard: column-missing events.bz_organization_token
+ALTER TABLE events ADD COLUMN bz_organization_token VARCHAR(255) NULL AFTER bz_integration_enabled;

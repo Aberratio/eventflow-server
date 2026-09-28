@@ -11,5 +11,6 @@
 -- boolean column. No column is required here for backward compatibility:
 -- an order that never sends invoiceData persists NULL and behaves exactly
 -- as before E5.5.
+-- @guard: column-missing shop_orders.invoice_data
 ALTER TABLE shop_orders
     ADD COLUMN invoice_data JSON DEFAULT NULL AFTER shipping_address;

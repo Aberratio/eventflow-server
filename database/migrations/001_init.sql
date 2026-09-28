@@ -19,9 +19,9 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE users
-  MODIFY role ENUM('participant','organizer','moderator','admin','superadmin') NOT NULL DEFAULT 'participant',
-  ADD COLUMN IF NOT EXISTS event_limit INT NOT NULL DEFAULT 0 AFTER status;
+ALTER TABLE users MODIFY role ENUM('participant','organizer','moderator','admin','superadmin') NOT NULL DEFAULT 'participant';
+-- @guard: column-missing users.event_limit
+ALTER TABLE users ADD COLUMN event_limit INT NOT NULL DEFAULT 0 AFTER status;
 
 CREATE TABLE IF NOT EXISTS series (
   id VARCHAR(36) PRIMARY KEY,
@@ -99,10 +99,11 @@ CREATE TABLE IF NOT EXISTS events (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- E1.1 (031_e11_event_lifecycle.sql) eventually drops `events.status` in favour of
--- `publication_status`/`visibility`/`is_test`/`deleted_at`. Migrator replays every
--- file on each run with no ledger (see Migrator.php docblock), so once that has
--- happened once, this MODIFY (and every other `status`-touching statement below,
--- down to the events section of this file) must become a no-op instead of failing.
+-- `publication_status`/`visibility`/`is_test`/`deleted_at`. This file must stay
+-- idempotent regardless of the ledger (bootstrap on an existing DB, crash recovery,
+-- an edited file all replay it — see Migrator.php docblock), so once that column is
+-- gone this MODIFY (and every other `status`-touching statement below, down to the
+-- events section of this file) must become a no-op instead of failing.
 SET @events_status_still_present = (
   SELECT COUNT(*) FROM information_schema.columns
   WHERE table_schema = DATABASE() AND table_name = 'events' AND column_name = 'status'
@@ -117,14 +118,20 @@ PREPARE modify_events_status_wide_stmt FROM @modify_events_status_wide_sql;
 EXECUTE modify_events_status_wide_stmt;
 DEALLOCATE PREPARE modify_events_status_wide_stmt;
 
-ALTER TABLE events
-  ADD COLUMN IF NOT EXISTS approved_at VARCHAR(64) NULL,
-  ADD COLUMN IF NOT EXISTS approved_by VARCHAR(36) NULL,
-  ADD COLUMN IF NOT EXISTS published_at VARCHAR(64) NULL,
-  ADD COLUMN IF NOT EXISTS published_by VARCHAR(36) NULL,
-  ADD COLUMN IF NOT EXISTS event_credit_kind ENUM('standard','virtual','timing') NOT NULL DEFAULT 'standard' AFTER is_virtual,
-  ADD COLUMN IF NOT EXISTS organizer_logo_shape ENUM('square','portrait','landscape') NOT NULL DEFAULT 'square' AFTER organizer_logo_url,
-  ADD COLUMN IF NOT EXISTS created_by VARCHAR(36) NULL;
+-- @guard: column-missing events.approved_at
+ALTER TABLE events ADD COLUMN approved_at VARCHAR(64) NULL;
+-- @guard: column-missing events.approved_by
+ALTER TABLE events ADD COLUMN approved_by VARCHAR(36) NULL;
+-- @guard: column-missing events.published_at
+ALTER TABLE events ADD COLUMN published_at VARCHAR(64) NULL;
+-- @guard: column-missing events.published_by
+ALTER TABLE events ADD COLUMN published_by VARCHAR(36) NULL;
+-- @guard: column-missing events.event_credit_kind
+ALTER TABLE events ADD COLUMN event_credit_kind ENUM('standard','virtual','timing') NOT NULL DEFAULT 'standard' AFTER is_virtual;
+-- @guard: column-missing events.organizer_logo_shape
+ALTER TABLE events ADD COLUMN organizer_logo_shape ENUM('square','portrait','landscape') NOT NULL DEFAULT 'square' AFTER organizer_logo_url;
+-- @guard: column-missing events.created_by
+ALTER TABLE events ADD COLUMN created_by VARCHAR(36) NULL;
 
 CREATE TABLE IF NOT EXISTS organizer_event_credit_batches (
   id VARCHAR(36) PRIMARY KEY,
@@ -139,8 +146,8 @@ CREATE TABLE IF NOT EXISTS organizer_event_credit_batches (
   INDEX idx_event_credit_batches_organizer (organizer_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE organizer_event_credit_batches
-  ADD COLUMN IF NOT EXISTS event_credit_kind ENUM('standard','virtual','timing') NOT NULL DEFAULT 'standard' AFTER organizer_id;
+-- @guard: column-missing organizer_event_credit_batches.event_credit_kind
+ALTER TABLE organizer_event_credit_batches ADD COLUMN event_credit_kind ENUM('standard','virtual','timing') NOT NULL DEFAULT 'standard' AFTER organizer_id;
 
 CREATE TABLE IF NOT EXISTS organizer_event_credit_usages (
   id VARCHAR(36) PRIMARY KEY,
@@ -153,15 +160,15 @@ CREATE TABLE IF NOT EXISTS organizer_event_credit_usages (
   INDEX idx_event_credit_usages_batch (batch_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE organizer_event_credit_usages
-  ADD COLUMN IF NOT EXISTS event_credit_kind ENUM('standard','virtual','timing') NOT NULL DEFAULT 'standard' AFTER batch_id;
+-- @guard: column-missing organizer_event_credit_usages.event_credit_kind
+ALTER TABLE organizer_event_credit_usages ADD COLUMN event_credit_kind ENUM('standard','virtual','timing') NOT NULL DEFAULT 'standard' AFTER batch_id;
 
 -- E1.1 (031_e11_event_lifecycle.sql) drops `events.status` entirely in favour of
 -- `publication_status` / `visibility` / `is_test` / `deleted_at`. This block predates
 -- that and is guarded the same way 028_e02_remove_tickets.sql guards its own
--- reference to a table a later migration removes — Migrator has no ledger and
--- replays every file on each run (see Migrator.php docblock), so after the first
--- full pass this column is gone and the unconditional form below would fail.
+-- reference to a table a later migration removes — this file must stay idempotent
+-- regardless of the ledger (see Migrator.php docblock), so once this column is gone
+-- the unconditional form below would fail without this guard.
 SET @events_status_still_present = (
   SELECT COUNT(*) FROM information_schema.columns
   WHERE table_schema = DATABASE() AND table_name = 'events' AND column_name = 'status'
@@ -605,16 +612,27 @@ CREATE TABLE IF NOT EXISTS password_resets (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Extend event_merchandise with shop-product-compatible fields
-ALTER TABLE event_merchandise
-  ADD COLUMN IF NOT EXISTS images JSON NULL AFTER image_url,
-  ADD COLUMN IF NOT EXISTS original_price DECIMAL(10,2) NULL AFTER price,
-  ADD COLUMN IF NOT EXISTS brand VARCHAR(180) NULL AFTER description,
-  ADD COLUMN IF NOT EXISTS description_html MEDIUMTEXT NULL AFTER brand,
-  ADD COLUMN IF NOT EXISTS documents JSON NULL AFTER description_html,
-  ADD COLUMN IF NOT EXISTS quantity_mode ENUM('any','max','one') NOT NULL DEFAULT 'any' AFTER sort_order,
-  ADD COLUMN IF NOT EXISTS quantity_max INT NULL AFTER quantity_mode,
-  ADD COLUMN IF NOT EXISTS sale_from VARCHAR(64) NULL AFTER quantity_max,
-  ADD COLUMN IF NOT EXISTS sale_to VARCHAR(64) NULL AFTER sale_from,
-  ADD COLUMN IF NOT EXISTS stock_count INT NULL AFTER available,
-  ADD COLUMN IF NOT EXISTS distance_ids JSON NULL AFTER quantity_max,
-  ADD COLUMN IF NOT EXISTS shop_product_id VARCHAR(36) NULL AFTER distance_ids;
+-- @guard: column-missing event_merchandise.images
+ALTER TABLE event_merchandise ADD COLUMN images JSON NULL AFTER image_url;
+-- @guard: column-missing event_merchandise.original_price
+ALTER TABLE event_merchandise ADD COLUMN original_price DECIMAL(10,2) NULL AFTER price;
+-- @guard: column-missing event_merchandise.brand
+ALTER TABLE event_merchandise ADD COLUMN brand VARCHAR(180) NULL AFTER description;
+-- @guard: column-missing event_merchandise.description_html
+ALTER TABLE event_merchandise ADD COLUMN description_html MEDIUMTEXT NULL AFTER brand;
+-- @guard: column-missing event_merchandise.documents
+ALTER TABLE event_merchandise ADD COLUMN documents JSON NULL AFTER description_html;
+-- @guard: column-missing event_merchandise.quantity_mode
+ALTER TABLE event_merchandise ADD COLUMN quantity_mode ENUM('any','max','one') NOT NULL DEFAULT 'any' AFTER sort_order;
+-- @guard: column-missing event_merchandise.quantity_max
+ALTER TABLE event_merchandise ADD COLUMN quantity_max INT NULL AFTER quantity_mode;
+-- @guard: column-missing event_merchandise.sale_from
+ALTER TABLE event_merchandise ADD COLUMN sale_from VARCHAR(64) NULL AFTER quantity_max;
+-- @guard: column-missing event_merchandise.sale_to
+ALTER TABLE event_merchandise ADD COLUMN sale_to VARCHAR(64) NULL AFTER sale_from;
+-- @guard: column-missing event_merchandise.stock_count
+ALTER TABLE event_merchandise ADD COLUMN stock_count INT NULL AFTER available;
+-- @guard: column-missing event_merchandise.distance_ids
+ALTER TABLE event_merchandise ADD COLUMN distance_ids JSON NULL AFTER quantity_max;
+-- @guard: column-missing event_merchandise.shop_product_id
+ALTER TABLE event_merchandise ADD COLUMN shop_product_id VARCHAR(36) NULL AFTER distance_ids;

@@ -20,8 +20,8 @@
 -- losowy i pasuje do formatu BZ. Bez tego backfillu punkt 2 kryterium
 -- akceptacji ("nigdy nie ma Zapisu bez kodu") byłby złamany dla każdego Zapisu
 -- utworzonego przed tym ticketem.
-ALTER TABLE registrations
-  ADD COLUMN IF NOT EXISTS qr_code VARCHAR(52) NULL AFTER bib_number;
+-- @guard: column-missing registrations.qr_code
+ALTER TABLE registrations ADD COLUMN qr_code VARCHAR(52) NULL AFTER bib_number;
 
 -- Backfill liczony w PHP, nie w SQL — pierwotnie stało tu
 -- `UPDATE registrations SET qr_code = CONCAT('pqr_', LOWER(HEX(RANDOM_BYTES(24))))`,
@@ -44,5 +44,5 @@ ALTER TABLE registrations
 -- jeden Zapis, jeden kod). Ta kolumna żyje w bazie platformy, nie BZ — kolumna
 -- `identity_code` w bazie BZ (bez tego ograniczenia) to zupełnie inny byt i inny
 -- system, poza zakresem tego ticketu.
-ALTER TABLE registrations
-  ADD UNIQUE INDEX IF NOT EXISTS uniq_registrations_qr_code (qr_code);
+-- @guard: index-missing registrations.uniq_registrations_qr_code
+ALTER TABLE registrations ADD UNIQUE INDEX uniq_registrations_qr_code (qr_code);

@@ -25,16 +25,19 @@
 -- "Pokaż informację o biegu wirtualnym" — sprawdzone: nieobecne w schemacie tego
 -- repo (pole tylko-kliencie), nic do usunięcia po stronie backendu.
 
-ALTER TABLE events
-  ADD COLUMN IF NOT EXISTS publication_status ENUM('draft','submitted','approved','published','finished','rejected','cancelled') NOT NULL DEFAULT 'draft',
-  ADD COLUMN IF NOT EXISTS visibility ENUM('public','private') NOT NULL DEFAULT 'public',
-  ADD COLUMN IF NOT EXISTS is_test TINYINT(1) NOT NULL DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS deleted_at VARCHAR(64) NULL;
+-- @guard: column-missing events.publication_status
+ALTER TABLE events ADD COLUMN publication_status ENUM('draft','submitted','approved','published','finished','rejected','cancelled') NOT NULL DEFAULT 'draft';
+-- @guard: column-missing events.visibility
+ALTER TABLE events ADD COLUMN visibility ENUM('public','private') NOT NULL DEFAULT 'public';
+-- @guard: column-missing events.is_test
+ALTER TABLE events ADD COLUMN is_test TINYINT(1) NOT NULL DEFAULT 0;
+-- @guard: column-missing events.deleted_at
+ALTER TABLE events ADD COLUMN deleted_at VARCHAR(64) NULL;
 
--- Backfill z dawnego `status`, tylko dopóki ta kolumna jeszcze istnieje. Migrator
--- uruchamia wszystkie pliki przy każdym starcie (brak ledgera — patrz
--- 028_e02_remove_tickets.sql), więc po pierwszym przebiegu `status` już nie ma —
--- stąd sprawdzenie przez information_schema + dynamiczne SQL, jak w 028.
+-- Backfill z dawnego `status`, tylko dopóki ta kolumna jeszcze istnieje. Ten plik
+-- musi zostać idempotentny niezależnie od ledgera migracji (patrz
+-- 028_e02_remove_tickets.sql i Migrator.php), więc po pierwszym przebiegu `status`
+-- już nie ma — stąd sprawdzenie przez information_schema + dynamiczne SQL, jak w 028.
 SET @events_status_exists = (
   SELECT COUNT(*) FROM information_schema.columns
   WHERE table_schema = DATABASE() AND table_name = 'events' AND column_name = 'status'
@@ -72,9 +75,11 @@ DEALLOCATE PREPARE backfill_deleted_at_stmt;
 UPDATE events SET visibility = 'private' WHERE is_private = 1 AND visibility <> 'private';
 
 -- Stary indeks filtrujący po `status` musi zniknąć przed usunięciem kolumny.
-ALTER TABLE events DROP INDEX IF EXISTS idx_events_filters;
+-- @guard: index-exists events.idx_events_filters
+ALTER TABLE events DROP INDEX idx_events_filters;
 
-ALTER TABLE events DROP COLUMN IF EXISTS status;
+-- @guard: column-exists events.status
+ALTER TABLE events DROP COLUMN status;
 
-ALTER TABLE events
-  ADD INDEX IF NOT EXISTS idx_events_filters (discipline, city, publication_status, registration_status);
+-- @guard: index-missing events.idx_events_filters
+ALTER TABLE events ADD INDEX idx_events_filters (discipline, city, publication_status, registration_status);

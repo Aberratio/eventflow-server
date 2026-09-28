@@ -29,5 +29,5 @@
 -- Migracje nie maja ledgera i uruchamiaja sie przy kazdym starcie (patrz
 -- Migrator.php) - ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtorzenia.
 
-ALTER TABLE event_distances
-  ADD COLUMN IF NOT EXISTS team_aggregation_rule ENUM('sum','best','average') NULL AFTER relay_team_completion_deadline;
+-- @guard: column-missing event_distances.team_aggregation_rule
+ALTER TABLE event_distances ADD COLUMN team_aggregation_rule ENUM('sum','best','average') NULL AFTER relay_team_completion_deadline;

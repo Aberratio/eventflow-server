@@ -29,5 +29,5 @@ SET d.registered_count = (
 -- event_distances, plus an affected-rows-guarded increment) — an index on the
 -- population predicate keeps the one-time backfill above and any future manual
 -- reconciliation query fast on large registrations tables.
-ALTER TABLE registrations
-  ADD INDEX IF NOT EXISTS idx_registrations_distance_status (distance_id, status);
+-- @guard: index-missing registrations.idx_registrations_distance_status
+ALTER TABLE registrations ADD INDEX idx_registrations_distance_status (distance_id, status);

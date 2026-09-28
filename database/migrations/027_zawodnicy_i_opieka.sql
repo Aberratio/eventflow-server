@@ -61,19 +61,20 @@ WHERE NOT EXISTS (
   SELECT 1 FROM care_relations cr WHERE cr.konto_id = pa.grantee_id AND cr.zawodnik_id = c.id
 );
 
--- Uwaga: participant_authorizations celowo NIE jest tu usuwana. Migrator uruchamia
--- wszystkie pliki przy każdym starcie (brak osobnego ledgera migracji) — DROP TABLE
+-- Uwaga: participant_authorizations celowo NIE jest tu usuwana. Ten plik musi
+-- zostać idempotentny niezależnie od ledgera migracji (bootstrap na istniejącej
+-- bazie, odzyskiwanie po awarii, edycja pliku — patrz Migrator.php) — DROP TABLE
 -- w tym samym pliku zepsułby powyższy backfill przy kolejnym uruchomieniu, bo
 -- kolejny przebieg czytałby z tabeli, której już nie ma. Aplikacja od E0.1 nie
 -- korzysta już z tej tabeli; jej usunięcie zostawiamy osobnemu ticketowi porządkowemu.
 
 -- registrations: Zawodnik jako źródło tożsamości zapisu (identyfikator, nie kopiowana nazwa).
 -- user_name/user_email/user_id zostają jako cache do wyświetlania (Z2).
-ALTER TABLE registrations
-  ADD COLUMN IF NOT EXISTS competitor_id VARCHAR(36) NULL AFTER user_id;
+-- @guard: column-missing registrations.competitor_id
+ALTER TABLE registrations ADD COLUMN competitor_id VARCHAR(36) NULL AFTER user_id;
 
-ALTER TABLE registrations
-  ADD INDEX IF NOT EXISTS idx_reg_competitor (competitor_id);
+-- @guard: index-missing registrations.idx_reg_competitor
+ALTER TABLE registrations ADD INDEX idx_reg_competitor (competitor_id);
 
 UPDATE registrations r
 INNER JOIN competitors c ON c.user_id = r.user_id

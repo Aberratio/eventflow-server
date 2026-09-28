@@ -25,9 +25,10 @@ ALTER TABLE results MODIFY COLUMN status ENUM('finished','dnf','dns','dsq') NOT 
 
 ALTER TABLE results MODIFY COLUMN time_in_seconds DECIMAL(10,2) NOT NULL;
 
-ALTER TABLE results
-  ADD COLUMN IF NOT EXISTS net_time VARCHAR(32) NULL AFTER time,
-  ADD COLUMN IF NOT EXISTS net_time_in_seconds DECIMAL(10,2) NULL AFTER time_in_seconds;
+-- @guard: column-missing results.net_time
+ALTER TABLE results ADD COLUMN net_time VARCHAR(32) NULL AFTER time;
+-- @guard: column-missing results.net_time_in_seconds
+ALTER TABLE results ADD COLUMN net_time_in_seconds DECIMAL(10,2) NULL AFTER time_in_seconds;
 
 CREATE TABLE IF NOT EXISTS result_splits (
   id VARCHAR(36) PRIMARY KEY,

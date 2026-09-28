@@ -18,5 +18,5 @@
 --
 -- Migracje nie mają ledgera i uruchamiają się przy każdym starcie
 -- (Migrator.php) — ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtórzenia.
-ALTER TABLE registrations
-  ADD COLUMN IF NOT EXISTS checked_in_by VARCHAR(255) NULL AFTER checked_in_at;
+-- @guard: column-missing registrations.checked_in_by
+ALTER TABLE registrations ADD COLUMN checked_in_by VARCHAR(255) NULL AFTER checked_in_at;

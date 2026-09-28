@@ -40,5 +40,5 @@ CREATE TABLE IF NOT EXISTS mail_templates (
 -- moderation (reviewEntry()) and result-derived auto-approval (join(), via
 -- syncResultEntries()) — so completion is caught regardless of which path
 -- got the Zawodnik there, without ever double-sending.
-ALTER TABLE challenge_participations
-  ADD COLUMN IF NOT EXISTS completion_notified_at VARCHAR(64) NULL;
+-- @guard: column-missing challenge_participations.completion_notified_at
+ALTER TABLE challenge_participations ADD COLUMN completion_notified_at VARCHAR(64) NULL;

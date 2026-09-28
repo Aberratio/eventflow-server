@@ -22,8 +22,8 @@
 -- ma statusu"; ważność kodu tożsamości jest stała, nie wygasa, żyje dokładnie tak
 -- długo jak wiersz Zawodnika (usunięcie/anonimizacja profilu usuwa kod razem z nim,
 -- bez osobnego mechanizmu do zbudowania teraz).
-ALTER TABLE competitors
-  ADD COLUMN IF NOT EXISTS identity_code VARCHAR(52) NULL AFTER club;
+-- @guard: column-missing competitors.identity_code
+ALTER TABLE competitors ADD COLUMN identity_code VARCHAR(52) NULL AFTER club;
 
 -- Backfill w PHP, nie w SQL — mirror 039: `RANDOM_BYTES()` istnieje dopiero od
 -- MariaDB 11.3 (to funkcja MySQL 8.0), a ta instalacja to 10.4, produkcja 10.6.
@@ -37,5 +37,5 @@ ALTER TABLE competitors
 -- Unikalne per Zawodnik (jeden aktywny kod na Zawodnika w danym momencie) — rotacja
 -- (spec §2, "Rotacja na żądanie") nadpisuje tę samą kolumnę, bez historii starych
 -- kodów (świadomie: unieważnienie = po prostu już nie ma go nigdzie w bazie).
-ALTER TABLE competitors
-  ADD UNIQUE INDEX IF NOT EXISTS uniq_competitors_identity_code (identity_code);
+-- @guard: index-missing competitors.uniq_competitors_identity_code
+ALTER TABLE competitors ADD UNIQUE INDEX uniq_competitors_identity_code (identity_code);

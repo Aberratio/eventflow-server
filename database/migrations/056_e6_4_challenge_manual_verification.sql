@@ -15,8 +15,8 @@
 -- dedicated createExternal() enforces that by construction (it never accepts
 -- a `distances` payload).
 --
--- Migrations have no ledger and run on every boot (see Migrator.php) —
--- ADD COLUMN IF NOT EXISTS is safe to repeat.
+-- Every migration file must stay idempotent regardless of the ledger (see
+-- Migrator.php) — the guard above makes ADD COLUMN safe to repeat.
 
-ALTER TABLE events
-  ADD COLUMN IF NOT EXISTS is_external TINYINT(1) NOT NULL DEFAULT 0 AFTER is_test;
+-- @guard: column-missing events.is_external
+ALTER TABLE events ADD COLUMN is_external TINYINT(1) NOT NULL DEFAULT 0 AFTER is_test;

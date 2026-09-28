@@ -24,5 +24,5 @@
 -- zmian zachowuje dzisiejszą, niezależną wycenę każdej istniejącej i nowo
 -- tworzonej Drużyny sztafetowej, dopóki organizator świadomie nie przełączy
 -- jej na 'per_team'.
-ALTER TABLE event_distances
-  ADD COLUMN IF NOT EXISTS team_pricing_mode ENUM('per_person','per_team') NOT NULL DEFAULT 'per_person' AFTER relay_team_completion_deadline;
+-- @guard: column-missing event_distances.team_pricing_mode
+ALTER TABLE event_distances ADD COLUMN team_pricing_mode ENUM('per_person','per_team') NOT NULL DEFAULT 'per_person' AFTER relay_team_completion_deadline;

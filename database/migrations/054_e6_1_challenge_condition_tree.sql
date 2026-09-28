@@ -82,24 +82,29 @@ CREATE TABLE IF NOT EXISTS challenge_condition_node_sub_challenges (
   CONSTRAINT fk_ccnsc_sub FOREIGN KEY (sub_challenge_id) REFERENCES challenges(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Backfill: every pre-existing challenge gets a single root `event_threshold`
--- node mirroring its current `challenge_events` (N = M = linked count, i.e.
--- "ukończ wszystkie", what the flat model implicitly means today). The root
--- node's id is deliberately set to the challenge's own id (not a fresh
--- UUID(), which would differ on every re-run) — a challenge has exactly one
--- root, so reusing its id as the root node's id keeps this whole block
--- idempotent (re-running finds the row already there via `id = c.id` and
--- skips it) without needing a migrations ledger, matching this project's
--- established re-runnable-migration convention.
+-- Backfill: a challenge with no condition-tree node AT ALL gets a single root
+-- `event_threshold` node mirroring its current `challenge_events` (N = M =
+-- linked count, i.e. "ukończ wszystkie", what the flat model implicitly meant
+-- before this migration). The invariant this keeps (PP.13): a challenge with no
+-- nodes gets the default tree exactly once; an app-created tree (ChallengeRepository
+-- gives its root a fresh UUID, not the challenge's own id) is left alone on every
+-- re-run — `WHERE NOT EXISTS (... n.challenge_id = c.id)` checks for ANY node
+-- belonging to the challenge, not just one with `id = c.id`, so a re-run never adds
+-- a second root next to an app-created one. `challenge_events` rows with no
+-- matching `challenges` row (orphans — no FK ties them together) are simply not
+-- selected by the first INSERT (its FROM is `challenges c`) and are skipped by the
+-- second INSERT's join, instead of throwing `fk_ccne_node`.
 INSERT INTO challenge_condition_nodes (id, challenge_id, parent_node_id, node_type, required_count, sort_order)
 SELECT c.id, c.id, NULL, 'event_threshold', (SELECT COUNT(*) FROM challenge_events ce WHERE ce.challenge_id = c.id), 0
 FROM challenges c
-WHERE NOT EXISTS (SELECT 1 FROM challenge_condition_nodes n WHERE n.id = c.id);
+WHERE NOT EXISTS (SELECT 1 FROM challenge_condition_nodes n WHERE n.challenge_id = c.id);
 
 INSERT INTO challenge_condition_node_events (node_id, event_id, sort_order)
-SELECT ce.challenge_id, ce.event_id, ce.sort_order
+SELECT n.id, ce.event_id, ce.sort_order
 FROM challenge_events ce
+INNER JOIN challenge_condition_nodes n
+  ON n.id = ce.challenge_id AND n.challenge_id = ce.challenge_id
+ AND n.parent_node_id IS NULL AND n.node_type = 'event_threshold'
 WHERE NOT EXISTS (
-  SELECT 1 FROM challenge_condition_node_events cne
-  WHERE cne.node_id = ce.challenge_id AND cne.event_id = ce.event_id
+  SELECT 1 FROM challenge_condition_node_events cne WHERE cne.node_id = n.id AND cne.event_id = ce.event_id
 );

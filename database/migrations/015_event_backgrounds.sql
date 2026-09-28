@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS event_backgrounds (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE events
-  ADD COLUMN IF NOT EXISTS background_id VARCHAR(36) NULL,
-  ADD CONSTRAINT fk_events_background FOREIGN KEY IF NOT EXISTS (background_id) REFERENCES event_backgrounds(id) ON DELETE SET NULL;
+-- @guard: column-missing events.background_id
+ALTER TABLE events ADD COLUMN background_id VARCHAR(36) NULL;
+-- @guard: foreign-key-missing events.fk_events_background
+ALTER TABLE events ADD CONSTRAINT fk_events_background FOREIGN KEY (background_id) REFERENCES event_backgrounds(id) ON DELETE SET NULL;

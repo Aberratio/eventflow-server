@@ -23,5 +23,5 @@
 -- Migracje nie maja ledgera i uruchamiaja sie przy kazdym starcie (patrz
 -- Migrator.php) - ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtorzenia.
 
-ALTER TABLE results
-  ADD COLUMN IF NOT EXISTS publication_status ENUM('preliminary','official') NOT NULL DEFAULT 'preliminary' AFTER status;
+-- @guard: column-missing results.publication_status
+ALTER TABLE results ADD COLUMN publication_status ENUM('preliminary','official') NOT NULL DEFAULT 'preliminary' AFTER status;

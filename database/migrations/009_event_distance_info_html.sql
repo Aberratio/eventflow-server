@@ -1,2 +1,2 @@
-ALTER TABLE event_distances
-  ADD COLUMN IF NOT EXISTS info_html TEXT NULL AFTER office_price;
+-- @guard: column-missing event_distances.info_html
+ALTER TABLE event_distances ADD COLUMN info_html TEXT NULL AFTER office_price;

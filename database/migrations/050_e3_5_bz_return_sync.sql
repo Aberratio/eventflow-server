@@ -44,5 +44,5 @@
 --
 -- Migracje nie mają ledgera i uruchamiają się przy każdym starcie
 -- (Migrator.php) — ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtórzenia.
-ALTER TABLE registrations
-  ADD COLUMN IF NOT EXISTS updated_at VARCHAR(64) NULL AFTER form_snapshot_captured_at;
+-- @guard: column-missing registrations.updated_at
+ALTER TABLE registrations ADD COLUMN updated_at VARCHAR(64) NULL AFTER form_snapshot_captured_at;

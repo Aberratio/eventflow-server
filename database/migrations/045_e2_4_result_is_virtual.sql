@@ -21,5 +21,5 @@
 -- Migracje nie maja ledgera i uruchamiaja sie przy kazdym starcie (patrz
 -- Migrator.php) - ADD COLUMN IF NOT EXISTS jest tu bezpieczne do powtorzenia.
 
-ALTER TABLE results
-  ADD COLUMN IF NOT EXISTS is_virtual TINYINT(1) NOT NULL DEFAULT 0 AFTER status;
+-- @guard: column-missing results.is_virtual
+ALTER TABLE results ADD COLUMN is_virtual TINYINT(1) NOT NULL DEFAULT 0 AFTER status;

@@ -30,6 +30,7 @@
 -- (payment_config, registration_embed, ...) - EventRepository::hydrate()
 -- normalizes a NULL/absent value to [] on read, the same pattern
 -- withPaymentWindowDefaults() already uses for paymentConfig.
-ALTER TABLE events
-  ADD COLUMN IF NOT EXISTS embed_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER registration_embed,
-  ADD COLUMN IF NOT EXISTS embed_allowed_origins JSON NULL AFTER embed_enabled;
+-- @guard: column-missing events.embed_enabled
+ALTER TABLE events ADD COLUMN embed_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER registration_embed;
+-- @guard: column-missing events.embed_allowed_origins
+ALTER TABLE events ADD COLUMN embed_allowed_origins JSON NULL AFTER embed_enabled;

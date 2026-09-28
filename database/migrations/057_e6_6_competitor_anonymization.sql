@@ -26,8 +26,8 @@
 -- in this ticket (plus the trivial 1-2 line wiring into the two existing
 -- public reads noted in the report, once the helper existed anyway).
 --
--- Migrations have no ledger and run on every boot (see Migrator.php) —
--- ADD COLUMN IF NOT EXISTS is safe to repeat.
+-- Every migration file must stay idempotent regardless of the ledger (see
+-- Migrator.php) — the guard above makes ADD COLUMN safe to repeat.
 
-ALTER TABLE competitors
-  ADD COLUMN IF NOT EXISTS is_anonymized TINYINT(1) NOT NULL DEFAULT 0 AFTER identity_code;
+-- @guard: column-missing competitors.is_anonymized
+ALTER TABLE competitors ADD COLUMN is_anonymized TINYINT(1) NOT NULL DEFAULT 0 AFTER identity_code;

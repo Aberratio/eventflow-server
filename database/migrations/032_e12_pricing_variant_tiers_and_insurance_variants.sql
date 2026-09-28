@@ -9,8 +9,8 @@
 -- discountValue), a wydarzenie dostaje tabelę łączącą do katalogu NNW, żeby
 -- organizator mógł wybrać, które warianty globalne oferuje.
 
-ALTER TABLE event_distance_pricing_variants
-  ADD COLUMN IF NOT EXISTS price_tiers JSON NULL AFTER price;
+-- @guard: column-missing event_distance_pricing_variants.price_tiers
+ALTER TABLE event_distance_pricing_variants ADD COLUMN price_tiers JSON NULL AFTER price;
 
 CREATE TABLE IF NOT EXISTS event_insurance_variants (
   event_id VARCHAR(36) NOT NULL,

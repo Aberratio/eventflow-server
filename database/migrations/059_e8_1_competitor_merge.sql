@@ -11,17 +11,20 @@
 -- odsyłacz do przeżywającego), analogicznie do "żaden kod nie ma własnego stanu"
 -- z ticketu 11: tu to Zawodnik (byt), nie kod, dostaje stan, bo scalanie jest
 -- jednorazowym zdarzeniem administracyjnym, nie codzienną operacją.
-ALTER TABLE competitors
-  ADD COLUMN IF NOT EXISTS status ENUM('active', 'scalony') NOT NULL DEFAULT 'active' AFTER identity_code,
-  ADD COLUMN IF NOT EXISTS merged_into_competitor_id VARCHAR(36) NULL AFTER status;
+-- @guard: column-missing competitors.status
+ALTER TABLE competitors ADD COLUMN status ENUM('active', 'scalony') NOT NULL DEFAULT 'active' AFTER identity_code;
+-- @guard: column-missing competitors.merged_into_competitor_id
+ALTER TABLE competitors ADD COLUMN merged_into_competitor_id VARCHAR(36) NULL AFTER status;
 
-ALTER TABLE competitors
-  ADD INDEX IF NOT EXISTS idx_competitors_status (status),
-  ADD INDEX IF NOT EXISTS idx_competitors_merged_into (merged_into_competitor_id);
+-- @guard: index-missing competitors.idx_competitors_status
+ALTER TABLE competitors ADD INDEX idx_competitors_status (status);
+-- @guard: index-missing competitors.idx_competitors_merged_into
+ALTER TABLE competitors ADD INDEX idx_competitors_merged_into (merged_into_competitor_id);
 
 -- FK is intentionally self-referencing with ON DELETE SET NULL, not CASCADE —
 -- competitors are never hard-deleted (E0.1), but if that ever changes, a deleted
 -- survivor must not cascade-delete the archival absorbed row silently.
+-- @guard: foreign-key-missing competitors.fk_competitors_merged_into
 ALTER TABLE competitors
   ADD CONSTRAINT fk_competitors_merged_into
     FOREIGN KEY (merged_into_competitor_id) REFERENCES competitors (id) ON DELETE SET NULL;
@@ -53,5 +56,5 @@ CREATE TABLE IF NOT EXISTS identity_code_aliases (
 -- przetrwa (spec Answer §5). `insertActivityLog()`/`activityLogs()` już istnieją
 -- (E0.8) — reużywamy je, dopisując tylko to jedno nullable pole zamiast wynajdywać
 -- równoległy mechanizm logowania.
-ALTER TABLE activity_logs
-  ADD COLUMN IF NOT EXISTS metadata JSON NULL AFTER target_name;
+-- @guard: column-missing activity_logs.metadata
+ALTER TABLE activity_logs ADD COLUMN metadata JSON NULL AFTER target_name;

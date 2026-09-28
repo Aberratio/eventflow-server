@@ -288,7 +288,10 @@ final class StartListExportTest extends TestCase
             'registrationDeadline' => date('Y-m-d', strtotime('+5 months')),
             'paymentConfig' => ['type' => 'admin_gateway'],
             'distances' => [[
-                'id' => $slug . '-10k',
+                // event_distances.id is VARCHAR(36); slugPrefix + '-event' + '-10k' can run
+                // past that (MariaDB silently truncates locally, MySQL 8's strict sql_mode
+                // rejects the INSERT outright — error 1406), so use a short fixed suffix.
+                'id' => bin2hex(random_bytes(4)) . '-10k',
                 'name' => '10 km',
                 'length' => 10,
                 'unit' => 'km',

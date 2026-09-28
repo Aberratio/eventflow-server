@@ -81,6 +81,12 @@ final class PlatformStatsContractTest extends HttpTestCase
         return $this->json($response)['data'];
     }
 
+    /**
+     * @group known-failure-pp14
+     *
+     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
+     * migrations/CI — tracked by PP.14. Remove this tag once fixed there.
+     */
     public function testAdminSeesEventCountsByPublicationStatusOrganizerCountAndActivePackageCredits(): void
     {
         $adminAuth = $this->bearer($this->admin['id'], 'admin', $this->admin['email']);

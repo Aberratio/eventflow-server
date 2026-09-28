@@ -118,6 +118,13 @@ PDF;
         self::assertSame('K30', $batch['rows'][0]['mappedData']['category']);
     }
 
+    /**
+     * @group requires-local-samples
+     *
+     * Needs both the `zip` PHP extension and the real-world sample under
+     * `przyklady/import-wynikow/` (outside this repository, never present in CI) —
+     * excluded from the CI --fail-on-skipped gate for exactly that reason.
+     */
     public function testXlsxSampleImportBuildsRows(): void
     {
         if (!class_exists(\ZipArchive::class)) {
@@ -148,6 +155,12 @@ PDF;
      * Spec 14 sekcja 1: real-world sample from przyklady/import-wynikow -
      * DNF row (empty czas, status DNF) must import as a visible-but-unranked
      * result, not be dropped or rejected.
+     *
+     * @group requires-local-samples
+     *
+     * Needs the real-world sample under `przyklady/import-wynikow/` (outside this
+     * repository, never present in CI) — excluded from the CI --fail-on-skipped
+     * gate for exactly that reason.
      */
     public function testRealSampleCsvImportsDnfRowWithStatusAndNoRankingPosition(): void
     {

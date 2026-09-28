@@ -17,6 +17,14 @@ composer install
 ```sh
 copy .env.example .env
 ```
+
+Set `JWT_SECRET` in `.env` — it has no default and the API refuses to boot without
+it (see "Configuration and boot guard" below):
+
+```sh
+php -r "echo bin2hex(random_bytes(32));"
+```
+
 ```sh
 composer migrate
 ```
@@ -187,6 +195,47 @@ and results. The DevToolbox in the frontend calls it. It is available when
 `APP_ENV=local` (no auth needed, for expired dev tokens) and when `APP_ENV=staging`
 (a valid organizer/moderator/admin/superadmin token is required). Disabled everywhere
 else.
+
+## Configuration and boot guard
+
+`public/index.php` validates the environment through `ZmierzymyCzas\Config\AppConfig`
+before it does anything else — before wiring routes, before opening a DB connection.
+If the configuration is invalid, the app never boots: every request gets `503` with
+`{"error":{"code":"service_misconfigured", ...}}` (a generic Polish message; no
+variable names or secret values are ever in the response body), and the actual
+reason is written to `error_log()` (printed to the console under `php -S`, written to
+LiteSpeed's error log in production).
+
+Run `php bin/check-config.php` any time to validate a `.env` without starting the
+server — it prints `Configuration OK (...)` and exits 0, or `Configuration INVALID:`
+with one `- <reason>` line per problem and exits 1. It never prints the secret. Use it
+over SSH to check a server's `.env` before merging or deploying.
+
+Rules (see `src/Config/AppConfig.php` for the exact messages):
+
+| Variable | Rule |
+|---|---|
+| `APP_ENV` | One of `local`, `staging`, `production`. Unset defaults to `production` (the strictest rules); an unrecognized value refuses to boot. |
+| `JWT_SECRET` | Required in **every** environment, at least 32 bytes. In staging/production it must also not be a `change-me...` placeholder. No fallback exists — this was previously a literal in the repo, which is a critical vulnerability. |
+| `APP_CORS_ORIGIN` | Comma-separated allowlist of exact front-end origins (`scheme://host[:port]`, no path, no trailing slash). Required in staging/production, where `*` is forbidden and production additionally requires `https://`. Unset in local falls back to the standard dev origins. `Access-Control-Allow-Credentials` is never sent — the client authenticates with a Bearer token only. |
+| `APP_DEBUG` | Boolean. Refused (boot fails) when `true` and `APP_ENV=production`. |
+| `TPAY_SANDBOX` / `PAYNOW_SANDBOX` | Boolean, default `true` (unset means sandbox — fail-closed toward *not* moving real money by accident, but this means unset also blocks production boot). Must be explicitly `false` when `APP_ENV=production`. |
+
+Per-environment required variables (also in `.env.example`):
+
+| Variable | Staging | Production |
+|---|---|---|
+| `APP_ENV` | `staging` (exact) | `production` (exact) |
+| `JWT_SECRET` | random, 32+ bytes, different from production | random, 32+ bytes, never reused from staging/repo |
+| `APP_CORS_ORIGIN` | explicit origin(s), no `*` | explicit **https** origin(s), no `*`, no http |
+| `APP_DEBUG` | `false` recommended (not enforced) | `false` or unset — `true` refuses to boot |
+| `TPAY_SANDBOX` / `PAYNOW_SANDBOX` | `true` or `false` | explicit `false` — unset refuses to boot |
+
+Outside debug mode, `JsonErrorMiddleware` also hides the message of any exception
+that is not a Slim 4xx `HttpException` behind a generic Polish `server_error`
+response — no SQL errors, stack traces, or internal details reach the client. Debug
+mode (`APP_DEBUG=true`) keeps the exception message and a stack trace, which is why
+it is refused in production.
 
 ## Frontend
 

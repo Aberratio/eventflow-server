@@ -237,6 +237,41 @@ response — no SQL errors, stack traces, or internal details reach the client. 
 mode (`APP_DEBUG=true`) keeps the exception message and a stack trace, which is why
 it is refused in production.
 
+## Security headers
+
+Every API response — success, 4xx/5xx from `JsonErrorMiddleware`, CORS preflight, and
+the `/uploads/*` PHP route — carries a fixed set of security headers, added outermost
+by `ZmierzymyCzas\Http\Middleware\SecurityHeadersMiddleware`:
+
+| Header | Value |
+|---|---|
+| `Content-Security-Policy` | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` — the API never renders documents. |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` (kept for legacy browsers alongside `frame-ancestors 'none'`) |
+| `Referrer-Policy` | `no-referrer` |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=()` |
+| `Strict-Transport-Security` | `max-age=31536000`, only when `APP_ENV` is `staging` or `production` (never on `local`). No `includeSubDomains`/`preload` yet — the production domain is not finalized. |
+
+Headers are set only if the response does not already carry them (`withHeader` after a
+`hasHeader` check), so a future route can opt into its own policy without a conflict.
+No route does this today.
+
+The registration order lives in `ZmierzymyCzas\Http\HttpMiddlewareStack::register()`,
+called once from `public/index.php`. Slim runs middleware LIFO (the last one added is
+the outermost), so `SecurityHeadersMiddleware` is added last — after routing, body
+parsing, `JsonErrorMiddleware` and `CorsMiddleware` — so it also covers CORS preflight
+responses (answered by `CorsMiddleware` without calling the handler) and every error
+response rendered by `JsonErrorMiddleware`.
+
+The boot-failure branch in `public/index.php` (invalid configuration, `503`) emits the
+same baseline headers via `SecurityHeadersMiddleware::baselineHeaders(false)` — always
+without HSTS, since `APP_ENV` could not be parsed at that point.
+
+Out of scope for now (tracked in later tickets): a dynamic per-event
+`frame-ancestors`/`X-Robots-Tag` (PP.28), upload MIME hardening beyond `nosniff`
+(PP.11), and COOP/COEP/CORP/`report-uri` (not planned — CORP in particular would break
+cross-origin `<img>` loads of API uploads from the frontend).
+
 ## Frontend
 
 Set the client env variable:

@@ -203,23 +203,76 @@ SQL;
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
 
+    /**
+     * PP.3: the exact — and only — keys a public, unauthenticated caller ever sees for
+     * one start-list entry. Never `hydrate()`d: that method runs four extra queries per
+     * row and attaches financial/PII fields (userEmail, qrCode, discountCode,
+     * checkedInBy, merchandiseOrders with prices, paymentDetails, settlementItems…)
+     * that must never reach this response. Order is pinned by
+     * PublicStartListContractTest.
+     *
+     * @var list<string>
+     */
+    public const PUBLIC_START_LIST_FIELDS = [
+        'id', 'distanceId', 'distanceName', 'category', 'userId', 'userName', 'bibNumber',
+        'teamName', 'teamId', 'status', 'registeredAt', 'hasMerchandise', 'formFields',
+    ];
+
     /** @return array<int, array<string, mixed>> */
     public function publicStartList(string $eventId, bool $showAll): array
     {
         $this->lazilyExpireUnpaidRegistrations();
+        $hasMerchandiseExpr = 'EXISTS (SELECT 1 FROM registration_merchandise_orders mo WHERE mo.registration_id = %s) AS hasMerchandise';
         if ($showAll) {
+            // Qualified `registrations.id`: an unqualified `id` here would resolve to
+            // registration_merchandise_orders.id (its own PK) inside the correlated
+            // subquery's scope, not the outer row — always false.
             $stmt = $this->pdo->prepare(
-                'SELECT ' . self::COLUMNS . " FROM registrations WHERE event_id = :eventId AND status NOT IN ('removed', 'cancelled', 'expired') ORDER BY registered_at DESC"
+                'SELECT ' . self::COLUMNS . ', ' . sprintf($hasMerchandiseExpr, 'registrations.id')
+                . " FROM registrations WHERE event_id = :eventId AND status NOT IN ('removed', 'cancelled', 'expired') ORDER BY registered_at DESC"
             );
         } else {
             $stmt = $this->pdo->prepare(
-                'SELECT ' . self::COLUMNS_R . " FROM registrations r LEFT JOIN registration_payment_details pd ON pd.registration_id = r.id WHERE r.event_id = :eventId AND r.status NOT IN ('removed', 'cancelled', 'expired') AND (r.status = 'confirmed' OR pd.start_fee_paid = 1) ORDER BY r.registered_at DESC"
+                'SELECT ' . self::COLUMNS_R . ', ' . sprintf($hasMerchandiseExpr, 'r.id')
+                . " FROM registrations r LEFT JOIN registration_payment_details pd ON pd.registration_id = r.id WHERE r.event_id = :eventId AND r.status NOT IN ('removed', 'cancelled', 'expired') AND (r.status = 'confirmed' OR pd.start_fee_paid = 1) ORDER BY r.registered_at DESC"
             );
         }
         $stmt->execute(['eventId' => $eventId]);
-        $registrations = array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
+        $rows = $stmt->fetchAll();
 
-        return $this->maskAnonymizedCompetitors($this->attachPublicFormFields($eventId, $registrations));
+        $withFormFields = $this->attachPublicFormFields($eventId, $rows);
+        $masked = $this->maskAnonymizedCompetitors($withFormFields);
+
+        return array_map($this->toPublicStartListEntry(...), $masked);
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private function toPublicStartListEntry(array $row): array
+    {
+        $anonymized = (bool) ($row['__anonymized'] ?? false);
+        $formFields = array_values(array_filter(
+            (array) ($row['formFields'] ?? []),
+            static fn (array $f): bool => ($f['fieldKey'] ?? '') !== 'contact_email'
+        ));
+
+        return [
+            'id' => (string) $row['id'],
+            'distanceId' => $row['distanceId'],
+            'distanceName' => $row['distanceName'],
+            'category' => $row['category'],
+            'userId' => $anonymized ? null : ($row['userId'] ?? null),
+            'userName' => $row['userName'],
+            'bibNumber' => $row['bibNumber'],
+            'teamName' => $row['teamName'],
+            'teamId' => $row['teamId'],
+            'status' => $row['status'],
+            'registeredAt' => $row['registeredAt'],
+            'hasMerchandise' => (bool) $row['hasMerchandise'],
+            'formFields' => $formFields,
+        ];
     }
 
     /**
@@ -278,6 +331,10 @@ SQL;
             }
 
             $registration['userName'] = CompetitorNamePresenter::publicName((string) $registration['userName'], true);
+            // PP.3: internal marker consumed only by toPublicStartListEntry() (this
+            // method's only caller, via publicStartList()) to null out `userId` —
+            // never surfaces itself, since the DTO projection never copies it.
+            $registration['__anonymized'] = true;
 
             if (isset($registration['formFields']) && is_array($registration['formFields'])) {
                 $registration['formFields'] = array_map(static function (array $field): array {

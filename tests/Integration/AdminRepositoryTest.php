@@ -48,8 +48,11 @@ final class AdminRepositoryTest extends TestCase
             return;
         }
 
-        $this->pdo->prepare('DELETE FROM activity_logs WHERE user_id LIKE :prefix OR target_name LIKE :prefix')
-            ->execute(['prefix' => $this->prefix . '%']);
+        // PDO runs with ATTR_EMULATE_PREPARES=false: a named placeholder repeated in one
+        // query works under MariaDB's native driver but fails outright under MySQL's
+        // ("SQLSTATE[HY093]: Invalid parameter number") — give the repeat its own name.
+        $this->pdo->prepare('DELETE FROM activity_logs WHERE user_id LIKE :prefix OR target_name LIKE :prefix2')
+            ->execute(['prefix' => $this->prefix . '%', 'prefix2' => $this->prefix . '%']);
         $this->pdo->prepare('DELETE FROM online_sessions WHERE user_id LIKE :prefix')
             ->execute(['prefix' => $this->prefix . '%']);
         $this->pdo->prepare('DELETE FROM events WHERE slug LIKE :prefix')

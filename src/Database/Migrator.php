@@ -73,6 +73,30 @@ final class Migrator
         // always already exists and any newly added field is backfilled.
         CustomFormFieldsBackfill::run($pdo);
 
+        // PP.13: CompetitorProfileBackfill (invoked from inside 027 via its
+        // `-- @php:` marker) is an ongoing catch-up, not a one-time schema
+        // backfill — its own docblock explains it exists precisely because
+        // "every seeded Konto is waiting for the next migrate run to get its
+        // profile" (bin/seed.php migrates before seeding accounts). Before the
+        // ledger, every applyAll() re-ran 027 in full and caught up every
+        // profile-less user; with the ledger, 027 is normally skipped once its
+        // checksum is recorded, which would silently stop backfilling new
+        // users. Call it here too so applyAll() keeps that guarantee
+        // regardless of whether 027 itself needed to (re-)run. It is
+        // idempotent (per-row NOT EXISTS guard), so calling it twice in the
+        // same run (027 ran AND this call) is a safe no-op the second time.
+        CompetitorProfileBackfill::run($pdo);
+
+        // PP.13: same reasoning as CompetitorProfileBackfill above — 054's
+        // condition-tree backfill is an ongoing catch-up for challenges
+        // inserted directly by seeders/fixtures after migrations (and the
+        // ledger) have already run. See ChallengeConditionTreeBackfill's docblock.
+        ChallengeConditionTreeBackfill::run($pdo);
+
+        // PP.13: same reasoning again — 041's system form-field catalogue for
+        // events inserted directly by seeders/fixtures. See FormFieldsCatalogBackfill.
+        FormFieldsCatalogBackfill::run($pdo);
+
         return $applied;
     }
 
@@ -129,6 +153,8 @@ final class Migrator
         'CompetitorProfileBackfill::run' => [CompetitorProfileBackfill::class, 'run'],
         'QrCodeBackfill::registrations' => [QrCodeBackfill::class, 'registrations'],
         'QrCodeBackfill::competitors' => [QrCodeBackfill::class, 'competitors'],
+        'ChallengeConditionTreeBackfill::run' => [ChallengeConditionTreeBackfill::class, 'run'],
+        'FormFieldsCatalogBackfill::run' => [FormFieldsCatalogBackfill::class, 'run'],
     ];
 
     /** A whole line that is nothing but the marker; anything else stays a plain SQL comment. */

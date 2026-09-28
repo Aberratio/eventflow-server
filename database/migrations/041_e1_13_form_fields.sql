@@ -107,25 +107,13 @@ CREATE TABLE IF NOT EXISTS form_field_answers (
 --     (FormFieldRepository::assertStateAllowed() dokumentuje to jako gap).
 --   - Anonimizacja i reszta swobodnych: `hidden` (Nie), zgodnie z dotychczasowym
 --     domyślnym brakiem tych pól w formularzu.
-INSERT INTO form_fields (id, event_id, kind, field_key, storage_location, state, sort_order, public_list_visible, is_confidential)
-SELECT UUID(), e.id, 'system', k.field_key, k.storage_location, k.default_state, k.sort_order, 0, 0
-FROM events e
-CROSS JOIN (
-  SELECT 'first_name' AS field_key, 'competitor' AS storage_location, 'required' AS default_state, 1 AS sort_order
-  UNION ALL SELECT 'last_name', 'competitor', 'required', 2
-  UNION ALL SELECT 'contact_email', 'registration', 'required', 3
-  UNION ALL SELECT 'birth_date', 'competitor', 'required', 4
-  UNION ALL SELECT 'gender', 'competitor', 'required', 5
-  UNION ALL SELECT 'anonymization', 'competitor', 'hidden', 6
-  UNION ALL SELECT 'country', 'competitor', 'hidden', 7
-  UNION ALL SELECT 'city', 'competitor', 'hidden', 8
-  UNION ALL SELECT 'postal_code', 'competitor', 'hidden', 9
-  UNION ALL SELECT 'voivodeship', 'competitor', 'hidden', 10
-  UNION ALL SELECT 'address', 'competitor', 'hidden', 11
-  UNION ALL SELECT 'phone', 'competitor', 'hidden', 12
-  UNION ALL SELECT 'club', 'registration', 'hidden', 13
-) k
-WHERE NOT EXISTS (SELECT 1 FROM form_fields f WHERE f.event_id = e.id AND f.field_key = k.field_key);
+-- PP.13: moved to ZmierzymyCzas\Database\FormFieldsCatalogBackfill::run(), called
+-- unconditionally from Migrator::applyAll() (see that class's docblock) — same
+-- reasoning as 027/CompetitorProfileBackfill and 054/ChallengeConditionTreeBackfill:
+-- this needs to keep catching events inserted directly by seeders/fixtures after
+-- migrations (and the ledger) have already run, not just events that existed the
+-- first time this file applied.
+-- @php: FormFieldsCatalogBackfill::run
 
 -- Backfill: pole "Telefon" i "Klub" jako `shown`, jeśli stary JSON już je zbierał
 -- (`collectPhone`/`collectClub`). "Data urodzenia" świadomie NIE jest tu

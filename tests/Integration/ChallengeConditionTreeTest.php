@@ -265,4 +265,69 @@ final class ChallengeConditionTreeTest extends TestCase
         )->fetchColumn();
         self::assertSame(1, $count, 'Re-running the backfill must not create a second root node.');
     }
+
+    /**
+     * PP.13 regression: the pre-fix 054 backfill inserted a root node with
+     * `id = challenge_id` for every challenge lacking a node with THAT id — even
+     * one that already has an app-created root (ChallengeRepository::insertNode()
+     * always mints a fresh UUID), so every re-run added a second root to every
+     * challenge ever created or edited through the app.
+     */
+    public function testBackfillMigrationLeavesAppCreatedTreesAlone(): void
+    {
+        $challenge = $this->createChallenge([
+            'name' => 'App-created challenge',
+            'events' => ['evt-app-1', 'evt-app-2'],
+        ]);
+        $id = (string) $challenge['id'];
+
+        $migrationFile = Migrator::migrationsDir() . '/054_e6_1_challenge_condition_tree.sql';
+        Migrator::applyFile($this->pdo, $migrationFile);
+        Migrator::applyFile($this->pdo, $migrationFile);
+
+        $stmt = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM challenge_condition_nodes WHERE challenge_id = :id AND parent_node_id IS NULL'
+        );
+        $stmt->execute(['id' => $id]);
+        $rootCount = (int) $stmt->fetchColumn();
+
+        self::assertSame(1, $rootCount, 'An app-created tree must keep exactly one root node after 054 re-runs.');
+    }
+
+    /**
+     * PP.13 regression: `challenge_events` carries no FK to `challenges` (by
+     * design — see 001_init.sql), so an orphan row (its challenge deleted, e.g.
+     * by test cleanup) made the pre-fix 054 backfill's second INSERT violate
+     * `fk_ccne_node` (QA.7) because it referenced `node_id = ce.challenge_id`
+     * for a challenge that no longer has any row, node or not.
+     */
+    public function testBackfillMigrationToleratesOrphanChallengeEvents(): void
+    {
+        $orphanChallengeId = 'phpunit-orphan-' . bin2hex(random_bytes(4));
+        $this->pdo->prepare(
+            'INSERT INTO challenge_events (challenge_id, event_id, sort_order) VALUES (:challengeId, :eventId, 0)'
+        )->execute(['challengeId' => $orphanChallengeId, 'eventId' => 'evt-orphan-1']);
+
+        try {
+            $migrationFile = Migrator::migrationsDir() . '/054_e6_1_challenge_condition_tree.sql';
+            Migrator::applyFile($this->pdo, $migrationFile);
+            Migrator::applyFile($this->pdo, $migrationFile);
+
+            $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM challenge_condition_nodes WHERE challenge_id = :id');
+            $stmt->execute(['id' => $orphanChallengeId]);
+            $nodeCount = (int) $stmt->fetchColumn();
+
+            self::assertSame(0, $nodeCount, 'An orphan challenge_events row must not gain a node — its challenge does not exist.');
+
+            $eventNodeCount = (int) $this->pdo->query(
+                'SELECT COUNT(*) FROM challenge_condition_node_events cne
+                 INNER JOIN challenge_condition_nodes n ON n.id = cne.node_id
+                 WHERE n.challenge_id = ' . $this->pdo->quote($orphanChallengeId)
+            )->fetchColumn();
+            self::assertSame(0, $eventNodeCount);
+        } finally {
+            $this->pdo->prepare('DELETE FROM challenge_events WHERE challenge_id = :id')
+                ->execute(['id' => $orphanChallengeId]);
+        }
+    }
 }

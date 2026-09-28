@@ -7,6 +7,7 @@ namespace ZmierzymyCzas\Tests\Integration;
 use PDO;
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Database\Connection;
+use ZmierzymyCzas\Database\MigrationGuard;
 use ZmierzymyCzas\Database\Migrator;
 use ZmierzymyCzas\Support\Env;
 
@@ -289,7 +290,12 @@ final class QrCodeBackfillTest extends TestCase
      */
     private function rewindColumn(array $target): void
     {
-        $this->pdo->exec("ALTER TABLE {$target['table']} DROP INDEX IF EXISTS {$target['index']}");
+        // "DROP INDEX IF EXISTS" is MariaDB-only syntax (production/CI run MySQL 8.4,
+        // which rejects it) — use the same information_schema guard the migrations
+        // themselves use (MigrationGuard), not vendor-only SQL, even in test code.
+        if (MigrationGuard::holds($this->pdo, 'index-exists', $target['table'], $target['index'])) {
+            $this->pdo->exec("ALTER TABLE {$target['table']} DROP INDEX {$target['index']}");
+        }
         $this->pdo->exec("ALTER TABLE {$target['table']} MODIFY {$target['column']} VARCHAR(52) NULL");
     }
 

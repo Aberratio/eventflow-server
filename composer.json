@@ -43,6 +43,8 @@
             "php -l src/Database/CustomFormFieldsBackfill.php",
             "php -l src/Database/QrCodeBackfill.php",
             "php -l src/Database/CompetitorProfileBackfill.php",
+            "php -l src/Database/ChallengeConditionTreeBackfill.php",
+            "php -l src/Database/FormFieldsCatalogBackfill.php",
             "php -l src/Support/QrCode.php",
             "php -l src/Support/Env.php",
             "php -l src/Support/HtmlSanitizer.php",

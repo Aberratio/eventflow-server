@@ -86,7 +86,9 @@
             "php -l src/Domain/FormFields/FormFieldType.php",
             "php -l src/Domain/FormFields/FormFieldRepository.php",
             "php -l src/Domain/FormFields/FormFieldAnswerRepository.php",
-            "php -l src/Domain/Teams/TeamRepository.php"
+            "php -l src/Domain/Teams/TeamRepository.php",
+            "php -l src/Http/HttpMiddlewareStack.php",
+            "php -l src/Http/Middleware/SecurityHeadersMiddleware.php"
         ],
         "seed:fresh": "php bin/seed.php --fresh",
         "seed:purge": "php bin/seed.php --purge",

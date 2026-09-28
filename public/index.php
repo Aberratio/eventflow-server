@@ -7,8 +7,8 @@ use ZmierzymyCzas\Config\AppConfig;
 use ZmierzymyCzas\Config\ConfigurationException;
 use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Domain\Auth\JwtService;
-use ZmierzymyCzas\Http\Middleware\CorsMiddleware;
-use ZmierzymyCzas\Http\Middleware\JsonErrorMiddleware;
+use ZmierzymyCzas\Http\HttpMiddlewareStack;
+use ZmierzymyCzas\Http\Middleware\SecurityHeadersMiddleware;
 use ZmierzymyCzas\Support\Env;
 
 require __DIR__ . '/../vendor/autoload.php';
@@ -22,6 +22,10 @@ try {
     error_log('[zmierzymy_czas] Refusing to boot: ' . $e->getMessage());
     http_response_code(503);
     header('Content-Type: application/json; charset=utf-8');
+    // The config failed to parse, so we don't know APP_ENV; HSTS stays off.
+    foreach (SecurityHeadersMiddleware::baselineHeaders(false) as $headerName => $headerValue) {
+        header($headerName . ': ' . $headerValue);
+    }
     echo json_encode([
         'success' => false,
         'error' => [
@@ -35,10 +39,7 @@ try {
 $app = AppFactory::create();
 $app->setBasePath('');
 
-$app->addBodyParsingMiddleware();
-$app->addRoutingMiddleware();
-$app->add(new JsonErrorMiddleware($config->debug));
-$app->add(new CorsMiddleware($config->corsOriginsHeaderValue()));
+HttpMiddlewareStack::register($app, $config);
 
 $pdo = Connection::fromEnv();
 $jwt = new JwtService($config->jwtSecret, $config->jwtTtlSeconds);

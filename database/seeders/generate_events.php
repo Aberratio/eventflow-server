@@ -239,9 +239,12 @@ function buildPastEvent(
     $sql = "";
 
     // Event
-    $sql .= "INSERT INTO events (id,name,slug,discipline,date,location,city,description,organizer_id,organizer_name,organizer_contact,publication_status,registration_deadline,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
+    // image_url is NOT NULL with no DEFAULT (001_init.sql) — MariaDB silently coerces an
+    // omitted column to '' (no STRICT_TRANS_TABLES locally), MySQL 8's default strict
+    // sql_mode rejects the INSERT outright (error 1364), so it must be listed explicitly.
+    $sql .= "INSERT INTO events (id,name,slug,discipline,date,location,city,description,image_url,organizer_id,organizer_name,organizer_contact,publication_status,registration_deadline,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
     $sql .= sprintf(
-        "  %s,%s,'lesny-bieg-testowy-2025','running',%s,'Las Kabacki','Warszawa','Rekreacyjny bieg w lesie kabackim z trzema dystansami.',%s,%s,%s,'finished',%s,'closed',0,0,0,%s,'<p>Regulamin.</p>',0,0,%s,%s,%s\n",
+        "  %s,%s,'lesny-bieg-testowy-2025','running',%s,'Las Kabacki','Warszawa','Rekreacyjny bieg w lesie kabackim z trzema dystansami.','',%s,%s,%s,'finished',%s,'closed',0,0,0,%s,'<p>Regulamin.</p>',0,0,%s,%s,%s\n",
         sq($eventId), sq($eventName),
         sq($eventDate),
         sq($orgId), sq($orgName),
@@ -308,7 +311,10 @@ function buildPastEvent(
         // Rozliczenie (E0.3): "Oplata startowa" line item replaces registrations.price_paid.
         $settlementRows[] = sprintf(
             "(%s,%s,'Oplata startowa','distance_price',%.2f,%s,0)",
-            sq(uuid('settle-')), sq($regId), $dist['price'], sq($regAt)
+            // registration_settlement_items.id is VARCHAR(36): a bare UUID, not a prefixed
+            // one — uuid('settle-') produced 44 chars, silently truncated by MariaDB's
+            // non-strict mode locally, rejected outright by MySQL 8's strict sql_mode.
+            sq(uuid()), sq($regId), $dist['price'], sq($regAt)
         );
 
         $paidAt = date('Y-m-d\TH:i:s+02:00', strtotime($regAt) + rand(300, 3600));
@@ -445,9 +451,10 @@ function buildCurrentEvent(): array
     $sql = "";
 
     // Event
-    $sql .= "INSERT INTO events (id,name,slug,discipline,date,location,city,description,organizer_id,organizer_name,organizer_contact,publication_status,registration_deadline,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
+    // image_url is NOT NULL with no DEFAULT — see buildPastEvent()'s comment above.
+    $sql .= "INSERT INTO events (id,name,slug,discipline,date,location,city,description,image_url,organizer_id,organizer_name,organizer_contact,publication_status,registration_deadline,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
     $sql .= sprintf(
-        "  %s,%s,'tri-kids-mazury-2026','triathlon',%s,'Centrum Triathlonu Mikołajki','Mikolajki','Triathlon dla dzieci i mlodziezy nad jeziorem Sniardwy.',%s,%s,%s,'published',%s,'closed',1,0,0,%s,'<p>Regulamin zawodow mlodziezowych.</p>',0,0,%s,%s,%s\n",
+        "  %s,%s,'tri-kids-mazury-2026','triathlon',%s,'Centrum Triathlonu Mikołajki','Mikolajki','Triathlon dla dzieci i mlodziezy nad jeziorem Sniardwy.','',%s,%s,%s,'published',%s,'closed',1,0,0,%s,'<p>Regulamin zawodow mlodziezowych.</p>',0,0,%s,%s,%s\n",
         sq($eventId), sq($eventName),
         sq($eventDate),
         sq($orgId), sq($orgName),
@@ -513,7 +520,8 @@ function buildCurrentEvent(): array
             // Rozliczenie (E0.3): replaces registrations.price_paid.
             $settleRows[] = sprintf(
                 "(%s,%s,'Oplata startowa','distance_price',%.2f,%s,0)",
-                sq(uuid('settle-')), sq($regId), $batch['dist']['price'], sq($regAt)
+                // See the identical fix's comment in buildPastEvent() above.
+                sq(uuid()), sq($regId), $batch['dist']['price'], sq($regAt)
             );
 
             if ($paid) {
@@ -560,9 +568,10 @@ function buildUpcomingEvent(): string
     $orgId     = ORGANIZER_ID;
     $orgName   = ORGANIZER_NAME;
 
-    $sql = "INSERT INTO events (id,name,slug,discipline,date,location,city,description,organizer_id,organizer_name,organizer_contact,publication_status,registration_deadline,registration_open_date,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
+    // image_url is NOT NULL with no DEFAULT — see buildPastEvent()'s comment above.
+    $sql = "INSERT INTO events (id,name,slug,discipline,date,location,city,description,image_url,organizer_id,organizer_name,organizer_contact,publication_status,registration_deadline,registration_open_date,registration_status,featured,is_live,is_virtual,payment_config,rules_html,require_final_acceptance,is_private,registration_form_config,display_options,created_by) VALUES (\n";
     $sql .= sprintf(
-        "  %s,%s,'grand-prix-podlasia-2027','running',%s,'Stadion Miejski','Bialystok','Bieg uliczny przez Bialystok – trasa asfaltowa, płaski profil, limit czasu 4h.',%s,%s,%s,'published',%s,%s,'open',1,0,0,%s,'<p>Regulamin biegu.</p>',1,0,%s,%s,%s\n",
+        "  %s,%s,'grand-prix-podlasia-2027','running',%s,'Stadion Miejski','Bialystok','Bieg uliczny przez Bialystok – trasa asfaltowa, płaski profil, limit czasu 4h.','',%s,%s,%s,'published',%s,%s,'open',1,0,0,%s,'<p>Regulamin biegu.</p>',1,0,%s,%s,%s\n",
         sq($eventId), sq($eventName),
         sq($eventDate),
         sq($orgId), sq($orgName),

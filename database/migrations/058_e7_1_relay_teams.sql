@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS teams (
   CONSTRAINT fk_teams_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
   CONSTRAINT fk_teams_distance FOREIGN KEY (distance_id) REFERENCES event_distances(id) ON DELETE CASCADE,
   INDEX idx_teams_distance (distance_id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- `registrations.team_id` was free text (any string a client sent —
 -- RegistrationRepository::create() passed it through verbatim, zero

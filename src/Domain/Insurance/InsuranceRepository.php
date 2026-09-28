@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Insurance;
 
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Support\HtmlSanitizer;
 
 /**
  * NNW (insurance) is a catalog of variants, not a single global setting (E0.3):
@@ -50,7 +51,7 @@ final class InsuranceRepository extends Repository
             'base_fee' => $data['baseFee'] ?? self::DEFAULT['baseFee'],
             'age_multiplier' => $data['ageMultiplier'] ?? self::DEFAULT['ageMultiplier'],
             'max_age' => $data['maxAge'] ?? self::DEFAULT['maxAge'],
-            'info_html' => $data['infoHtml'] ?? self::DEFAULT['infoHtml'],
+            'info_html' => HtmlSanitizer::clean((string) ($data['infoHtml'] ?? self::DEFAULT['infoHtml'])),
             'active' => (int) (bool) ($data['active'] ?? true),
             'sort_order' => (int) ($data['sortOrder'] ?? 0),
         ]);
@@ -77,6 +78,9 @@ final class InsuranceRepository extends Repository
         }
         if (array_key_exists('active', $data)) {
             $mapped['active'] = (int) (bool) $data['active'];
+        }
+        if (array_key_exists('info_html', $mapped)) {
+            $mapped['info_html'] = HtmlSanitizer::clean((string) $mapped['info_html']);
         }
 
         $this->updateById('insurance_settings', $id, $mapped);
@@ -109,6 +113,7 @@ final class InsuranceRepository extends Repository
     {
         $current = $this->getSettings();
         $next = [...$current, ...$data];
+        $next['infoHtml'] = HtmlSanitizer::clean((string) $next['infoHtml']);
 
         $stmt = $this->pdo->query('SELECT id FROM insurance_settings ORDER BY sort_order ASC, id ASC LIMIT 1');
         $row = $stmt->fetch();

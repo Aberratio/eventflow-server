@@ -7,7 +7,8 @@
         "php": "^8.2",
         "slim/slim": "^4.15.3",
         "slim/psr7": "^1.7",
-        "firebase/php-jwt": "^7.0"
+        "firebase/php-jwt": "^7.0",
+        "ezyang/htmlpurifier": "^4.18"
     },
     "require-dev": {
         "phpunit/phpunit": "^10.5",
@@ -43,6 +44,7 @@
             "php -l src/Database/CompetitorProfileBackfill.php",
             "php -l src/Support/QrCode.php",
             "php -l src/Support/Env.php",
+            "php -l src/Support/HtmlSanitizer.php",
             "php -l src/Database/SeedManifest.php",
             "php -l src/Database/DemoData.php",
             "php -l src/Database/EventFixtureImporter.php",

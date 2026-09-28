@@ -146,4 +146,42 @@ final class InsuranceRepositoryTest extends TestCase
             'infoHtml' => $before['infoHtml'],
         ]);
     }
+
+    /** PP.5: create() and update() must sanitize infoHtml server-side (second line of defence). */
+    public function testCreateAndUpdateSanitizeInfoHtml(): void
+    {
+        $created = $this->insurance->create([
+            'name' => $this->namePrefix . '-xss-create',
+            'infoHtml' => '<p>a</p><script>alert(1)</script>',
+        ]);
+
+        $found = $this->insurance->find($created['id']);
+        self::assertSame('<p>a</p>', $found['infoHtml']);
+
+        $updated = $this->insurance->update($created['id'], ['infoHtml' => '<img src=x onerror=alert(1)>']);
+        self::assertStringNotContainsString('<img', $updated['infoHtml']);
+        self::assertStringNotContainsString('onerror', $updated['infoHtml']);
+    }
+
+    /** PP.5: updateSettings() must sanitize infoHtml server-side (second line of defence). */
+    public function testUpdateSettingsSanitizesInfoHtml(): void
+    {
+        $before = $this->insurance->getSettings();
+
+        $updated = $this->insurance->updateSettings([
+            'infoHtml' => '<p>ok</p><svg onload=alert(1)></svg>',
+        ]);
+
+        self::assertStringNotContainsString('<svg', $updated['infoHtml']);
+        self::assertStringNotContainsString('onload', $updated['infoHtml']);
+        self::assertStringContainsString('<p>ok</p>', $updated['infoHtml']);
+
+        // Restore — this table is global, do not leave test data behind.
+        $this->insurance->updateSettings([
+            'baseFee' => $before['baseFee'],
+            'ageMultiplier' => $before['ageMultiplier'],
+            'maxAge' => $before['maxAge'],
+            'infoHtml' => $before['infoHtml'],
+        ]);
+    }
 }

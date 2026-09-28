@@ -5,10 +5,16 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Events;
 
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Support\HtmlSanitizer;
 
 final class EventRepository extends Repository
 {
     private const CREDIT_KINDS = ['standard', 'virtual', 'timing'];
+
+    // PP.5: rich-text columns sanitized on write via HtmlSanitizer (second line of
+    // defence; the client also sanitizes on every render).
+    private const RICH_TEXT_COLUMNS = ['description', 'rules_html', 'organizers_html', 'final_acceptance_html'];
+    private const RICH_TEXT_CHILD_COLUMNS = ['info_html', 'description_html']; // event_distances, event_merchandise
 
     /**
      * E1.4: the two payment-window durations (docs/20-... pkt 1) live as two more
@@ -912,12 +918,38 @@ SQL;
         } elseif (array_key_exists('isPrivate', $data) && !array_key_exists('visibility', $data)) {
             $out['visibility'] = !empty($data['isPrivate']) ? 'private' : 'public';
         }
+        foreach (self::RICH_TEXT_COLUMNS as $column) {
+            if (array_key_exists($column, $out)) {
+                $out[$column] = HtmlSanitizer::cleanNullable($out[$column]);
+            }
+        }
+        if (array_key_exists('logistics_info', $out)) {
+            $out['logistics_info'] = $this->sanitizeLogisticsInfo($out['logistics_info']);
+        }
         foreach (['organizer_contact', 'banner_crop_area', 'payment_config', 'registration_embed', 'registration_form_config', 'embed_allowed_origins', 'display_options', 'logistics_info', 'organizer_info', 'insurance_option'] as $jsonField) {
             if (array_key_exists($jsonField, $out) && $out[$jsonField] !== null && !is_string($out[$jsonField])) {
                 $out[$jsonField] = json_encode($out[$jsonField], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             }
         }
         return $out;
+    }
+
+    /**
+     * Cleans LogisticsField.infoHtml for every key of the logistics_info JSON
+     * (array or already-encoded string).
+     */
+    private function sanitizeLogisticsInfo(mixed $value): mixed
+    {
+        $decoded = is_string($value) ? json_decode($value, true) : $value;
+        if (!is_array($decoded)) {
+            return $value;
+        }
+        foreach ($decoded as $key => $field) {
+            if (is_array($field) && array_key_exists('infoHtml', $field)) {
+                $decoded[$key]['infoHtml'] = HtmlSanitizer::cleanNullable($field['infoHtml']);
+            }
+        }
+        return $decoded; // the existing json_encode loop re-encodes it
     }
 
     private function consumeCredit(string $organizerId, string $eventId, string $kind): void
@@ -1078,6 +1110,11 @@ SQL;
                     unset($item['pricingVariants']);
                 }
                 $row = $this->snakeizeKeys($item);
+                foreach (self::RICH_TEXT_CHILD_COLUMNS as $column) {
+                    if (array_key_exists($column, $row)) {
+                        $row[$column] = HtmlSanitizer::cleanNullable($row[$column]);
+                    }
+                }
                 if ($meta['table'] === 'event_distances' && array_key_exists('limit', $row)) {
                     $row['participant_limit'] = $row['limit'];
                     unset($row['limit']);

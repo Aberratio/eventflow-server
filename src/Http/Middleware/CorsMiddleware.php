@@ -15,36 +15,35 @@ final class CorsMiddleware implements MiddlewareInterface
     /** @var array<int, string> */
     private array $allowedOrigins;
 
+    private bool $allowAny;
+
     public function __construct(string $origins)
     {
         $this->allowedOrigins = array_values(array_filter(array_map('trim', explode(',', $origins))));
+        $this->allowAny = in_array('*', $this->allowedOrigins, true);
     }
 
     public function process(Request $request, Handler $handler): Response
     {
-        if ($request->getMethod() === 'OPTIONS') {
-            $response = new SlimResponse();
-        } else {
-            $response = $handler->handle($request);
-        }
+        $isPreflight = $request->getMethod() === 'OPTIONS';
+        $response = $isPreflight ? new SlimResponse() : $handler->handle($request);
+        $response = $response->withAddedHeader('Vary', 'Origin');
 
         $origin = $request->getHeaderLine('Origin');
-        $allowOrigin = in_array('*', $this->allowedOrigins, true)
+        $allowOrigin = $this->allowAny
             ? '*'
-            : (in_array($origin, $this->allowedOrigins, true) ? $origin : null);
+            : (($origin !== '' && in_array($origin, $this->allowedOrigins, true)) ? $origin : null);
 
         if ($allowOrigin === null) {
-            return $response
-                ->withHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Requested-With')
-                ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
-                ->withHeader('Vary', 'Origin');
+            // Foreign or absent origin: no ACAO, no Allow-Methods/Headers.
+            return $response;
         }
 
+        // The client authenticates with a Bearer token only (never cookies), so
+        // Access-Control-Allow-Credentials is never sent, not even conditionally.
         return $response
             ->withHeader('Access-Control-Allow-Origin', $allowOrigin)
             ->withHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Requested-With')
-            ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
-            ->withHeader('Access-Control-Allow-Credentials', 'true')
-            ->withHeader('Vary', 'Origin');
+            ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     }
 }

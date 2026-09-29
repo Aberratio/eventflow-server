@@ -45,6 +45,7 @@
             "php -l src/Support/QrCode.php",
             "php -l src/Support/Env.php",
             "php -l src/Support/HtmlSanitizer.php",
+            "php -l src/Support/UrlPolicy.php",
             "php -l src/Database/SeedManifest.php",
             "php -l src/Database/DemoData.php",
             "php -l src/Database/EventFixtureImporter.php",

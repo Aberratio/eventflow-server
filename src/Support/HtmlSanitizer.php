@@ -43,7 +43,7 @@ final class HtmlSanitizer
         $config->set('Attr.AllowedRel', ['noopener', 'noreferrer', 'nofollow']);
         $config->set('HTML.TargetNoopener', true);
         $config->set('HTML.TargetNoreferrer', true);
-        $config->set('URI.AllowedSchemes', ['http' => true, 'https' => true, 'mailto' => true, 'tel' => true]);
+        $config->set('URI.AllowedSchemes', array_fill_keys(UrlPolicy::LINK_SCHEMES, true));
         $cacheDir = self::cacheDirectory();
         if ($cacheDir !== null) {
             $config->set('Cache.SerializerPath', $cacheDir);

@@ -68,7 +68,10 @@ final class InfoPageRepositoryTest extends TestCase
     {
         $created = $this->infoPages->create($this->payload());
 
-        self::assertSame(['blocks' => [['type' => 'paragraph', 'text' => 'Hello']]], $created['content']);
+        // assertEquals, not assertSame: MySQL's JSON type normalises object key
+        // order on round-trip (MariaDB preserves insertion order); array order
+        // within 'blocks' is still significant and still checked.
+        self::assertEquals(['blocks' => [['type' => 'paragraph', 'text' => 'Hello']]], $created['content']);
         self::assertFalse($created['published']);
         self::assertFalse($created['showInFooter']);
         self::assertFalse($created['showInHeader']);
@@ -111,7 +114,9 @@ final class InfoPageRepositoryTest extends TestCase
             'content' => ['blocks' => [['type' => 'heading', 'text' => 'Changed']]],
         ]);
 
-        self::assertSame(['blocks' => [['type' => 'heading', 'text' => 'Changed']]], $updated['content']);
+        // assertEquals: see the comment on the same pattern above (MySQL JSON
+        // key-order normalisation).
+        self::assertEquals(['blocks' => [['type' => 'heading', 'text' => 'Changed']]], $updated['content']);
     }
 
     public function testDeleteRemovesThePagePermanently(): void

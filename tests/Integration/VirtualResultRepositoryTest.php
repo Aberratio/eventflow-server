@@ -31,8 +31,6 @@ final class VirtualResultRepositoryTest extends TestCase
 
         try {
             $this->pdo = Connection::fromEnv();
-            $this->applyMigration('016_result_imports.sql');
-            $this->applyMigration('017_virtual_result_submissions.sql');
             $this->deletePhpUnitData();
             $this->users = new UserRepository($this->pdo);
             $this->events = new EventRepository($this->pdo);
@@ -191,15 +189,6 @@ final class VirtualResultRepositoryTest extends TestCase
         ]);
 
         return $this->registrations->update((string) $registration['id'], ['bibNumber' => $bibNumber]) ?? $registration;
-    }
-
-    private function applyMigration(string $fileName): void
-    {
-        $path = __DIR__ . '/../../database/migrations/' . $fileName;
-        $sql = (string) file_get_contents($path);
-        foreach (array_filter(array_map('trim', explode(';', $sql))) as $statement) {
-            $this->pdo->exec($statement);
-        }
     }
 
     private function deletePhpUnitData(): void

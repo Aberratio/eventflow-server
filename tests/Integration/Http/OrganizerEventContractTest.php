@@ -23,7 +23,7 @@ final class OrganizerEventContractTest extends HttpTestCase
 
         $this->users = new UserRepository($this->pdo);
         $this->events = new EventRepository($this->pdo);
-        $this->prefix = 'http-org-' . bin2hex(random_bytes(4));
+        $this->prefix = 'horg-' . bin2hex(random_bytes(4));
 
         $this->ensureEventStatusSchema();
 
@@ -311,7 +311,7 @@ final class OrganizerEventContractTest extends HttpTestCase
         $createResp = $this->request(
             'POST',
             '/api/v1/events',
-            $this->eventPayload(['slug' => $this->prefix . '-visibility-invalid']),
+            $this->eventPayload(['slug' => $this->prefix . '-vis-invalid']),
             $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email'])
         );
         $eventId = $this->json($createResp)['data']['id'];

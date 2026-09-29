@@ -36,7 +36,7 @@ final class PlatformStatsContractTest extends HttpTestCase
 
         $this->users = new UserRepository($this->pdo);
         $this->events = new EventRepository($this->pdo);
-        $this->prefix = 'platform-stats-' . bin2hex(random_bytes(4));
+        $this->prefix = 'pstat-' . bin2hex(random_bytes(4));
 
         $this->admin = $this->users->create([
             'name' => 'Platform Stats Admin',

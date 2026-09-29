@@ -43,7 +43,7 @@ final class StartListExportContractTest extends HttpTestCase
         $this->registrations = new RegistrationRepository($this->pdo, null, null, null);
         $this->competitors = new CompetitorRepository($this->pdo);
         $this->fields = new FormFieldRepository($this->pdo);
-        $this->prefix = 'http-startlistexport-' . bin2hex(random_bytes(4));
+        $this->prefix = 'hsle-' . bin2hex(random_bytes(4));
 
         $this->organizer = $this->users->create([
             'name' => 'Export Organizer',
@@ -237,7 +237,7 @@ final class StartListExportContractTest extends HttpTestCase
             'eventId' => $eventId,
             'eventName' => 'Export Contract Event',
             'competitorId' => $competitor['id'],
-            'userId' => 'http-startlistexport-user-' . bin2hex(random_bytes(4)),
+            'userId' => $this->prefix . '-user-' . bin2hex(random_bytes(4)),
             'userName' => 'Export Contract Testowy',
             'userEmail' => $this->prefix . '-reg-' . bin2hex(random_bytes(4)) . '@example.test',
             'distanceId' => $distanceId,

@@ -28,7 +28,7 @@ final class FreeSlotsVisibilityContractTest extends HttpTestCase
         parent::setUp();
         $this->users = new UserRepository($this->pdo);
         $this->events = new EventRepository($this->pdo);
-        $this->prefix = 'http-freeslots-' . bin2hex(random_bytes(4));
+        $this->prefix = 'hfsv-' . bin2hex(random_bytes(4));
 
         $this->organizer = $this->users->create([
             'name' => 'Free Slots Organizer',

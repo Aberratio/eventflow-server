@@ -19,12 +19,12 @@ final class EventRepositoryTest extends TestCase
     protected function setUp(): void
     {
         Env::load(__DIR__ . '/../../.env');
-        $this->slugPrefix = 'phpunit-event-' . bin2hex(random_bytes(4));
+        $this->slugPrefix = 'pet-' . bin2hex(random_bytes(4));
 
         try {
             $this->pdo = Connection::fromEnv();
             $this->ensureEventStatusWorkflowSchema();
-            $this->deletePhpUnitEvents('phpunit-event-%');
+            $this->deletePhpUnitEvents('pet-%');
             $this->ensurePhpUnitOrganizerHasCredits();
             $this->events = new EventRepository($this->pdo);
         } catch (\Throwable $e) {
@@ -38,7 +38,7 @@ final class EventRepositoryTest extends TestCase
             return;
         }
 
-        $this->deletePhpUnitEvents('phpunit-event-%');
+        $this->deletePhpUnitEvents('pet-%');
     }
 
     /**
@@ -377,9 +377,9 @@ final class EventRepositoryTest extends TestCase
         $this->setOrganizerPackageCredits('phpunit-organizer', 3);
 
         $created = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-credit-consume',
+            'slug' => $this->slugPrefix . '-cr-consume',
             'name' => 'PHPUnit Credit Consume',
-            'distances' => $this->minimalDistances($this->slugPrefix . '-credit-consume'),
+            'distances' => $this->minimalDistances($this->slugPrefix . '-cr-consume'),
         ]));
         // Draft creation itself never touches the credit.
         self::assertSame(3, $this->organizerPackageCredits('phpunit-organizer'));
@@ -426,9 +426,9 @@ final class EventRepositoryTest extends TestCase
         $this->setOrganizerPackageCredits('phpunit-organizer', 2);
 
         $rejectedCandidate = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-credit-reject',
+            'slug' => $this->slugPrefix . '-cr-reject',
             'name' => 'PHPUnit Credit Reject',
-            'distances' => $this->minimalDistances($this->slugPrefix . '-credit-reject'),
+            'distances' => $this->minimalDistances($this->slugPrefix . '-cr-reject'),
         ]));
         $this->events->submit((string) $rejectedCandidate['id']);
         self::assertSame(1, $this->organizerPackageCredits('phpunit-organizer'));
@@ -438,9 +438,9 @@ final class EventRepositoryTest extends TestCase
         self::assertSame(2, $this->organizerPackageCredits('phpunit-organizer'));
 
         $approvedCandidate = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-credit-approve',
+            'slug' => $this->slugPrefix . '-cr-approve',
             'name' => 'PHPUnit Credit Approve',
-            'distances' => $this->minimalDistances($this->slugPrefix . '-credit-approve'),
+            'distances' => $this->minimalDistances($this->slugPrefix . '-cr-approve'),
         ]));
         $this->events->submit((string) $approvedCandidate['id']);
         self::assertSame(1, $this->organizerPackageCredits('phpunit-organizer'));
@@ -544,9 +544,9 @@ final class EventRepositoryTest extends TestCase
     public function testManualStatusChangeCannotBypassModerationWorkflow(): void
     {
         $created = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-manual-active',
+            'slug' => $this->slugPrefix . '-man-active',
             'name' => 'PHPUnit Manual Active Forbidden',
-            'distances' => $this->minimalDistances($this->slugPrefix . '-manual-active'),
+            'distances' => $this->minimalDistances($this->slugPrefix . '-man-active'),
         ]));
 
         $this->expectException(\RuntimeException::class);
@@ -565,10 +565,10 @@ final class EventRepositoryTest extends TestCase
         self::assertNull($this->events->cancel((string) $draft['id']));
 
         $published = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-cancel-published',
+            'slug' => $this->slugPrefix . '-cancel-pub',
             'name' => 'PHPUnit Cancel From Published',
             'status' => 'active',
-            'distances' => $this->minimalDistances($this->slugPrefix . '-cancel-published'),
+            'distances' => $this->minimalDistances($this->slugPrefix . '-cancel-pub'),
         ]));
         $cancelled = $this->events->cancel((string) $published['id']);
         self::assertNotNull($cancelled);
@@ -581,17 +581,17 @@ final class EventRepositoryTest extends TestCase
     public function testVisibilityOnlyWorksFromPublished(): void
     {
         $draft = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-visibility-draft',
+            'slug' => $this->slugPrefix . '-vis-draft',
             'name' => 'PHPUnit Visibility From Draft Forbidden',
-            'distances' => $this->minimalDistances($this->slugPrefix . '-visibility-draft'),
+            'distances' => $this->minimalDistances($this->slugPrefix . '-vis-draft'),
         ]));
         self::assertNull($this->events->setVisibility((string) $draft['id'], 'private'));
 
         $published = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-visibility-published',
+            'slug' => $this->slugPrefix . '-vis-pub',
             'name' => 'PHPUnit Visibility From Published',
             'status' => 'active',
-            'distances' => $this->minimalDistances($this->slugPrefix . '-visibility-published'),
+            'distances' => $this->minimalDistances($this->slugPrefix . '-vis-pub'),
         ]));
 
         $private = $this->events->setVisibility((string) $published['id'], 'private');
@@ -873,7 +873,7 @@ final class EventRepositoryTest extends TestCase
     {
         return [
             [
-                'id' => $prefix . '-distance-' . bin2hex(random_bytes(4)),
+                'id' => $prefix . '-d-' . bin2hex(random_bytes(4)),
                 'name' => '10 km',
                 'length' => 10,
                 'unit' => 'km',

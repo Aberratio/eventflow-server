@@ -39,7 +39,7 @@ final class CompetitorMergeServiceTest extends TestCase
     protected function setUp(): void
     {
         Env::load(__DIR__ . '/../../.env');
-        $this->prefix = 'PhpUnitMerge-' . bin2hex(random_bytes(4));
+        $this->prefix = 'pmg-' . bin2hex(random_bytes(4));
 
         try {
             $this->pdo = Connection::fromEnv();

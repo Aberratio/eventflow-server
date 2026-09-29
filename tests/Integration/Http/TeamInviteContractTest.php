@@ -40,7 +40,7 @@ final class TeamInviteContractTest extends HttpTestCase
         $this->users = new UserRepository($this->pdo);
         $this->events = new EventRepository($this->pdo);
         $this->teams = new TeamRepository($this->pdo);
-        $this->prefix = 'http-invite-' . bin2hex(random_bytes(4));
+        $this->prefix = 'hinv-' . bin2hex(random_bytes(4));
 
         $this->organizer = $this->users->create([
             'name' => 'Team Invite Organizer',

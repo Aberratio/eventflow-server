@@ -21,7 +21,7 @@ final class RegistrationRepositoryTest extends TestCase
     protected function setUp(): void
     {
         Env::load(__DIR__ . '/../../.env');
-        $this->slugPrefix = 'phpreg-' . bin2hex(random_bytes(4));
+        $this->slugPrefix = 'preg-' . bin2hex(random_bytes(4));
 
         try {
             $this->pdo = Connection::fromEnv();
@@ -782,7 +782,7 @@ final class RegistrationRepositoryTest extends TestCase
     public function testExpiryDoesNotDoubleDecrementOnRepeatedLazyChecks(): void
     {
         $event = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-expiry-no-double-decrement',
+            'slug' => $this->slugPrefix . '-expiry-no-dbl-dec',
             'distances' => [
                 ['id' => 'd-expiry-double-1', 'price' => 80, 'limit' => 10, 'registeredCount' => 0],
                 ['id' => 'd-expiry-double-2'],
@@ -813,7 +813,7 @@ final class RegistrationRepositoryTest extends TestCase
     public function testCreateExpiresStaleRegistrationBeforeCheckingCapacityForNewOne(): void
     {
         $event = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-expiry-frees-capacity-on-create',
+            'slug' => $this->slugPrefix . '-expiry-frees-cap',
             'distances' => [
                 ['id' => 'd-expiry-capacity-1', 'price' => 80, 'limit' => 1, 'registeredCount' => 0],
                 ['id' => 'd-expiry-capacity-2'],
@@ -843,7 +843,7 @@ final class RegistrationRepositoryTest extends TestCase
     {
         $variantId = $this->slugPrefix . '-variant-standard';
         $event = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-variant-tier-discount',
+            'slug' => $this->slugPrefix . '-variant-tier-disc',
             'discountCodes' => [
                 [
                     'id' => 'phpunit-szutry25-' . $this->slugPrefix,
@@ -944,7 +944,7 @@ final class RegistrationRepositoryTest extends TestCase
     public function testUnknownMerchandiseIdIsRejected(): void
     {
         $event = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-merchandise-invalid',
+            'slug' => $this->slugPrefix . '-merch-invalid',
             // Short ids: this slug is long enough that the default payload()
             // distance ids (slug + '-10k'/'-5k') would overflow VARCHAR(36).
             'distances' => [['id' => 'd-merch-invalid-1'], ['id' => 'd-merch-invalid-2']],
@@ -994,7 +994,7 @@ final class RegistrationRepositoryTest extends TestCase
         $insuranceId = $this->insuranceVariantId('phpunit-nnw-uo-' . $this->slugPrefix, 15.00, 0.20, 70);
         // Deliberately not linked via insuranceVariantIds on this event.
         $event = $this->events->create($this->payload([
-            'slug' => $this->slugPrefix . '-insurance-unoffered',
+            'slug' => $this->slugPrefix . '-insurance-uo',
             'distances' => [['id' => 'd-insurance-uo-1'], ['id' => 'd-insurance-uo-2']],
         ]));
 
@@ -1352,7 +1352,7 @@ final class RegistrationRepositoryTest extends TestCase
     private function deletePhpUnitEvents(): void
     {
         $stmt = $this->pdo->prepare('SELECT id FROM events WHERE slug LIKE :slugLike');
-        $stmt->execute(['slugLike' => 'phpreg-%']);
+        $stmt->execute(['slugLike' => 'preg-%']);
         $ids = $stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
         foreach ($ids as $id) {
             $registrationIds = $this->pdo->prepare('SELECT id FROM registrations WHERE event_id = :id');

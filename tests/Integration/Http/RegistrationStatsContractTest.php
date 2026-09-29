@@ -39,7 +39,7 @@ final class RegistrationStatsContractTest extends HttpTestCase
         $this->registrations = new RegistrationRepository($this->pdo, null, null, null);
         $this->competitors = new CompetitorRepository($this->pdo);
         $this->fields = new FormFieldRepository($this->pdo);
-        $this->prefix = 'http-regstats-' . bin2hex(random_bytes(4));
+        $this->prefix = 'hrs-' . bin2hex(random_bytes(4));
 
         $this->organizer = $this->users->create([
             'name' => 'Stats Organizer',

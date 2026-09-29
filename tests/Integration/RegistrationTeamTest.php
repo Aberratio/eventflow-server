@@ -180,6 +180,43 @@ final class RegistrationTeamTest extends TestCase
         ]));
     }
 
+    /** PP.54: knowing a team id is not enough to join it. */
+    public function testJoinWithoutInviteOrCaptainIsRejected(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Zamknieci',
+        ]));
+
+        try {
+            $this->registrations->create($this->registrationPayload($event, 0, ['teamId' => $captain['teamId']]));
+            self::fail('Joining without an invitation or captain consent must be rejected.');
+        } catch (\RuntimeException $e) {
+            self::assertSame('registration_team_invite_required', $e->getMessage());
+        }
+
+        self::assertSame(1, $this->teams->memberCount((string) $captain['teamId']));
+    }
+
+    /** PP.54: captain consent - the captain (actorUserId) may register into their own team without a token. */
+    public function testCaptainActorMayJoinOwnTeamWithoutToken(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Kapitanowie',
+        ]));
+
+        $member = $this->registrations->create($this->registrationPayload($event, 0, [
+            'teamId' => $captain['teamId'],
+            'actorUserId' => $captain['userId'],
+        ]));
+
+        self::assertSame($captain['teamId'], $member['teamId']);
+        self::assertSame(2, $this->teams->memberCount((string) $captain['teamId']));
+    }
+
     public function testJoinRejectsTeamFromADifferentDistance(): void
     {
         $event = $this->events->create($this->eventPayload());

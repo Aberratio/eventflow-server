@@ -542,7 +542,10 @@ final class RegistrationContractTest extends HttpTestCase
             'name' => 'PHPUnit Reg Event',
             'slug' => $slug,
             'discipline' => 'running',
-            'date' => '2026-09-20',
+            // Relative to "today": a hard-coded past date silently flips the
+            // event to 'finished' via EventRepository::lazilyFinishPastEvents()
+            // (E1.1) on every read.
+            'date' => (new \DateTimeImmutable('+90 days'))->format('Y-m-d'),
             'location' => 'Stadion Testowy',
             'city' => 'Warszawa',
             'description' => '<p>Opis</p>',
@@ -550,7 +553,7 @@ final class RegistrationContractTest extends HttpTestCase
             'organizerId' => $this->organizer['id'],
             'organizerName' => 'Reg Organizer',
             'status' => 'active',
-            'registrationDeadline' => '2026-09-01',
+            'registrationDeadline' => (new \DateTimeImmutable('+60 days'))->format('Y-m-d'),
             'featured' => false,
             'isPrivate' => false,
             'paymentConfig' => ['type' => 'admin_gateway'],

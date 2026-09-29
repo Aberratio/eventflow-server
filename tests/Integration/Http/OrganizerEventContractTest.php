@@ -167,6 +167,8 @@ final class OrganizerEventContractTest extends HttpTestCase
 
     public function testModerationWorkflowViaHttpSubmitAndApprove(): void
     {
+        $this->grantOrganizerPackageCredits($this->organizerA['id'], 1);
+
         // Organizer creates a draft event
         $createResp = $this->request(
             'POST',
@@ -201,6 +203,8 @@ final class OrganizerEventContractTest extends HttpTestCase
 
     public function testOwnerCanCancelPublishedEventButNotDraft(): void
     {
+        $this->grantOrganizerPackageCredits($this->organizerA['id'], 1);
+
         $createResp = $this->request(
             'POST',
             '/api/v1/events',
@@ -232,6 +236,8 @@ final class OrganizerEventContractTest extends HttpTestCase
 
     public function testOwnerCanChangeVisibilityOfPublishedEventButNotDraft(): void
     {
+        $this->grantOrganizerPackageCredits($this->organizerA['id'], 1);
+
         $createResp = $this->request(
             'POST',
             '/api/v1/events',
@@ -264,6 +270,8 @@ final class OrganizerEventContractTest extends HttpTestCase
 
     public function testAdminCanChangeVisibilityOfPublishedEvent(): void
     {
+        $this->grantOrganizerPackageCredits($this->organizerA['id'], 1);
+
         $createResp = $this->request(
             'POST',
             '/api/v1/events',
@@ -569,6 +577,8 @@ final class OrganizerEventContractTest extends HttpTestCase
 
     public function testAdminCanRejectEventWithReason(): void
     {
+        $this->grantOrganizerPackageCredits($this->organizerA['id'], 1);
+
         $createResp = $this->request(
             'POST',
             '/api/v1/events',
@@ -741,7 +751,11 @@ final class OrganizerEventContractTest extends HttpTestCase
             'name' => 'PHPUnit Organizer Event',
             'slug' => $slug,
             'discipline' => 'running',
-            'date' => '2026-09-20',
+            // Relative to "today": a hard-coded past date silently flips the
+            // event to 'finished' via EventRepository::lazilyFinishPastEvents()
+            // (E1.1) on every read, which used to break every test in this
+            // file once the fixed date it was written against passed.
+            'date' => (new \DateTimeImmutable('+90 days'))->format('Y-m-d'),
             'location' => 'Stadion Testowy',
             'city' => 'Warszawa',
             'description' => '<p>Opis</p>',
@@ -749,7 +763,7 @@ final class OrganizerEventContractTest extends HttpTestCase
             'organizerId' => $this->organizerA['id'],
             'organizerName' => 'Organizer A',
             'status' => 'draft',
-            'registrationDeadline' => '2026-09-01',
+            'registrationDeadline' => (new \DateTimeImmutable('+60 days'))->format('Y-m-d'),
             'featured' => false,
             'isPrivate' => false,
             'paymentConfig' => ['type' => 'admin_gateway'],

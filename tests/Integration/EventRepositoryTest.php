@@ -503,13 +503,16 @@ final class EventRepositoryTest extends TestCase
             self::assertStringContainsStringIgnoringCase('lock wait timeout', $e->getMessage());
         } finally {
             // Connection B's own submit() opened its own transaction before
-            // blocking on the UPDATE; that transaction is left dangling after
-            // the timeout (MySQL/MariaDB don't auto-rollback on a lock-wait
-            // timeout by default) and PDO refuses a second beginTransaction()
-            // on top of it, so this connection is done — mirrors
-            // OrderRepositoryTest's concurrency test, which never reuses its
-            // blocked connection either.
-            $connectionB->rollBack();
+            // blocking on the UPDATE. Whether that transaction is left
+            // dangling after the timeout, or submit() has already rolled it
+            // back itself on the PDOException, is not guaranteed the same
+            // way on every engine/driver combination, so guard the rollback
+            // instead of assuming it's still open — an unconditional
+            // rollBack() throws "There is no active transaction" when
+            // submit() already cleaned up after itself.
+            if ($connectionB->inTransaction()) {
+                $connectionB->rollBack();
+            }
             $connectionA->commit();
         }
 

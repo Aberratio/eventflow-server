@@ -119,6 +119,7 @@ final class OrderRepositoryTest extends TestCase
             'price' => 499.0,
             'category' => 'organizer',
             'brand' => 'Test Brand',
+            'imageUrl' => 'https://example.test/product.jpg',
             'inStock' => true,
             'stockCount' => null,
             'isService' => true,

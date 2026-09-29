@@ -1834,6 +1834,9 @@ SQL;
      * Two real, server-validated intents, both keyed off the same
      * `teams` entity (TeamRepository):
      *  - `data['teamId']` set — JOINING an existing Drużyna. Must exist,
+     *    PP.54: the joiner must present the team's `teamInviteToken` or be
+     *    the captain (`actorUserId`) — 403-class `registration_team_invite_required`
+     *    otherwise (team ids are public, so an id alone is no invitation),
      *    must belong to this exact event+distance, and must not already be
      *    at `relay_max_team_size` ("team full" — a distinct, legitimate
      *    rejection, not a capacity/limit error: the Dystans' own limit,
@@ -1872,6 +1875,16 @@ SQL;
             $team = $teams->find($teamId);
             if ($team === null) {
                 throw new \RuntimeException('registration_team_not_found');
+            }
+            // PP.54 (spec 23 §1): an existing Drużyna is joined only through the captain's invitation
+            // link or by the captain themself (captain consent). `actorUserId` is set by the HTTP layer
+            // from the JWT, never from the body (RegistrationCreatePolicy drops it); internal callers that
+            // omit it fall back to the invitation check only, i.e. fail closed.
+            $actorUserId = is_string($data['actorUserId'] ?? null) ? trim($data['actorUserId']) : '';
+            $presentedToken = is_string($data['teamInviteToken'] ?? null) ? trim($data['teamInviteToken']) : '';
+            if (!TeamRepository::isCaptain($team, $actorUserId)
+                && !$teams->inviteTokenMatches((string) $team['id'], $presentedToken)) {
+                throw new \RuntimeException('registration_team_invite_required');
             }
             if ((string) $team['eventId'] !== (string) $data['eventId'] || (string) $team['distanceId'] !== (string) $data['distanceId']) {
                 throw new \RuntimeException('registration_team_distance_mismatch');

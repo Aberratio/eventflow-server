@@ -134,6 +134,38 @@ final class RegistrationTeamTest extends TestCase
         ];
     }
 
+    /**
+     * PP.54: a join must carry the team's invitation (or be done by the captain).
+     *
+     * @param array<string, mixed> $captain the Zapis that created the team
+     * @return array{teamId: mixed, teamInviteToken: string}
+     */
+    private function inviteJoin(array $captain): array
+    {
+        return [
+            'teamId' => $captain['teamId'],
+            'teamInviteToken' => (string) $this->teams->inviteToken((string) $captain['teamId']),
+        ];
+    }
+
+    public function testCreateTeamMintsAnInviteToken(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+        $captain = $this->registrations->create($this->registrationPayload($event, 0, [
+            'createTeam' => true,
+            'teamName' => 'Tokeny',
+        ]));
+
+        $token = $this->teams->inviteToken((string) $captain['teamId']);
+
+        self::assertNotNull($token);
+        self::assertMatchesRegularExpression('/^[0-9a-f]{48}$/', $token);
+        self::assertSame($token, $this->teams->inviteToken((string) $captain['teamId']));
+        self::assertTrue($this->teams->inviteTokenMatches((string) $captain['teamId'], $token));
+        self::assertFalse($this->teams->inviteTokenMatches((string) $captain['teamId'], ''));
+        self::assertFalse($this->teams->inviteTokenMatches((string) $captain['teamId'], str_repeat('0', 48)));
+    }
+
     public function testCreateTeamRejectsNonRelayDistance(): void
     {
         $event = $this->events->create($this->eventPayload());
@@ -233,7 +265,7 @@ final class RegistrationTeamTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('registration_team_distance_mismatch');
         $this->registrations->create($this->registrationPayload($otherEvent, 0, [
-            'teamId' => $captain['teamId'],
+            ...$this->inviteJoin($captain),
         ]));
     }
 
@@ -250,7 +282,7 @@ final class RegistrationTeamTest extends TestCase
             'teamName' => 'Duet',
         ]));
         $this->registrations->create($this->registrationPayload($event, 0, [
-            'teamId' => $captain['teamId'],
+            ...$this->inviteJoin($captain),
         ]));
 
         // Team is now at relay_max_team_size (2) — a third join must be
@@ -259,7 +291,7 @@ final class RegistrationTeamTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('registration_team_full');
         $this->registrations->create($this->registrationPayload($event, 0, [
-            'teamId' => $captain['teamId'],
+            ...$this->inviteJoin($captain),
         ]));
     }
 
@@ -272,7 +304,7 @@ final class RegistrationTeamTest extends TestCase
             'teamName' => 'Wiatr',
         ]));
         $member = $this->registrations->create($this->registrationPayload($event, 0, [
-            'teamId' => $captain['teamId'],
+            ...$this->inviteJoin($captain),
         ]));
 
         self::assertSame($captain['teamId'], $member['teamId']);
@@ -307,7 +339,7 @@ final class RegistrationTeamTest extends TestCase
         self::assertFalse($incomplete['complete']);
 
         $this->registrations->create($this->registrationPayload($event, 0, [
-            'teamId' => $captain['teamId'],
+            ...$this->inviteJoin($captain),
         ]));
 
         $complete = $this->teams->find((string) $captain['teamId']);
@@ -336,8 +368,8 @@ final class RegistrationTeamTest extends TestCase
             'createTeam' => true,
             'teamName' => 'Niepełna',
         ]));
-        $this->registrations->create($this->registrationPayload($event, 0, ['teamId' => $captain['teamId']]));
-        $this->registrations->create($this->registrationPayload($event, 0, ['teamId' => $captain['teamId']]));
+        $this->registrations->create($this->registrationPayload($event, 0, [...$this->inviteJoin($captain)]));
+        $this->registrations->create($this->registrationPayload($event, 0, [...$this->inviteJoin($captain)]));
 
         $team = $this->teams->find((string) $captain['teamId']);
         self::assertSame(3, $team['memberCount']);
@@ -352,7 +384,7 @@ final class RegistrationTeamTest extends TestCase
         // the Dystans' capacity, not the team's roster.
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('registration_capacity_exceeded');
-        $this->registrations->create($this->registrationPayload($event, 0, ['teamId' => $captain['teamId']]));
+        $this->registrations->create($this->registrationPayload($event, 0, [...$this->inviteJoin($captain)]));
     }
 
     /**
@@ -407,7 +439,7 @@ final class RegistrationTeamTest extends TestCase
             'specialCategory' => 'Drużyna kobieca',
         ]));
 
-        $this->registrations->create($this->registrationPayload($event, 0, ['teamId' => $captain['teamId']]));
+        $this->registrations->create($this->registrationPayload($event, 0, [...$this->inviteJoin($captain)]));
 
         $team = $this->teams->find((string) $captain['teamId']);
         self::assertSame(2, $team['memberCount']);
@@ -509,7 +541,7 @@ final class RegistrationTeamTest extends TestCase
         self::assertEquals(100.00, (float) $captainBases['distance_price']);
 
         $member = $this->registrations->create($this->registrationPayload($event, 0, [
-            'teamId' => $captain['teamId'],
+            ...$this->inviteJoin($captain),
         ]));
 
         self::assertSame([], $member['settlementItems'], 'A joining member under per_team pricing must get no opłata-startowa-related settlement items at all.');
@@ -541,7 +573,7 @@ final class RegistrationTeamTest extends TestCase
         ]));
 
         $member = $this->registrations->create($this->registrationPayload($event, 0, [
-            'teamId' => $captain['teamId'],
+            ...$this->inviteJoin($captain),
             'merchandise' => [
                 ['merchandiseId' => $merchandiseId, 'size' => 'M', 'quantity' => 1, 'price' => 1.00],
             ],
@@ -575,7 +607,7 @@ final class RegistrationTeamTest extends TestCase
         ]));
 
         $member = $this->registrations->create($this->registrationPayload($event, 0, [
-            'teamId' => $captain['teamId'],
+            ...$this->inviteJoin($captain),
             'discountCode' => 'DOES-NOT-EXIST',
         ]));
 
@@ -603,7 +635,7 @@ final class RegistrationTeamTest extends TestCase
             'teamName' => 'Niezależni',
         ]));
         $member = $this->registrations->create($this->registrationPayload($event, 0, [
-            'teamId' => $captain['teamId'],
+            ...$this->inviteJoin($captain),
         ]));
 
         self::assertEquals(100.00, (float) $captain['pricePaid']);
@@ -630,7 +662,7 @@ final class RegistrationTeamTest extends TestCase
             'teamName' => 'Jawnie Osobno',
         ]));
         $member = $this->registrations->create($this->registrationPayload($event, 0, [
-            'teamId' => $captain['teamId'],
+            ...$this->inviteJoin($captain),
         ]));
 
         self::assertEquals(100.00, (float) $captain['pricePaid']);

@@ -19,6 +19,15 @@ final class RegistrationCreatePolicyTest extends TestCase
         $result = RegistrationCreatePolicy::filter($payload);
 
         self::assertSame($payload, $result['allowed']);
+        self::assertArrayHasKey('teamInviteToken', $result['allowed']);
+    }
+
+    public function testActorUserIdFromBodyIsDropped(): void
+    {
+        $result = RegistrationCreatePolicy::filter(['actorUserId' => 'x', 'eventId' => 'e']);
+
+        self::assertArrayNotHasKey('actorUserId', $result['allowed']);
+        self::assertSame(['eventId' => 'e'], $result['allowed']);
     }
 
     public function testDropsIdentityDisplayAndUnknownFields(): void

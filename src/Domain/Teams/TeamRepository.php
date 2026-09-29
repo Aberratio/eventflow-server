@@ -37,6 +37,12 @@ use ZmierzymyCzas\Domain\Repository;
  *    from memberCount()/roster composition, per the ticket's own explicit
  *    point (Answer §7) that a stale declaration is an accepted cost.
  *
+ * PP.54 (invitation): a team's id is PUBLIC (forDistance() lists it), so it
+ * is not an invitation. Joining an existing team requires the team's random
+ * `invite_token` (inviteToken()/inviteTokenMatches()) or the captain acting
+ * (isCaptain()); the token is deliberately absent from COLUMNS so no public
+ * read can carry it.
+ *
  * "Completeness" (Answer §1: "stan czysto pochodny, wyliczany z liczby
  * powiązanych Zapisów, nie osobne pole do ręcznego ustawiania") is computed
  * fresh on every read from a live COUNT(*) against `registrations`, using
@@ -57,6 +63,9 @@ final class TeamRepository extends Repository
      * constant is a bigger refactor than this ticket's scope.
      */
     private const NOT_COUNTED_STATUSES = ['cancelled', 'removed', 'expired'];
+
+    /** 24 random bytes -> 48 lowercase hex chars (192 bits); fits invite_token VARCHAR(64). */
+    private const INVITE_TOKEN_BYTES = 24;
 
     private const COLUMNS = 'id, event_id AS eventId, distance_id AS distanceId, name, '
         . 'created_by_user_id AS createdByUserId, special_category AS specialCategory, created_at AS createdAt';
@@ -81,10 +90,55 @@ final class TeamRepository extends Repository
             'name' => $data['name'],
             'created_by_user_id' => $data['createdByUserId'] ?? null,
             'special_category' => $data['specialCategory'] ?? null,
+            'invite_token' => self::newInviteToken(),
             'created_at' => date(DATE_ATOM),
         ]);
 
         return $this->find($id);
+    }
+
+    /**
+     * PP.54: the invitation token is a random secret, NOT the team id (ids are public via
+     * forDistance()). It is never part of COLUMNS, so find()/forDistance() cannot leak it.
+     */
+    public static function newInviteToken(): string
+    {
+        return bin2hex(random_bytes(self::INVITE_TOKEN_BYTES));
+    }
+
+    /** The captain is teams.created_by_user_id (see updateSpecialCategory()). Empty ids never match. */
+    public static function isCaptain(array $team, string $userId): bool
+    {
+        return $userId !== '' && (string) ($team['createdByUserId'] ?? '') === $userId;
+    }
+
+    /**
+     * The team's invitation token, minted on first use for teams created before migration 062.
+     * Null when the team does not exist. Race-safe: the conditional UPDATE lets exactly one minter
+     * win, and every caller then reads the winner's value.
+     */
+    public function inviteToken(string $teamId): ?string
+    {
+        $this->pdo->prepare('UPDATE teams SET invite_token = :token WHERE id = :id AND invite_token IS NULL')
+            ->execute(['token' => self::newInviteToken(), 'id' => $teamId]);
+        $stmt = $this->pdo->prepare('SELECT invite_token FROM teams WHERE id = :id');
+        $stmt->execute(['id' => $teamId]);
+        $token = $stmt->fetchColumn();
+
+        return is_string($token) && $token !== '' ? $token : null;
+    }
+
+    /** Constant-time check of a presented token. A team without a token never matches. */
+    public function inviteTokenMatches(string $teamId, string $presented): bool
+    {
+        if ($presented === '') {
+            return false;
+        }
+        $stmt = $this->pdo->prepare('SELECT invite_token FROM teams WHERE id = :id');
+        $stmt->execute(['id' => $teamId]);
+        $stored = $stmt->fetchColumn();
+
+        return is_string($stored) && $stored !== '' && hash_equals($stored, $presented);
     }
 
     /**
@@ -115,7 +169,7 @@ final class TeamRepository extends Repository
         if ($team === null) {
             throw new \RuntimeException('team_not_found');
         }
-        if ($requestingUserId === '' || (string) ($team['createdByUserId'] ?? '') !== $requestingUserId) {
+        if (!self::isCaptain($team, $requestingUserId)) {
             throw new \RuntimeException('team_not_captain');
         }
         if ($this->eventHasStarted((string) $team['eventId'])) {

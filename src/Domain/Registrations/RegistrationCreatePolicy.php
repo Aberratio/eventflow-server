@@ -11,13 +11,15 @@ namespace ZmierzymyCzas\Domain\Registrations;
  * registeredById) is derived server-side from the JWT and the Zawodnik, and a
  * Zapis's payment status is set only by the payment state machine (webhook,
  * mark-paid) — never claimed by the caller (same rule as PP.2 for PATCH).
+ * PP.54: `actorUserId` (the authenticated caller, for the team captain-consent check) is
+ * set by the HTTP layer only and is never taken from the body, so it is not selectable here.
  */
 final class RegistrationCreatePolicy
 {
     /** Forwarded to RegistrationRepository::create(); every other key is dropped. */
     public const SELECTION_FIELDS = [
         'eventId', 'distanceId', 'category', 'competitorId',
-        'teamName', 'teamId', 'createTeam', 'specialCategory',
+        'teamName', 'teamId', 'teamInviteToken', 'createTeam', 'specialCategory',
         'pricingVariantId', 'discountCode', 'merchandise', 'merchandiseOrders',
         'insuranceVariantId',
     ];

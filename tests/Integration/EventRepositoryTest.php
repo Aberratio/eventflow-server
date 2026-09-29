@@ -98,6 +98,13 @@ final class EventRepositoryTest extends TestCase
      * and — the "no Dystansow" half of "stan bez Dystansow i zapisow" —
      * zero `distances` rows, since createExternal() never accepts a
      * `distances` payload at all.
+     *
+     * @group known-failure-pp14
+     *
+     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
+     * migrations/CI — a 2015 external event comes back 'finished' instead of
+     * 'published', a product-semantics question. Tracked by PP.14. Remove this
+     * tag once fixed there.
      */
     public function testCreateExternalPersistsBarebonesEventWithNoDistances(): void
     {

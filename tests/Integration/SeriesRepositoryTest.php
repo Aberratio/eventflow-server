@@ -66,7 +66,7 @@ final class SeriesRepositoryTest extends TestCase
         $created = $this->series->create([
             'name' => $this->slugPrefix . ' Series',
             'slug' => $this->slugPrefix . '-series',
-            'type' => 'running',
+            'type' => 'local',
             'eventIds' => $eventIds,
         ], ['sub' => 'phpunit-organizer', 'email' => 'organizer@example.test']);
 
@@ -99,7 +99,7 @@ final class SeriesRepositoryTest extends TestCase
         $created = $this->series->create([
             'name' => $this->slugPrefix . ' Series 2',
             'slug' => $this->slugPrefix . '-series-2',
-            'type' => 'running',
+            'type' => 'local',
             'eventIds' => [$first, $second],
         ], ['sub' => 'phpunit-organizer', 'email' => 'organizer@example.test']);
 
@@ -117,7 +117,7 @@ final class SeriesRepositoryTest extends TestCase
         $created = $this->series->create([
             'name' => $this->slugPrefix . ' Series Empty',
             'slug' => $this->slugPrefix . '-series-empty',
-            'type' => 'running',
+            'type' => 'local',
             'eventIds' => [],
         ], ['sub' => 'phpunit-organizer', 'email' => 'organizer@example.test']);
 

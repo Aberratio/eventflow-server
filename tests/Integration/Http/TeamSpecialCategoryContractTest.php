@@ -43,13 +43,13 @@ final class TeamSpecialCategoryContractTest extends HttpTestCase
             'name' => 'Kapitan',
             'email' => $this->prefix . '-captain@example.test',
             'password' => 'demo1234',
-            'role' => 'user',
+            'role' => 'participant',
         ]);
         $this->stranger = $this->users->create([
             'name' => 'Ktos Inny',
             'email' => $this->prefix . '-stranger@example.test',
             'password' => 'demo1234',
-            'role' => 'user',
+            'role' => 'participant',
         ]);
 
         $this->event = $this->events->create([

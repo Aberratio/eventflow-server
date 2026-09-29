@@ -148,7 +148,7 @@ final class UserAccessContractTest extends HttpTestCase
                 'address' => ['city' => 'Warszawa'],
                 'birthDate' => '1990-01-01',
                 'birthYear' => 1990,
-                'gender' => 'male',
+                'gender' => 'M',
                 'club' => 'Klub',
                 'sosContacts' => [['name' => 'X', 'phone' => '1']],
                 'companyName' => 'Firma',

@@ -79,7 +79,7 @@ abstract class Repository
             implode(', ', $placeholders)
         );
 
-        $this->pdo->prepare($sql)->execute($data);
+        $this->pdo->prepare($sql)->execute($this->coerceBooleans($data));
     }
 
     /**
@@ -95,7 +95,27 @@ abstract class Repository
         $data['id'] = $id;
         $sql = sprintf('UPDATE %s SET %s WHERE id = :id', $table, implode(', ', $assignments));
 
-        $this->pdo->prepare($sql)->execute($data);
+        $this->pdo->prepare($sql)->execute($this->coerceBooleans($data));
+    }
+
+    /**
+     * PDO with ATTR_EMULATE_PREPARES=false binds a bool as its string
+     * representation ('' for false, '1' for true), which MySQL 8's strict
+     * sql_mode rejects into a TINYINT column (error 1366). MariaDB coerces
+     * '' to 0 silently, which is how this went unnoticed. Bind bools as int.
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    private function coerceBooleans(array $data): array
+    {
+        foreach ($data as $key => $value) {
+            if (is_bool($value)) {
+                $data[$key] = (int) $value;
+            }
+        }
+
+        return $data;
     }
 
     /**

@@ -657,6 +657,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if (in_array((string) ($payload['role'] ?? ''), ['admin', 'superadmin'], true) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can create admin accounts', 403);
             }
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::USER);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
             $created = $users->create($payload);
             $logActivity((array) $request->getAttribute('auth'), 'user_created', 'Utworzono konto użytkownika', 'user', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
             return JsonResponder::ok($response, $created, 'User created', 201);
@@ -710,6 +715,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                     return JsonResponder::error($response, 'email_taken', 'Ten adres e-mail jest już zajęty.', 409);
                 }
             }
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($allowed, \ZmierzymyCzas\Support\UrlPolicy::USER);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $allowed = $urlCheck['payload'];
             $updated = $users->update($targetId, $allowed);
             $logActivity($auth, 'user_updated', 'Zaktualizowano konto użytkownika', 'user', $targetId, (string) ($updated['name'] ?? ''));
             return JsonResponder::ok($response, $updated);
@@ -841,6 +851,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if ($role !== 'organizer' && !$isStaffRole($role)) {
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::EVENT);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
             try {
                 $created = $events->createForOrganizer($payload, $organizer, (string) ($auth['sub'] ?? ''));
                 $logActivity($auth, 'event_created', 'Utworzono wydarzenie', 'event', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
@@ -861,8 +876,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         // reference row itself, not escalate to Admin for it.
         $api->post('/events/external', function (Request $request, Response $response) use ($events, $body, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
+            $payload = $body($request);
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::EVENT);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
             try {
-                $created = $events->createExternal($body($request), (string) ($auth['sub'] ?? ''));
+                $created = $events->createExternal($payload, (string) ($auth['sub'] ?? ''));
             } catch (\InvalidArgumentException $e) {
                 return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
             }
@@ -946,6 +967,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                     }
                 }
             }
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::EVENT);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
             $updated = $events->update($args['id'], $payload);
             $logActivity($auth, 'event_updated', 'Zaktualizowano wydarzenie', 'event', (string) $args['id'], (string) ($updated['name'] ?? $event['name'] ?? ''));
             // E1.10 mail #8: only "pola krytyczne" (17 §1 row 8) — date and
@@ -2057,10 +2083,16 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
 
         $api->post('/virtual-results', function (Request $request, Response $response) use ($virtualResults, $body) {
             $auth = (array) $request->getAttribute('auth');
+            $payload = $body($request);
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::PROOF);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
             try {
                 return JsonResponder::ok(
                     $response,
-                    $virtualResults->submit($body($request), (string) ($auth['sub'] ?? '')),
+                    $virtualResults->submit($payload, (string) ($auth['sub'] ?? '')),
                     'Virtual result submitted',
                     201
                 );
@@ -2247,7 +2279,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if (!$canUploadResults($event, (array) $request->getAttribute('auth'))) {
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
             }
-            return JsonResponder::ok($response, $results->createDocument($args['eventId'], $body($request)), 'Document uploaded', 201);
+            $payload = $body($request);
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::RESULT_DOCUMENT);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
+            return JsonResponder::ok($response, $results->createDocument($args['eventId'], $payload), 'Document uploaded', 201);
         })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
@@ -2629,6 +2667,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'validation_error', $error, 422);
             }
 
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::SHOP_PRODUCT);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
+
             $auth = (array) $request->getAttribute('auth');
             $created = $shop->createProduct($payload);
             $logActivity($auth, 'shop_product_created', 'Utworzono produkt', 'shopProduct', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
@@ -2641,6 +2685,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if ($error !== null) {
                 return JsonResponder::error($response, 'validation_error', $error, 422);
             }
+
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::SHOP_PRODUCT);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
 
             $auth = (array) $request->getAttribute('auth');
             $existing = $shop->findProduct((string) $args['id']);
@@ -2670,8 +2720,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->get('/challenges/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->find($args['id'])));
         $api->post('/challenges', function (Request $request, Response $response) use ($challenges, $body) {
             $auth = (array) $request->getAttribute('auth');
+            $payload = $body($request);
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::CHALLENGE);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
             try {
-                return JsonResponder::ok($response, $challenges->create($body($request), (string) ($auth['sub'] ?? '')), 'Challenge created', 201);
+                return JsonResponder::ok($response, $challenges->create($payload, (string) ($auth['sub'] ?? '')), 'Challenge created', 201);
             } catch (\InvalidArgumentException $e) {
                 return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
             }
@@ -2679,8 +2735,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->patch('/challenges/{id}', function (Request $request, Response $response, array $args) use ($challenges, $body, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $existing = $challenges->find((string) $args['id']);
+            $payload = $body($request);
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::CHALLENGE);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
             try {
-                $updated = $challenges->update($args['id'], $body($request));
+                $updated = $challenges->update($args['id'], $payload);
             } catch (\InvalidArgumentException $e) {
                 return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
             }
@@ -2777,7 +2839,15 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             $notifyChallengeCompletion($joined);
             return JsonResponder::ok($response, $joined, 'Challenge joined', 201);
         })->add(new AuthMiddleware($jwt));
-        $api->post('/challenge-entries', fn (Request $request, Response $response) => JsonResponder::ok($response, $challenges->submitEntry($body($request), (array) $request->getAttribute('auth')), 'Challenge entry submitted', 201))
+        $api->post('/challenge-entries', function (Request $request, Response $response) use ($challenges, $body) {
+            $payload = $body($request);
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::PROOF);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
+            return JsonResponder::ok($response, $challenges->submitEntry($payload, (array) $request->getAttribute('auth')), 'Challenge entry submitted', 201);
+        })
             ->add(new AuthMiddleware($jwt));
         // E6.5 (issue 15 §4-5): "Uczestnictwo odblokowuje zakup Produktu" —
         // userId is always the caller's own JWT (auth.sub), same as
@@ -2846,7 +2916,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->get('/info-pages/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $pages->findBySlug($args['slug'])));
         $api->post('/info-pages', function (Request $request, Response $response) use ($pages, $body, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
-            $created = $pages->create($body($request));
+            $payload = $body($request);
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::INFO_PAGE);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
+            $created = $pages->create($payload);
             $logActivity($auth, 'info_page_created', 'Utworzono stronę informacyjną', 'infoPage', (string) ($created['id'] ?? ''), (string) ($created['title'] ?? $created['name'] ?? ''));
             return JsonResponder::ok($response, $created, 'Page created', 201);
         })
@@ -2854,7 +2930,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
         $api->patch('/info-pages/{id}', function (Request $request, Response $response, array $args) use ($pages, $body, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $existing = $pages->find((string) $args['id']);
-            $updated = $pages->update($args['id'], $body($request));
+            $payload = $body($request);
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::INFO_PAGE);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
+            $updated = $pages->update($args['id'], $payload);
             $logActivity($auth, 'info_page_updated', 'Zaktualizowano stronę informacyjną', 'infoPage', (string) $args['id'], (string) ($updated['title'] ?? $updated['name'] ?? $existing['title'] ?? $existing['name'] ?? ''));
             return JsonResponder::ok($response, $updated);
         })
@@ -2882,6 +2964,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 return JsonResponder::error($response, 'validation_error', 'Name and logo are required', 422);
             }
 
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::PARTNER);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
+
             $auth = (array) $request->getAttribute('auth');
             $created = $partners->create($payload);
             $logActivity($auth, 'partner_created', 'Utworzono partnera', 'partner', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
@@ -2895,6 +2983,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if (array_key_exists('logoUrl', $payload) && trim((string) $payload['logoUrl']) === '') {
                 return JsonResponder::error($response, 'validation_error', 'Logo is required', 422);
             }
+
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::PARTNER);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
 
             $auth = (array) $request->getAttribute('auth');
             $existing = $partners->find((string) $args['id']);
@@ -2940,6 +3034,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if (trim((string) ($payload['name'] ?? '')) === '' || trim((string) ($payload['imageUrl'] ?? '')) === '') {
                 return JsonResponder::error($response, 'validation_error', 'Name and imageUrl are required', 422);
             }
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::EVENT_BACKGROUND);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
             $created = $backgrounds->create($payload);
             $logActivity((array) $request->getAttribute('auth'), 'event_background_created', 'Utworzono tło wydarzenia', 'eventBackground', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
             return JsonResponder::ok($response, $created, 'Background created', 201);
@@ -2949,7 +3048,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             if (!$bg) {
                 return JsonResponder::error($response, 'not_found', 'Background not found', 404);
             }
-            $updated = $backgrounds->update($args['id'], $body($request));
+            $payload = $body($request);
+            $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::EVENT_BACKGROUND);
+            if ($urlCheck['error'] !== null) {
+                return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
+            }
+            $payload = $urlCheck['payload'];
+            $updated = $backgrounds->update($args['id'], $payload);
             $logActivity((array) $request->getAttribute('auth'), 'event_background_updated', 'Zaktualizowano tło wydarzenia', 'eventBackground', (string) $args['id'], (string) ($updated['name'] ?? $bg['name'] ?? ''));
             return JsonResponder::ok($response, $updated);
         })->add(new AuthMiddleware($jwt, $staffRoles));

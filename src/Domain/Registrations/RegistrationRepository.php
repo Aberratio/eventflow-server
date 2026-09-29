@@ -1588,8 +1588,17 @@ SQL;
         ];
     }
 
-    /** @param array<string, mixed> $data */
-    public function create(array $data): array
+    /**
+     * `paymentDetails` in `$data` is honoured only for trusted internal callers
+     * (result-import office entry, dev seed, fixtures). The HTTP route never forwards
+     * it (PP.52) and passes `$confirmWhenNothingDue = true`: a Zapis whose frozen
+     * Rozliczenie owes 0 is born `confirmed` because there is nothing left to pay
+     * (spec 13 "Maszyna stanów": the Zapis status follows the Rozliczenie; spec 07
+     * pkt 10 "Zapis o cenie zerowej").
+     *
+     * @param array<string, mixed> $data
+     */
+    public function create(array $data, bool $confirmWhenNothingDue = false): array
     {
         // E1.4: free up any slots an expired Zapis is still silently holding before
         // this new one checks capacity/tier thresholds below — this is exactly the
@@ -1621,6 +1630,8 @@ SQL;
             $pricing = $this->pricingForRegistration($data, $distanceRow, $suppressStartFee);
             $paymentDetails = $data['paymentDetails'] ?? null;
             $startFeePaid = is_array($paymentDetails) && (bool) ($paymentDetails['startFeePaid'] ?? false);
+            $nothingDue = $confirmWhenNothingDue && $this->amountDueFromItems($pricing['settlementItems']) <= 0.0;
+            $bornConfirmed = $startFeePaid || $nothingDue;
             $this->insert('registrations', [
                 'id' => $id,
                 'event_id' => $data['eventId'],
@@ -1633,7 +1644,7 @@ SQL;
                 'distance_name' => $pricing['distanceName'],
                 'category' => $data['category'],
                 'registered_at' => date(DATE_ATOM),
-                'status' => $startFeePaid ? 'confirmed' : 'pending',
+                'status' => $bornConfirmed ? 'confirmed' : 'pending',
                 // E1.11: kod startowy — generowany zawsze, tu, przez platformę (nigdy przez
                 // BZ, patrz generateStartCode()'s docblock), więc nigdy nie ma Zapisu bez
                 // kodu i nie ma osobnej operacji "wygeneruj kody" po stronie organizatora.
@@ -1645,7 +1656,7 @@ SQL;
                 // E1.4: frozen at creation, same moment the price itself freezes
                 // (07 pkt 5) — a startFeePaid Zapis is born 'confirmed' and never
                 // needs to expire, so it gets no deadline at all.
-                'payment_expires_at' => $startFeePaid ? null : $this->paymentExpiryDeadline($distanceRow),
+                'payment_expires_at' => $bornConfirmed ? null : $this->paymentExpiryDeadline($distanceRow),
             ]);
             // E1.3: this Zapis is created as 'pending' or 'confirmed' — both count
             // against the Dystans capacity (rozstrzygnięcie 4: "nieanulowane" =
@@ -1668,6 +1679,15 @@ SQL;
                 $this->upsertPaymentDetails($id, [
                     ...$paymentDetails,
                     'startFeeAmount' => $computed['startFeeAmount'],
+                    'insuranceAmount' => $computed['insuranceAmount'],
+                ]);
+            } elseif ($nothingDue) {
+                $computed = $this->computedPaymentAmounts($pricing['settlementItems']);
+                $this->upsertPaymentDetails($id, [
+                    'startFeePaid' => true,
+                    'startFeePaidAt' => date(DATE_ATOM),
+                    'startFeeAmount' => $computed['startFeeAmount'],
+                    'insurancePaid' => false,
                     'insuranceAmount' => $computed['insuranceAmount'],
                 ]);
             }
@@ -2716,14 +2736,24 @@ SQL;
     }
 
     /** The frozen Rozliczenie's DO ZAPŁATY total — the refund ceiling. */
-    private function totalAmountFor(string $registrationId): float
+    /**
+     * DO ZAPŁATY of one Rozliczenie: sum of its items, floored at 0 (same rule as hydrate()).
+     *
+     * @param array<int, array<string, mixed>> $items
+     */
+    private function amountDueFromItems(array $items): float
     {
         $total = 0.0;
-        foreach ($this->settlementItems($registrationId) as $item) {
+        foreach ($items as $item) {
             $total += (float) $item['amount'];
         }
 
         return $this->roundMoney(max(0, $total));
+    }
+
+    private function totalAmountFor(string $registrationId): float
+    {
+        return $this->amountDueFromItems($this->settlementItems($registrationId));
     }
 
     /**

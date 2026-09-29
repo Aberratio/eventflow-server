@@ -58,6 +58,7 @@ use ZmierzymyCzas\Domain\Competitors\CompetitorMergeService;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Domain\Users\UserUpdatePolicy;
+use ZmierzymyCzas\Domain\Registrations\RegistrationCreatePolicy;
 use ZmierzymyCzas\Domain\Registrations\RegistrationPatchPolicy;
 use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
@@ -1597,48 +1598,65 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $registrations->byUser((string) $args['userId']));
         })
             ->add(new AuthMiddleware($jwt));
-        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $competitors, $care, $body) {
+        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $competitors, $care, $users, $body) {
             $auth = (array) $request->getAttribute('auth');
             $callerId = (string) ($auth['sub'] ?? '');
-            $data = $body($request);
+            $policy = RegistrationCreatePolicy::filter($body($request));
+            $data = $policy['allowed'];
+            $notAuthorized = static fn (Response $r): Response => JsonResponder::error(
+                $r,
+                'not_authorized_to_register',
+                'Nie masz upoważnienia (Opieki) do zapisania tego zawodnika.',
+                403
+            );
 
-            // Zawodnik (competitorId) jest źródłem tożsamości zapisu. Jeśli caller
-            // zapisuje kogoś innego niż siebie — musi mieć nad nim Opiekę.
-            $competitorId = (string) ($data['competitorId'] ?? '');
+            // PP.52 (1): resolve the Zawodnik (the Zapis's identity, spec 06 §2/§9).
+            // Authorization comes first, so a stranger always gets 403, never a 422.
+            $caller = $users->find($callerId);
+            if ($caller === null) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $competitorId = trim((string) ($data['competitorId'] ?? ''));
             if ($competitorId === '') {
-                // Kompatybilność wsteczna: klient wysyłający tylko userId (siebie).
-                $targetUserId = (string) ($data['userId'] ?? '');
-                $selfCompetitor = $targetUserId !== '' ? $competitors->findByUserId($targetUserId) : null;
-                $competitorId = $selfCompetitor['id'] ?? '';
-            }
-
-            if ($competitorId !== '' && !$care->canRegister($callerId, $competitorId)) {
-                return JsonResponder::error(
-                    $response,
-                    'not_authorized_to_register',
-                    'Nie masz upoważnienia (Opieki) do zapisania tego zawodnika.',
-                    403
-                );
-            }
-
-            if ($competitorId !== '') {
-                $data['competitorId'] = $competitorId;
-                $competitor = $competitors->find($competitorId);
-                if ($competitor !== null) {
-                    // registrations.user_id jest NOT NULL i historycznie oznaczał "czyje to konto";
-                    // Zawodnik bez Konta (np. dziecko) nie ma tu czego wstawić, więc zapisujemy
-                    // Konto opiekuna. Prawdziwą tożsamością zapisu jest competitor_id (Z2).
-                    $data['userId'] = $competitor['userId'] ?? $callerId;
-                    $data['userName'] = $data['userName'] ?? trim($competitor['firstName'] . ' ' . $competitor['lastName']);
-                    $data['userEmail'] = $data['userEmail'] ?? ($competitor['email'] ?? '');
-                    if ((string) ($competitor['userId'] ?? '') !== $callerId) {
-                        $data['registeredById'] = $callerId;
-                    }
+                // No Zawodnik named => the caller registers themself. A body userId naming
+                // someone else is an attempt to register another Konto without naming
+                // (and proving Opieka over) their Zawodnik.
+                if ($policy['claimedUserId'] !== null && $policy['claimedUserId'] !== $callerId) {
+                    return $notAuthorized($response);
+                }
+                // Legacy accounts get their Zawodnik profile now (same as POST /care).
+                $competitor = $competitors->ensureForUser($caller);
+            } else {
+                $competitor = $care->canRegister($callerId, $competitorId) ? $competitors->find($competitorId) : null;
+                if ($competitor === null) {
+                    return $notAuthorized($response);
                 }
             }
 
+            // PP.52 (2): payment status is never claimed by the caller — webhook / mark-paid only.
+            if ($policy['paidClaim']) {
+                return JsonResponder::error(
+                    $response,
+                    'payment_fields_not_allowed',
+                    'Nie można oznaczyć zapisu jako opłaconego podczas jego tworzenia. Odśwież stronę i spróbuj ponownie.',
+                    422
+                );
+            }
+
+            // PP.52 (3): identity is derived, never taken from the body.
+            $isOwnProfile = (string) ($competitor['userId'] ?? '') === $callerId;
+            $data['competitorId'] = (string) $competitor['id'];
+            // registrations.user_id is NOT NULL and historically meant "whose Konto"; a Zawodnik
+            // without a Konto (e.g. a child) is stored under the guardian's Konto (Z2).
+            $data['userId'] = (string) ($competitor['userId'] ?? '') !== '' ? (string) $competitor['userId'] : $callerId;
+            $data['userName'] = $isOwnProfile
+                ? (string) $caller['name']
+                : trim((string) $competitor['firstName'] . ' ' . (string) $competitor['lastName']);
+            $data['userEmail'] = $isOwnProfile ? (string) $caller['email'] : (string) ($competitor['email'] ?? '');
+            $data['registeredById'] = $isOwnProfile ? null : $callerId;
+
             try {
-                return JsonResponder::ok($response, $registrations->create($data), 'Registration created', 201);
+                return JsonResponder::ok($response, $registrations->create($data, confirmWhenNothingDue: true), 'Registration created', 201);
             } catch (RuntimeException $e) {
                 // E1.3: the Dystans is full — a state conflict (someone else took the
                 // last slot), not a validation problem with this request, so 409

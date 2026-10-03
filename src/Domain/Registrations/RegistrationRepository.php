@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Registrations;
 
+use Psr\Log\LoggerInterface;
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxService;
 use ZmierzymyCzas\Domain\Competitors\CompetitorNamePresenter;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
@@ -15,6 +16,7 @@ use ZmierzymyCzas\Domain\Payments\GatewayAmount;
 use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
 use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Domain\Teams\TeamRepository;
+use ZmierzymyCzas\Support\Log\LoggerFactory;
 use ZmierzymyCzas\Support\QrCode;
 
 final class RegistrationRepository extends Repository
@@ -57,14 +59,19 @@ final class RegistrationRepository extends Repository
      */
     private readonly ?BzWebhookOutboxService $bzWebhookOutbox;
 
+    /** PP.20: PSR-3 logger; defaults to the error_log-backed fallback so nothing is ever silent. */
+    private readonly LoggerInterface $logger;
+
     public function __construct(
         \PDO $pdo,
         ?PaymentGatewayInterface $gateway = null,
         ?PaymentGatewayInterface $payNowGateway = null,
         ?CriticalMailer $mailer = null,
         ?BzWebhookOutboxService $bzWebhookOutbox = null,
+        ?LoggerInterface $logger = null,
     ) {
         parent::__construct($pdo);
+        $this->logger = $logger ?? LoggerFactory::fallback();
         $this->gateway = $gateway;
         $this->payNowGateway = $payNowGateway;
         $this->mailer = $mailer;
@@ -2560,7 +2567,7 @@ SQL;
             // no log, no alert, nothing beyond a customer complaint. The
             // platform-side `approved` state is deliberately left as-is (see
             // docblock above), but the failure itself must be investigable.
-            error_log(sprintf(
+            $this->logger->error(sprintf(
                 '[RegistrationRepository::initiateGatewayRefund] Gateway refund call failed for registration %s '
                 . '(transactionId=%s, gateway=%s, amount=%s): %s: %s',
                 $id,
@@ -2569,10 +2576,24 @@ SQL;
                 (string) $refund['amount'],
                 get_class($e),
                 $e->getMessage()
-            ));
+            ), [
+                'registrationId' => $id,
+                'transactionId' => $transactionId,
+                'gateway' => $gatewayProvider,
+                'amount' => (string) $refund['amount'],
+                'exception' => $e,
+                'alert' => 'payments.refund_failed',
+            ]);
 
             return false;
         }
+
+        $this->logger->info('Gateway refund requested', [
+            'registrationId' => $id,
+            'transactionId' => $transactionId,
+            'gateway' => $gatewayProvider,
+            'amount' => (string) $refund['amount'],
+        ]);
 
         return true;
     }
@@ -2849,10 +2870,18 @@ SQL;
                 (string) $registration['userEmail'],
                 (string) $registration['userName']
             );
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
             // Gateway unreachable/misconfigured: the Zapis itself was already
             // committed successfully above — never let a gateway hiccup fail
-            // the registration.
+            // the registration. PP.20: but it must leave a trace. Never log the
+            // startSession() arguments (user e-mail/name).
+            $this->logger->error('Gateway payment session could not be started; registration left pending without a session', [
+                'registrationId' => (string) $registration['id'],
+                'gateway' => $provider,
+                'exception' => $e,
+                'alert' => 'payments.session_failed',
+            ]);
+
             return null;
         }
 
@@ -3001,7 +3030,7 @@ SQL;
     /** One PII-free line (ids, gateway name and amounts only) so a mismatch is visible in the server log. */
     private function logAmountMismatch(string $transactionId, string $registrationId, string $gateway, ?int $expectedGrosze, ?int $notifiedGrosze): void
     {
-        error_log(sprintf(
+        $this->logger->error(sprintf(
             '[RegistrationRepository::applyGatewayNotification] Gateway amount mismatch, payment NOT marked paid: '
             . 'transactionId=%s registrationId=%s gateway=%s expectedGrosze=%s notifiedGrosze=%s',
             $transactionId,
@@ -3009,7 +3038,14 @@ SQL;
             $gateway,
             $expectedGrosze === null ? 'unparseable' : (string) $expectedGrosze,
             $notifiedGrosze === null ? 'missing' : (string) $notifiedGrosze
-        ));
+        ), [
+            'transactionId' => $transactionId,
+            'registrationId' => $registrationId,
+            'gateway' => $gateway,
+            'expectedGrosze' => $expectedGrosze,
+            'notifiedGrosze' => $notifiedGrosze,
+            'alert' => 'payments.amount_mismatch',
+        ]);
     }
 
     /**
@@ -3250,8 +3286,15 @@ SQL;
                 'organizationToken' => $organizationToken,
                 'payload' => $payload,
             ]);
-        } catch (\Throwable) {
-            // Deliberately swallowed — see this method's doc comment.
+        } catch (\Throwable $e) {
+            // Deliberately swallowed (see this method's doc comment), but PP.20
+            // leaves a trace. Never log organizationToken/payload.
+            $this->logger->warning('BZ critical change push failed', [
+                'eventId' => $eventId,
+                'registrationId' => $registrationId,
+                'changeType' => $changeType,
+                'exception' => $e,
+            ]);
         }
     }
 

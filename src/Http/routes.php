@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Log\LoggerInterface;
+use Psr\Log\LogLevel;
 use Slim\App;
 use Slim\Routing\RouteCollectorProxy;
 use ZmierzymyCzas\Database\SeedManifest;
@@ -123,7 +124,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $bzWebhookOutbox = $bzWebhookConfig->isConfigured()
         ? new BzWebhookOutboxService(new BzWebhookClient(new BzCurlHttpClient(), $bzWebhookConfig), new BzWebhookOutboxRepository($pdo))
         : null;
-    $registrations = new RegistrationRepository($pdo, $tpayGateway, $payNowGateway, $mailer, $bzWebhookOutbox);
+    $registrations = new RegistrationRepository($pdo, $tpayGateway, $payNowGateway, $mailer, $bzWebhookOutbox, $logger);
+    // PP.20: one record per payment webhook delivery. Context is ids only, never the
+    // signature, the raw body or anything else the (unauthenticated) caller controls.
+    $logWebhook = static function (string $gateway, string $outcome, array $context = []) use ($logger): void {
+        $level = in_array($outcome, ['applied', 'duplicate', 'amount_mismatch'], true) ? LogLevel::INFO : LogLevel::WARNING;
+        $logger->log($level, 'Payment webhook ' . $outcome, ['gateway' => $gateway, 'outcome' => $outcome] + $context);
+    };
     $teams = new TeamRepository($pdo);
     // E1.10 mail #8 ("Zmiana/odwołanie Wydarzenia", 17 §1 row 8) — one call per
     // registered Zapis. Lives here (not inside EventRepository) for the same
@@ -450,13 +457,23 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct): void {
-        $api->get('/health', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
-            'status' => 'ok',
-            'env' => (string) Env::get('APP_ENV', ''),
-            'url' => (string) Env::get('APP_URL', ''),
-            'version' => (string) Env::get('APP_VERSION', ''),
-        ]));
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook): void {
+        $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
+            // PP.20: a cheap round trip on the connection index.php already opened.
+            try {
+                $pdo->query('SELECT 1')->fetchColumn();
+            } catch (\Throwable $e) {
+                $logger->error('Health check: database unavailable', ['exception' => $e, 'alert' => 'db.unavailable']);
+
+                return JsonResponder::error($response, 'service_unavailable', 'Serwis jest chwilowo niedostępny. Spróbuj ponownie później.', 503);
+            }
+
+            return JsonResponder::ok($response, [
+                'status' => 'ok',
+                'checks' => ['database' => 'ok'],
+                'version' => (string) Env::get('APP_VERSION', ''),
+            ]);
+        });
 
         $api->post('/uploads/avatars', function (Request $request, Response $response) use ($uploads, $users, $jwt) {
             $files = $request->getUploadedFiles();
@@ -1337,7 +1354,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // nothing about which ones exist. Token mismatch, integration
         // disabled, and a missing token are all folded into the same generic
         // 403 — none of the three is distinguishable from the response.
-        $api->get('/events/{eventId}/bz/participants', function (Request $request, Response $response, array $args) use ($events, $registrations) {
+        $api->get('/events/{eventId}/bz/participants', function (Request $request, Response $response, array $args) use ($events, $registrations, $logger) {
             $event = $events->find((string) $args['eventId']);
             if ($event === null) {
                 return JsonResponder::error($response, 'not_found', 'Event not found', 404);
@@ -1348,10 +1365,15 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $tokenMatches = $presentedToken !== '' && $configuredToken !== '' && hash_equals($configuredToken, $presentedToken);
 
             if (!$tokenMatches || empty($event['bzIntegrationEnabled'])) {
+                $logger->warning('BZ request rejected', ['eventId' => (string) $args['eventId'], 'route' => 'pull']);
+
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
 
-            return JsonResponder::ok($response, $registrations->bzParticipantList((string) $args['eventId']));
+            $participants = $registrations->bzParticipantList((string) $args['eventId']);
+            $logger->info('BZ participants pulled', ['eventId' => (string) $args['eventId'], 'count' => count($participants)]);
+
+            return JsonResponder::ok($response, $participants);
         })->add(new ApiKeyAuthMiddleware($apiKeyConfig));
 
         // E3.5 (issue 12 §2): the return leg of the sync contract — BZ pushing
@@ -1386,7 +1408,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // has no foreign key to `users` (checked: migration 001's table
         // definition carries no CONSTRAINT on that column), so this sentinel
         // value is safe to store.
-        $api->patch('/events/{eventId}/bz/participants/{registrationId}', function (Request $request, Response $response, array $args) use ($events, $registrations, $admin, $body) {
+        $api->patch('/events/{eventId}/bz/participants/{registrationId}', function (Request $request, Response $response, array $args) use ($events, $registrations, $admin, $body, $logger) {
             $event = $events->find((string) $args['eventId']);
             if ($event === null) {
                 return JsonResponder::error($response, 'not_found', 'Event not found', 404);
@@ -1397,6 +1419,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $tokenMatches = $presentedToken !== '' && $configuredToken !== '' && hash_equals($configuredToken, $presentedToken);
 
             if (!$tokenMatches || empty($event['bzIntegrationEnabled'])) {
+                $logger->warning('BZ request rejected', ['eventId' => (string) $args['eventId'], 'route' => 'field_sync']);
+
                 return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
             }
 
@@ -1420,6 +1444,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 }
                 throw $e;
             }
+
+            // PP.20: field KEYS only. old/new/incoming values are personal data.
+            $logger->info('BZ field sync applied', [
+                'eventId' => (string) $args['eventId'],
+                'registrationId' => (string) $args['registrationId'],
+                'appliedFieldKeys' => array_keys($result['applied']),
+                'rejectedFieldKeys' => array_keys($result['rejected']),
+            ]);
 
             $describe = static fn (mixed $v): string => json_encode($v, JSON_UNESCAPED_UNICODE);
             $parts = [];
@@ -2022,19 +2054,23 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // step (extract raw body -> verify X-JWS-Signature -> parse -> apply
         // idempotently by transaction_id) matches the ticket's "nigdy nie ufaj
         // nagłówkom/body bez weryfikacji" and "idempotencja po transaction_id".
-        $api->post('/webhooks/tpay', function (Request $request, Response $response) use ($registrations, $tpayNotificationVerifier) {
+        $api->post('/webhooks/tpay', function (Request $request, Response $response) use ($registrations, $tpayNotificationVerifier, $logWebhook) {
             $bodyStream = $request->getBody();
             $bodyStream->rewind();
             $rawBody = $bodyStream->getContents();
             $signature = $request->getHeaderLine('X-JWS-Signature');
 
             if ($signature === '' || !$tpayNotificationVerifier->verify($rawBody, $signature)) {
+                $logWebhook('tpay', 'invalid_signature');
+
                 return JsonResponder::error($response, 'invalid_signature', 'Invalid or missing webhook signature.', 400);
             }
 
             try {
                 $notification = TpayNotification::fromRawBody($rawBody, $request->getHeaderLine('Content-Type'));
             } catch (RuntimeException) {
+                $logWebhook('tpay', 'invalid_payload');
+
                 return JsonResponder::error($response, 'invalid_payload', 'Malformed webhook payload.', 400);
             }
 
@@ -2050,10 +2086,19 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     // not a 500, and deliberately not written to the activity log
                     // (E0.8's log is for actions by an authenticated actor; an
                     // unrecognized webhook call isn't one).
+                    // The id is attacker-controlled before lookup, so it is not logged.
+                    $logWebhook('tpay', 'unknown_transaction');
+
                     return JsonResponder::error($response, 'gateway_transaction_unknown', 'Unknown transaction.', 404);
                 }
                 throw $e;
             }
+
+            $logWebhook('tpay', $result['amountMismatch'] ? 'amount_mismatch' : ($result['applied'] ? 'applied' : 'duplicate'), [
+                'transactionId' => $notification->transactionId,
+                'registrationId' => $result['registrationId'],
+                'paid' => $notification->paid,
+            ]);
 
             // E1.10: mail #5 ("Potwierdzenie płatności / bilet") is sent from
             // inside RegistrationRepository::applyGatewayNotification() itself,
@@ -2074,19 +2119,23 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // "nigdy nie ufaj nagłówkom/body bez weryfikacji" and "idempotencja po
         // transaction_id" — same shape as the Tpay webhook above, just against
         // PayNow's own (simpler, HMAC-only) signature scheme.
-        $api->post('/webhooks/paynow', function (Request $request, Response $response) use ($registrations, $payNowNotificationVerifier) {
+        $api->post('/webhooks/paynow', function (Request $request, Response $response) use ($registrations, $payNowNotificationVerifier, $logWebhook) {
             $bodyStream = $request->getBody();
             $bodyStream->rewind();
             $rawBody = $bodyStream->getContents();
             $signature = $request->getHeaderLine('Signature');
 
             if ($signature === '' || !$payNowNotificationVerifier->verify($rawBody, $signature)) {
+                $logWebhook('paynow', 'invalid_signature');
+
                 return JsonResponder::error($response, 'invalid_signature', 'Invalid or missing webhook signature.', 400);
             }
 
             try {
                 $notification = PayNowNotification::fromRawBody($rawBody);
             } catch (RuntimeException) {
+                $logWebhook('paynow', 'invalid_payload');
+
                 return JsonResponder::error($response, 'invalid_payload', 'Malformed webhook payload.', 400);
             }
 
@@ -2102,10 +2151,18 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 );
             } catch (RuntimeException $e) {
                 if ($e->getMessage() === 'gateway_transaction_unknown') {
+                    $logWebhook('paynow', 'unknown_transaction');
+
                     return JsonResponder::error($response, 'gateway_transaction_unknown', 'Unknown transaction.', 404);
                 }
                 throw $e;
             }
+
+            $logWebhook('paynow', $result['amountMismatch'] ? 'amount_mismatch' : ($result['applied'] ? 'applied' : 'duplicate'), [
+                'transactionId' => $notification->transactionId,
+                'registrationId' => $result['registrationId'],
+                'paid' => $notification->paid,
+            ]);
 
             // E1.10: mail #5 ("Potwierdzenie płatności / bilet") is sent from
             // inside RegistrationRepository::applyGatewayNotification() itself,

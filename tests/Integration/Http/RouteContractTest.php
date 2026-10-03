@@ -78,6 +78,8 @@ final class RouteContractTest extends HttpTestCase
         self::assertSame(200, $response->getStatusCode());
         self::assertTrue($payload['success']);
         self::assertSame('ok', $payload['data']['status']);
+        self::assertSame('ok', $payload['data']['checks']['database']);
+        self::assertArrayNotHasKey('env', $payload['data']);
     }
 
     public function testEventsListIsPaginatedAndHidesDraftAndPrivateEvents(): void

@@ -11,6 +11,7 @@ use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldCatalog;
 use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
+use ZmierzymyCzas\Domain\Payments\GatewayAmount;
 use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
 use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Domain\Teams\TeamRepository;
@@ -74,6 +75,12 @@ final class RegistrationRepository extends Repository
     private const PROVIDER_TPAY = 'tpay';
     /** Provider name for the second gateway constructor argument ($payNowGateway) — PayNow, E1.7. */
     private const PROVIDER_PAYNOW = 'paynow';
+    /**
+     * Gateways whose paid notification must carry an amount (PP.6): a missing or
+     * unparseable amount from one of these is a mismatch. PayNow is deliberately
+     * absent — its notification has no amount field (see PayNowNotification).
+     */
+    private const AMOUNT_REPORTING_GATEWAYS = [self::PROVIDER_TPAY];
 
     /**
      * E3.5: BZ-return-syncable identity fieldKeys living on `competitors` —
@@ -2867,28 +2874,43 @@ SQL;
      * signature-verified gateway notification (Tpay or PayNow — both webhook
      * routes call this same, provider-agnostic method). `$transactionId`/`$paid`
      * must come from TpayNotification/PayNowNotification, never straight off
-     * unverified request data. `$paidAmount` is accepted for parity with the
-     * notification shapes that carry one (Tpay's does; PayNow's does not — see
-     * PayNowNotification) but is not otherwise used below: the amount of record
-     * is always what registration_gateway_transactions already stored when the
-     * session was started (totalAmountFor() at that time).
+     * unverified request data.
+     *
+     * Paid-amount check (PP.6): `$notifiedAmountGrosze` is the amount the gateway
+     * says it collected, in integer grosze (null = the notification reported no
+     * usable amount). It is compared, with no tolerance, against the amount frozen
+     * in registration_gateway_transactions when the session was started. A paid
+     * notification that differs (underpaid, overpaid, or — for a gateway whose
+     * notification must carry an amount, i.e. Tpay — missing/unparseable) does NOT
+     * mark the payment paid: the row becomes `amount_mismatch`, one PII-free line
+     * is logged, and the caller still acks the gateway (the notification is
+     * authentic and a retry would carry the same amount). PayNow's notification
+     * has no amount field at all, so a null amount from it is exempt (its integrity
+     * rests on the HMAC signature, the paymentId primary-key lookup and the frozen
+     * amount); a PayNow notification that does carry an amount is compared too.
+     *
+     * Status machine: `created` -> `paid` | `failed` | `amount_mismatch`;
+     * `amount_mismatch` -> `paid` (a later notification with the exact amount, e.g.
+     * after a surcharge) | `failed`; `paid`/`failed` are terminal.
      *
      * Idempotency (ticket point 4): the gateway transaction row is looked up and
      * locked by `$transactionId` (its primary key) — a retried webhook for the
      * same transaction finds it already `paid`/`failed` and does nothing further,
      * so a gateway retry-after-timeout can never mark a Rozliczenie paid twice or
      * double-fire whatever side effect eventually hangs off this (E1.10 mail —
-     * that seam is the `$applied` return value below: true only the one time this
-     * call is the one that actually flipped the state).
+     * that seam is the `applied` return value below: true only the one time this
+     * call is the one that actually flipped the state to paid/failed). A repeated
+     * mismatch is a no-op and is not logged again.
      *
-     * @return array{applied: bool, registrationId: ?string}
+     * @return array{applied: bool, registrationId: ?string, amountMismatch: bool}
      */
-    public function applyGatewayNotification(string $transactionId, bool $paid, float $paidAmount): array
+    public function applyGatewayNotification(string $transactionId, bool $paid, ?int $notifiedAmountGrosze): array
     {
+        $mismatchLog = null;
         $this->pdo->beginTransaction();
         try {
             $stmt = $this->pdo->prepare(
-                'SELECT transaction_id AS transactionId, registration_id AS registrationId, status, amount
+                'SELECT transaction_id AS transactionId, registration_id AS registrationId, gateway, status, amount
                  FROM registration_gateway_transactions WHERE transaction_id = :transactionId FOR UPDATE'
             );
             $stmt->execute(['transactionId' => $transactionId]);
@@ -2897,28 +2919,52 @@ SQL;
                 throw new \RuntimeException('gateway_transaction_unknown');
             }
 
-            if ($transaction['status'] !== 'created') {
+            $registrationId = (string) $transaction['registrationId'];
+            $currentStatus = (string) $transaction['status'];
+
+            if (in_array($currentStatus, ['paid', 'failed'], true)) {
                 // Already processed by an earlier delivery of this same
                 // notification (or a later one for the same transaction) — the
                 // idempotency guarantee itself. Nothing more to do.
                 $this->pdo->commit();
-                return ['applied' => false, 'registrationId' => (string) $transaction['registrationId']];
+                return ['applied' => false, 'registrationId' => $registrationId, 'amountMismatch' => false];
             }
 
-            $this->pdo->prepare(
-                "UPDATE registration_gateway_transactions
-                 SET status = :status, processed_at = :processedAt
-                 WHERE transaction_id = :transactionId AND status = 'created'"
-            )->execute([
-                'status' => $paid ? 'paid' : 'failed',
-                'processedAt' => date(DATE_ATOM),
-                'transactionId' => $transactionId,
-            ]);
-
-            $registrationId = (string) $transaction['registrationId'];
-            if ($paid) {
-                $this->markGatewayPaymentPaid($registrationId);
+            if (!$paid) {
+                // The amount is irrelevant when nothing was paid.
+                $this->closeGatewayTransaction($transactionId, 'failed');
+                $this->pdo->commit();
+                return ['applied' => true, 'registrationId' => $registrationId, 'amountMismatch' => false];
             }
+
+            $expectedGrosze = GatewayAmount::toGrosze((string) $transaction['amount']);
+            $mismatch = $expectedGrosze === null
+                || ($notifiedAmountGrosze === null
+                    ? in_array((string) $transaction['gateway'], self::AMOUNT_REPORTING_GATEWAYS, true)
+                    : $notifiedAmountGrosze !== $expectedGrosze);
+
+            if ($mismatch) {
+                if ($currentStatus === 'created') {
+                    $this->pdo->prepare(
+                        "UPDATE registration_gateway_transactions
+                         SET status = 'amount_mismatch', processed_at = :processedAt
+                         WHERE transaction_id = :transactionId AND status = 'created'"
+                    )->execute([
+                        'processedAt' => date(DATE_ATOM),
+                        'transactionId' => $transactionId,
+                    ]);
+                    $mismatchLog = [(string) $transaction['gateway'], $expectedGrosze];
+                }
+                $this->pdo->commit();
+                if ($mismatchLog !== null) {
+                    $this->logAmountMismatch($transactionId, $registrationId, $mismatchLog[0], $mismatchLog[1], $notifiedAmountGrosze);
+                }
+
+                return ['applied' => false, 'registrationId' => $registrationId, 'amountMismatch' => true];
+            }
+
+            $this->closeGatewayTransaction($transactionId, 'paid');
+            $this->markGatewayPaymentPaid($registrationId);
 
             $this->pdo->commit();
         } catch (\Throwable $e) {
@@ -2931,12 +2977,39 @@ SQL;
         // inside markGatewayPaymentPaid() itself (that runs inside this method's
         // transaction; an outbound HTTP call must never happen before a commit
         // that might still roll back — same reasoning as initiateGatewayRefund()
-        // being called after approveRefund()'s own commit, below).
-        if ($paid) {
-            $this->sendPaymentConfirmedMail($registrationId);
-        }
+        // being called after approveRefund()'s own commit, below). Never reached
+        // for an amount mismatch.
+        $this->sendPaymentConfirmedMail($registrationId);
 
-        return ['applied' => true, 'registrationId' => $registrationId];
+        return ['applied' => true, 'registrationId' => $registrationId, 'amountMismatch' => false];
+    }
+
+    /** Moves a still-open (`created` or `amount_mismatch`) gateway transaction row to `paid` or `failed`. */
+    private function closeGatewayTransaction(string $transactionId, string $status): void
+    {
+        $this->pdo->prepare(
+            "UPDATE registration_gateway_transactions
+             SET status = :status, processed_at = :processedAt
+             WHERE transaction_id = :transactionId AND status IN ('created', 'amount_mismatch')"
+        )->execute([
+            'status' => $status,
+            'processedAt' => date(DATE_ATOM),
+            'transactionId' => $transactionId,
+        ]);
+    }
+
+    /** One PII-free line (ids, gateway name and amounts only) so a mismatch is visible in the server log. */
+    private function logAmountMismatch(string $transactionId, string $registrationId, string $gateway, ?int $expectedGrosze, ?int $notifiedGrosze): void
+    {
+        error_log(sprintf(
+            '[RegistrationRepository::applyGatewayNotification] Gateway amount mismatch, payment NOT marked paid: '
+            . 'transactionId=%s registrationId=%s gateway=%s expectedGrosze=%s notifiedGrosze=%s',
+            $transactionId,
+            $registrationId,
+            $gateway,
+            $expectedGrosze === null ? 'unparseable' : (string) $expectedGrosze,
+            $notifiedGrosze === null ? 'missing' : (string) $notifiedGrosze
+        ));
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Tests\Integration;
 
 use PDO;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Domain\Events\EventRepository;
@@ -149,7 +150,7 @@ final class RegistrationRepositoryTpayTest extends TestCase
         $registration = $this->registrations->create($this->registrationPayload($event));
         self::assertSame('pending', $registration['status']);
 
-        $result = $this->registrations->applyGatewayNotification('TX-paid', true, 80.0);
+        $result = $this->registrations->applyGatewayNotification('TX-paid', true, 8000);
 
         self::assertTrue($result['applied']);
         self::assertSame($registration['id'], $result['registrationId']);
@@ -170,11 +171,11 @@ final class RegistrationRepositoryTpayTest extends TestCase
         $this->gateway->nextSession = ['transactionId' => 'TX-dup', 'redirectUrl' => 'https://pay.example.test/dup'];
         $registration = $this->registrations->create($this->registrationPayload($event));
 
-        $first = $this->registrations->applyGatewayNotification('TX-dup', true, 80.0);
+        $first = $this->registrations->applyGatewayNotification('TX-dup', true, 8000);
         self::assertTrue($first['applied']);
 
         // Simulate Tpay retrying the same notification after a timeout.
-        $second = $this->registrations->applyGatewayNotification('TX-dup', true, 80.0);
+        $second = $this->registrations->applyGatewayNotification('TX-dup', true, 8000);
         self::assertFalse($second['applied']);
 
         $reloaded = $this->registrations->find($registration['id']);
@@ -187,7 +188,7 @@ final class RegistrationRepositoryTpayTest extends TestCase
     {
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('gateway_transaction_unknown');
-        $this->registrations->applyGatewayNotification('does-not-exist', true, 10.0);
+        $this->registrations->applyGatewayNotification('does-not-exist', true, 1000);
     }
 
     public function testApplyGatewayNotificationMarksFailedWithoutConfirming(): void
@@ -196,7 +197,7 @@ final class RegistrationRepositoryTpayTest extends TestCase
         $this->gateway->nextSession = ['transactionId' => 'TX-declined', 'redirectUrl' => 'https://pay.example.test/declined'];
         $registration = $this->registrations->create($this->registrationPayload($event));
 
-        $result = $this->registrations->applyGatewayNotification('TX-declined', false, 0.0);
+        $result = $this->registrations->applyGatewayNotification('TX-declined', false, null);
 
         self::assertTrue($result['applied']);
         $reloaded = $this->registrations->find($registration['id']);
@@ -204,12 +205,115 @@ final class RegistrationRepositoryTpayTest extends TestCase
         self::assertSame('failed', $this->rawGatewayTransaction('TX-declined')['status']);
     }
 
+    /** @return array<string, array{int|null}> */
+    public static function mismatchedAmountProvider(): array
+    {
+        return [
+            'underpaid' => [7999],
+            'overpaid' => [8001],
+            'no amount reported' => [null],
+        ];
+    }
+
+    #[DataProvider('mismatchedAmountProvider')]
+    public function testTpayPaidNotificationWithAMismatchedAmountDoesNotConfirm(?int $notified): void
+    {
+        $registration = $this->registrationWithTransaction('TX-mismatch');
+
+        $result = $this->registrations->applyGatewayNotification('TX-mismatch', true, $notified);
+
+        self::assertFalse($result['applied']);
+        self::assertTrue($result['amountMismatch']);
+        $reloaded = $this->registrations->find($registration['id']);
+        self::assertSame('pending', $reloaded['status']);
+        self::assertNotTrue($reloaded['paymentDetails']['startFeePaid'] ?? null);
+        self::assertSame('amount_mismatch', $this->rawGatewayTransaction('TX-mismatch')['status']);
+    }
+
+    public function testRepeatedMismatchIsNoOpAndLaterExactAmountConfirms(): void
+    {
+        $registration = $this->registrationWithTransaction('TX-retry');
+
+        $this->registrations->applyGatewayNotification('TX-retry', true, 7999);
+        $again = $this->registrations->applyGatewayNotification('TX-retry', true, 7999);
+        self::assertFalse($again['applied']);
+        self::assertTrue($again['amountMismatch']);
+        self::assertSame('amount_mismatch', $this->rawGatewayTransaction('TX-retry')['status']);
+
+        $final = $this->registrations->applyGatewayNotification('TX-retry', true, 8000);
+        self::assertTrue($final['applied']);
+        self::assertFalse($final['amountMismatch']);
+        self::assertSame('confirmed', $this->registrations->find($registration['id'])['status']);
+        self::assertSame('paid', $this->rawGatewayTransaction('TX-retry')['status']);
+    }
+
+    public function testPaidTransactionIgnoresLaterNotifications(): void
+    {
+        $registration = $this->registrationWithTransaction('TX-final');
+
+        $this->registrations->applyGatewayNotification('TX-final', true, 8000);
+        $later = $this->registrations->applyGatewayNotification('TX-final', true, 7999);
+
+        self::assertFalse($later['applied']);
+        self::assertFalse($later['amountMismatch']);
+        self::assertSame('paid', $this->rawGatewayTransaction('TX-final')['status']);
+        self::assertSame('confirmed', $this->registrations->find($registration['id'])['status']);
+    }
+
+    public function testNotPaidNotificationAfterMismatchMarksFailed(): void
+    {
+        $registration = $this->registrationWithTransaction('TX-mm-failed');
+
+        $this->registrations->applyGatewayNotification('TX-mm-failed', true, 7999);
+        $result = $this->registrations->applyGatewayNotification('TX-mm-failed', false, null);
+
+        self::assertTrue($result['applied']);
+        self::assertSame('failed', $this->rawGatewayTransaction('TX-mm-failed')['status']);
+        self::assertSame('pending', $this->registrations->find($registration['id'])['status']);
+    }
+
+    public function testMismatchLogsOnceWithoutPii(): void
+    {
+        $registration = $this->registrationWithTransaction('TX-log');
+
+        $previousErrorLog = ini_get('error_log');
+        $logFile = tempnam(sys_get_temp_dir(), 'pp6-error-log-');
+        ini_set('error_log', $logFile);
+        try {
+            $this->registrations->applyGatewayNotification('TX-log', true, 7999);
+            $this->registrations->applyGatewayNotification('TX-log', true, 7999);
+        } finally {
+            ini_set('error_log', $previousErrorLog === false ? '' : $previousErrorLog);
+        }
+        $logged = (string) file_get_contents($logFile);
+        @unlink($logFile);
+
+        self::assertSame(1, substr_count($logged, 'Gateway amount mismatch'));
+        self::assertStringContainsString('expectedGrosze=8000 notifiedGrosze=7999', $logged);
+        self::assertStringContainsString('transactionId=TX-log', $logged);
+        self::assertStringContainsString('registrationId=' . $registration['id'], $logged);
+        self::assertStringNotContainsString('phpunit-participant@example.test', $logged);
+        self::assertStringNotContainsString('PHPUnit User', $logged);
+    }
+
+    /** @return array<string, mixed> */
+    private function registrationWithTransaction(string $transactionId): array
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-' . strtolower($transactionId)]));
+        $this->gateway->nextSession = ['transactionId' => $transactionId, 'redirectUrl' => 'https://pay.example.test/' . $transactionId];
+        $registration = $this->registrations->create($this->registrationPayload($event));
+        self::assertSame('pending', $registration['status']);
+        self::assertSame('created', $this->rawGatewayTransaction($transactionId)['status']);
+
+        return $registration;
+    }
+
     public function testApproveRefundOnGatewayRouteCallsTheGatewaysRefundWithTheApprovedAmount(): void
     {
         $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-refund']));
         $this->gateway->nextSession = ['transactionId' => 'TX-refundable', 'redirectUrl' => 'https://pay.example.test/refundable'];
         $registration = $this->registrations->create($this->registrationPayload($event));
-        $this->registrations->applyGatewayNotification('TX-refundable', true, 80.0);
+        $this->registrations->applyGatewayNotification('TX-refundable', true, 8000);
 
         $this->registrations->requestRefund($registration['id'], 'phpunit-participant');
         $this->registrations->approveRefund($registration['id'], 'phpunit-organizer', 30.0);
@@ -235,7 +339,7 @@ final class RegistrationRepositoryTpayTest extends TestCase
         $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-refund-fail']));
         $this->gateway->nextSession = ['transactionId' => 'TX-refund-fail', 'redirectUrl' => 'https://pay.example.test/refund-fail'];
         $registration = $this->registrations->create($this->registrationPayload($event));
-        $this->registrations->applyGatewayNotification('TX-refund-fail', true, 80.0);
+        $this->registrations->applyGatewayNotification('TX-refund-fail', true, 8000);
         $this->registrations->requestRefund($registration['id'], 'phpunit-participant');
 
         $this->gateway->throwOnRefund = true;

@@ -128,7 +128,10 @@ final class RegistrationRepositoryGatewayProviderTest extends TestCase
             'paymentConfig' => ['type' => 'admin_gateway', 'provider' => 'paynow'],
         ]));
         $registration = $registrations->create($this->registrationPayload($event));
-        $registrations->applyGatewayNotification('TX-paynow', true, 80.0);
+        $notified = $registrations->applyGatewayNotification('TX-paynow', true, null);
+        self::assertTrue($notified['applied']);
+        self::assertFalse($notified['amountMismatch']);
+        self::assertSame('confirmed', $registrations->find($registration['id'])['status']);
 
         // Organizer switches the event to Tpay after the fact.
         $this->pdo->prepare('UPDATE events SET payment_config = :cfg WHERE id = :id')->execute([

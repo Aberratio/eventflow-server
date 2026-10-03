@@ -2039,7 +2039,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
                 $result = $registrations->applyGatewayNotification(
                     $notification->transactionId,
                     $notification->paid,
-                    $notification->amount
+                    $notification->paidAmountGrosze
                 );
             } catch (RuntimeException $e) {
                 if ($e->getMessage() === 'gateway_transaction_unknown') {
@@ -2088,13 +2088,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             }
 
             try {
-                // PayNow's notification carries no amount (unlike Tpay's) — see
-                // PayNowNotification's docblock for why 0.0 here is correct, not
-                // a placeholder: applyGatewayNotification() never reads it.
+                // PayNow's notification carries no amount (see PayNowNotification);
+                // null = not reported. applyGatewayNotification() exempts 'paynow'
+                // from the must-report rule and relies on the HMAC signature plus
+                // the amount frozen on the transaction row.
                 $result = $registrations->applyGatewayNotification(
                     $notification->transactionId,
                     $notification->paid,
-                    0.0
+                    null
                 );
             } catch (RuntimeException $e) {
                 if ($e->getMessage() === 'gateway_transaction_unknown') {

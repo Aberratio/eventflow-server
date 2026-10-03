@@ -9,12 +9,12 @@ namespace ZmierzymyCzas\Domain\Payments\PayNow;
  * (https://docs.paynow.pl/docs/v1/integration — "Odbieranie powiadomień"). The
  * body is always JSON with exactly four fields: `paymentId`, `externalId`,
  * `status`, `modifiedAt`. Unlike Tpay's notification, PayNow's carries no
- * amount at all — RegistrationRepository::applyGatewayNotification()'s
- * `$paidAmount` parameter is unused by its own implementation today (the paid
- * amount of record is always the frozen Rozliczenie total the session was
- * opened with, in registration_gateway_transactions), so this is passed as
- * 0.0 from the webhook route rather than invented from nothing — see
- * routes.php.
+ * amount at all, so the webhook route passes `null` ("not reported") as
+ * RegistrationRepository::applyGatewayNotification()'s notified amount. That
+ * method deliberately exempts PayNow from its paid-amount check: integrity
+ * rests on the HMAC signature (PayNowNotificationVerifier), the paymentId
+ * primary-key lookup, and the amount frozen on the transaction row when the
+ * session was opened.
  */
 final class PayNowNotification
 {

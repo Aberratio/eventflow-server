@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Payments\Tpay;
 
+use ZmierzymyCzas\Domain\Payments\GatewayAmount;
+
 /**
  * A parsed, normalized Tpay webhook notification — the shape the rest of this
  * codebase deals with, independent of whether Tpay sent it as the Transactions
@@ -17,7 +19,7 @@ final class TpayNotification
     public function __construct(
         public readonly string $transactionId,
         public readonly bool $paid,
-        public readonly float $amount,
+        public readonly ?int $paidAmountGrosze,
         public readonly ?string $registrationId,
     ) {
     }
@@ -38,10 +40,35 @@ final class TpayNotification
         // "chargeback", "error", ...) is treated as not-yet-paid.
         $paid = in_array($statusValue, ['correct', 'true', 'paid', 'completed'], true);
 
-        $amount = (float) ($fields['transactionAmount'] ?? $fields['tr_amount'] ?? 0);
+        $paidAmountGrosze = self::paidAmountGrosze($fields);
         $registrationId = (string) ($fields['transactionHiddenDescription'] ?? $fields['tr_crc'] ?? '');
 
-        return new self($transactionId, $paid, $amount, $registrationId !== '' ? $registrationId : null);
+        return new self($transactionId, $paid, $paidAmountGrosze, $registrationId !== '' ? $registrationId : null);
+    }
+
+    /**
+     * The amount the gateway reports as paid, in integer grosze, or null when it is
+     * absent or malformed. Takes the first present, non-empty key of tr_paid,
+     * transactionPaidAmount, tr_amount, transactionAmount (tr_paid first: the classic
+     * notification documents it as the amount actually paid, which differs from the
+     * target tr_amount on overpay/surcharge). A malformed first-present value yields
+     * null — it never falls back to a later key. The field names are unverified
+     * against a real account (TD.4).
+     *
+     * @param array<string, mixed> $fields
+     */
+    private static function paidAmountGrosze(array $fields): ?int
+    {
+        foreach (['tr_paid', 'transactionPaidAmount', 'tr_amount', 'transactionAmount'] as $key) {
+            $value = $fields[$key] ?? null;
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            return GatewayAmount::toGrosze($value);
+        }
+
+        return null;
     }
 
     /** @return array<string, mixed> */

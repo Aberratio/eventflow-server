@@ -237,6 +237,54 @@ response — no SQL errors, stack traces, or internal details reach the client. 
 mode (`APP_DEBUG=true`) keeps the exception message and a stack trace, which is why
 it is refused in production.
 
+## Logging, alerts and /health
+
+Every 5xx, every payment webhook delivery, gateway refunds/sessions, amount mismatches,
+BZ sync calls and boot failures are logged through a PSR-3 logger (Monolog 3). Records are
+PII-free by construction: call sites log ids, counts and field keys only, and a redaction
+layer (`src/Support/Log/PiiRedactor.php`) additionally masks e-mails, JWT/Bearer tokens,
+phone numbers, PESEL, SQL duplicate-entry literals and any context key such as `email`,
+`payload`, `headers`, `fields`, `token`, `signature`. Exceptions are logged as class,
+scrubbed message and an argument-free trace. Residual risk: free-text names echoed by a
+third-party exception message cannot be detected, so keep the log directory private.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `LOG_DIR` | `storage/logs` next to `public/` (staging/production); unset in `APP_ENV=local` = PHP `error_log()` only | Non-public directory for the log files. Not writable: falls back to `error_log()`. |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `notice`, `warning` or `error`. |
+| `LOG_MAX_FILES` | `30` | Days of daily files kept (1-365). |
+| `ALERT_EMAIL` | unset = alerts off | Recipient of alert e-mails. |
+| `ALERT_THROTTLE_SECONDS` | `900` | At most one alert mail per alert key per window (60-86400). |
+
+Invalid values fall back to the default and add one WARNING record naming the key.
+
+Files are JSON lines named `app-YYYY-MM-DD.log` (mode `0600`), rotated daily by Monolog.
+Read them over SSH, for example:
+
+```sh
+tail -n 50 storage/logs/app-$(date +%F).log
+grep '"level_name":"ERROR"' storage/logs/app-$(date +%F).log
+grep 'a1b2c3d4e5f60718' storage/logs/app-*.log   # a request id from an X-Request-Id header
+```
+
+Every 5xx response carries an `X-Request-Id` header whose value is also in the log record
+(`context.requestId`). Uncaught exceptions and PHP fatals outside Slim are logged at
+CRITICAL; PHP warnings keep their current behaviour.
+
+Alerts: records at ERROR or above that carry an alert key are e-mailed through the Central
+Mailer (`priority: technical`) when `ALERT_EMAIL` is set, Central Mailer is configured and
+the log directory is writable. Alert keys: `payments.amount_mismatch`,
+`payments.refund_failed`, `payments.session_failed`, `payments.webhook_error`,
+`http.server_error`, `db.unavailable`, `boot.misconfigured`. Each key is throttled
+(`ALERT_THROTTLE_SECONDS`); the next mail after a window reports how many were suppressed.
+Alerts do not use the database or the mail outbox, so they still work when the DB is down.
+
+`GET /api/v1/health` is public and runs `SELECT 1` on the application connection. 200 means
+`{"status":"ok","checks":{"database":"ok"},"version":"..."}`. When the database is
+unreachable it answers 503 `service_unavailable` with a generic message and no details
+(and logs an ERROR with alert key `db.unavailable`). If the connection cannot be opened at
+boot, every request gets the same 503 (the PDO connect timeout is 5 s).
+
 ## Security headers
 
 Every API response — success, 4xx/5xx from `JsonErrorMiddleware`, CORS preflight, and

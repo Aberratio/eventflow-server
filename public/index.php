@@ -9,6 +9,9 @@ use ZmierzymyCzas\Config\AppConfig;
 use ZmierzymyCzas\Config\ConfigurationException;
 use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Domain\Auth\JwtService;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerClient;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
+use ZmierzymyCzas\Domain\Mailer\Http\CurlHttpClient as MailerCurlHttpClient;
 use ZmierzymyCzas\Http\HttpMiddlewareStack;
 use ZmierzymyCzas\Http\Middleware\SecurityHeadersMiddleware;
 use ZmierzymyCzas\Support\Env;
@@ -19,7 +22,14 @@ require __DIR__ . '/../vendor/autoload.php';
 
 Env::load(__DIR__ . '/../.env');
 
-$logger = LoggerFactory::create(LogConfig::fromEnv());
+// Alerts reuse the Central Mailer HTTP client with a short timeout (at most one synchronous
+// call per alert key per throttle window); they never touch the DB or the mail outbox.
+$centralMailerConfig = CentralMailerConfig::fromEnv();
+$logger = LoggerFactory::create(
+    LogConfig::fromEnv(),
+    $centralMailerConfig->isConfigured() ? new CentralMailerClient(new MailerCurlHttpClient(3), $centralMailerConfig) : null,
+    $centralMailerConfig,
+);
 // Uncaught exceptions and PHP fatals only; PHP warnings/notices are left untouched.
 ErrorHandler::register($logger, false, [], LogLevel::CRITICAL);
 

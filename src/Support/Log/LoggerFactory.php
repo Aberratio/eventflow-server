@@ -14,6 +14,8 @@ use Monolog\Level;
 use Monolog\Logger;
 use Monolog\Processor\UidProcessor;
 use Psr\Log\LoggerInterface;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerClientInterface;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
 
 /** PP.20: the only place that knows the Monolog handler wiring. */
 final class LoggerFactory
@@ -22,9 +24,15 @@ final class LoggerFactory
 
     private const LINE_FORMAT = "%channel%.%level_name%: %message% %context%\n";
 
-    /** Never throws. */
-    public static function create(LogConfig $config): LoggerInterface
-    {
+    /**
+     * Never throws. Alert e-mails need ALL of: a valid ALERT_EMAIL, a configured Central Mailer
+     * and a writable log dir (the throttle file lives there).
+     */
+    public static function create(
+        LogConfig $config,
+        ?CentralMailerClientInterface $alertMailer = null,
+        ?CentralMailerConfig $mailerConfig = null,
+    ): LoggerInterface {
         try {
             $logger = new Logger(self::CHANNEL);
             // Processors run LIFO: the redactor is pushed last so it runs first.
@@ -50,6 +58,16 @@ final class LoggerFactory
                 $file = new RotatingFileHandler($dir . '/app.log', $config->maxFiles, $config->level, true, 0600);
                 $file->setFormatter(new JsonFormatter());
                 $handlers[] = $file;
+
+                if ($config->alertEmail !== null && $alertMailer !== null && $mailerConfig !== null && $mailerConfig->isConfigured()) {
+                    $handlers[] = new AlertHandler(
+                        $alertMailer,
+                        $config->alertEmail,
+                        new AlertThrottle($dir . '/alert-throttle.json', $config->alertThrottleSeconds),
+                        $config->appEnv,
+                        $dir,
+                    );
+                }
             } else {
                 $handlers[] = self::errorLogHandler($config->level);
             }

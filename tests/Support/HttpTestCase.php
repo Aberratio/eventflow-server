@@ -27,12 +27,18 @@ abstract class HttpTestCase extends TestCase
         Env::load(__DIR__ . '/../../.env');
 
         try {
-            $this->pdo = Connection::fromEnv();
+            $this->pdo = $this->createPdo();
             $this->jwt = new JwtService('phpunit-http-secret-at-least-32-bytes', 3600);
             $this->app = $this->createApp();
         } catch (\Throwable $e) {
             self::markTestSkipped('Database is not available for HTTP integration tests: ' . $e->getMessage());
         }
+    }
+
+    /** PP.4: hook for tests that need to share one connection (e.g. a savepoint-isolated one). */
+    protected function createPdo(): PDO
+    {
+        return Connection::fromEnv();
     }
 
     protected function request(string $method, string $path, array $body = [], array $headers = []): ResponseInterface

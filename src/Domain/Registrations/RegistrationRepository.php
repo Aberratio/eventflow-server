@@ -1099,6 +1099,10 @@ SQL;
      * array is non-empty for that Distance, and the whole `ageCategories` key is
      * omitted event-wide when no Distance configures any.
      *
+     * Uses ensureSystemCatalog() (not listForEvent()) so an Event whose 13 system
+     * positions were never lazily seeded still reports its default states - same
+     * defence as bzParticipantList().
+     *
      * @return array<string, mixed>
      */
     public function organizerStats(string $eventId): array
@@ -1113,7 +1117,7 @@ SQL;
 
         $formFields = new FormFieldRepository($this->pdo);
         $systemFields = array_filter(
-            $formFields->listForEvent($eventId),
+            $formFields->ensureSystemCatalog($eventId),
             static fn (array $f): bool => $f['kind'] === 'system'
         );
         $stateByKey = [];

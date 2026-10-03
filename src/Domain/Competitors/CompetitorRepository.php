@@ -141,20 +141,23 @@ SQL;
             return [];
         }
 
+        // Native prepares (ATTR_EMULATE_PREPARES=false, see Connection) reject a repeated
+        // named placeholder, so each LIKE gets its own name.
         $stmt = $this->pdo->prepare(
             'SELECT ' . self::COLUMNS . '
              FROM competitors
              WHERE status = "active"
                AND (
-                 first_name LIKE :needle
-                 OR last_name LIKE :needle
-                 OR CONCAT(first_name, " ", last_name) LIKE :needle
+                 first_name LIKE :needleFirst
+                 OR last_name LIKE :needleLast
+                 OR CONCAT(first_name, " ", last_name) LIKE :needleFull
                  OR identity_code = :exact
                )
              ORDER BY last_name, first_name
              LIMIT ' . max(1, min(100, $limit))
         );
-        $stmt->execute(['needle' => '%' . $needle . '%', 'exact' => $needle]);
+        $like = '%' . $needle . '%';
+        $stmt->execute(['needleFirst' => $like, 'needleLast' => $like, 'needleFull' => $like, 'exact' => $needle]);
         $results = $stmt->fetchAll();
 
         // E8.1 fix-loop: this search box is the one real, existing place in

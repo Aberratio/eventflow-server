@@ -15,6 +15,7 @@ use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
+use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FaultInjectingRefundPdo;
 
@@ -93,22 +94,25 @@ final class CompetitorMergeServiceTest extends TestCase
         }
 
         $this->pdo->prepare('DELETE FROM activity_logs WHERE user_id = :id')->execute(['id' => $this->moderatorId]);
+        // Caregiver Konta (and the Zawodnik each one is auto-given): care_relations cascade with the user.
+        $this->pdo->prepare('DELETE FROM competitors WHERE user_id IN (SELECT id FROM users WHERE email LIKE :email)')
+            ->execute(['email' => $this->prefix . '-%@example.test']);
+        $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')->execute(['email' => $this->prefix . '-%@example.test']);
         $this->pdo->prepare('DELETE FROM competitors WHERE last_name = :last')->execute(['last' => $this->prefix]);
     }
 
-    /**
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — fk_care_konto foreign key violation (CareRepository.php:61).
-     * Tracked by PP.14. Remove this tag once fixed there.
-     */
     public function testMergeRepointsRegistrationAndCareThenMarksAbsorbedScalony(): void
     {
         $event = $this->createEvent('no-conflict');
         $survivor = $this->competitors->create(['firstName' => 'Ala', 'lastName' => $this->prefix, 'club' => 'KS Sokół']);
         $absorbed = $this->competitors->create(['firstName' => 'Ala', 'lastName' => $this->prefix, 'club' => 'KS Sokół']);
-        $this->care->grant('phpunit-caregiver-' . bin2hex(random_bytes(3)), (string) $absorbed['id']);
+        $caregiver = (new UserRepository($this->pdo))->create([
+            'name' => 'Merge Caregiver',
+            'email' => $this->prefix . '-caregiver@example.test',
+            'password' => 'demo1234',
+            'role' => 'participant',
+        ]);
+        $this->care->grant((string) $caregiver['id'], (string) $absorbed['id']);
         $registration = $this->registrations->create($this->registrationPayload($event, (string) $absorbed['id']));
         $oldIdentityCode = (string) $absorbed['identityCode'];
 
@@ -332,11 +336,6 @@ final class CompetitorMergeServiceTest extends TestCase
      * resolve an OLD, now-aliased code from an already-merged profile to its
      * current survivor — the "scan an already-printed card after the merge"
      * scenario resolveIdentityCode() exists for, previously wired nowhere.
-     *
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — tracked by PP.14. Remove this tag once fixed there.
      */
     public function testSearchForMergeResolvesOldIdentityCodeToSurvivor(): void
     {
@@ -344,11 +343,12 @@ final class CompetitorMergeServiceTest extends TestCase
         $absorbed = $this->competitors->create(['firstName' => 'Gita', 'lastName' => $this->prefix]);
         $oldIdentityCode = (string) $absorbed['identityCode'];
 
+        // The profiles differ in firstName; issue 22 section 2 step 4 requires an explicit decision.
         $result = $this->merge->merge(
             ['sub' => $this->moderatorId],
             (string) $survivor['id'],
             (string) $absorbed['id'],
-            []
+            ['firstName' => 'survivor']
         );
         self::assertSame('merged', $result['status']);
 

@@ -77,12 +77,6 @@ final class CompetitorMergeContractTest extends HttpTestCase
         self::assertSame(403, $response->getStatusCode());
     }
 
-    /**
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — tracked by PP.14. Remove this tag once fixed there.
-     */
     public function testModeratorCanSearchCompareAndMerge(): void
     {
         [$survivor, $absorbed] = $this->twoCompetitors();
@@ -105,6 +99,20 @@ final class CompetitorMergeContractTest extends HttpTestCase
         );
         self::assertSame(200, $merge->getStatusCode());
         self::assertSame('merged', $this->json($merge)['data']['status']);
+    }
+
+    /**
+     * The search query once used one repeated named placeholder, which native prepares
+     * reject (HTTP 500) — for every role, not only moderators.
+     */
+    public function testAdminCanSearch(): void
+    {
+        $this->twoCompetitors();
+
+        $search = $this->request('GET', '/api/v1/admin/competitors/search?q=' . $this->prefix, [], $this->bearer('phpunit-admin', 'admin'));
+
+        self::assertSame(200, $search->getStatusCode());
+        self::assertCount(2, $this->json($search)['data']);
     }
 
     public function testAdminCanMerge(): void

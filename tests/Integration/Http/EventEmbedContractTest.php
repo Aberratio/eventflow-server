@@ -12,7 +12,8 @@ use ZmierzymyCzas\Tests\Support\HttpTestCase;
  * E8.11 ("Zewnetrzny formularz w iframe", contract §5.3): per-event iframe-embed
  * config — an organizer/admin-settable enable toggle + origin allowlist, written
  * through the existing generic PATCH /events/{id} path (same canManageEvent gate
- * as every other organizer-owns-event-or-admin setting), and read back through a
+ * as every other organizer-owns-event-or-admin setting; admin: once the event
+ * has cleared moderation - Draft stays Event-Team-only, issue 08), and read back through a
  * dedicated unauthenticated endpoint for the client's embed page.
  */
 final class EventEmbedContractTest extends HttpTestCase
@@ -107,15 +108,14 @@ final class EventEmbedContractTest extends HttpTestCase
         self::assertSame('forbidden', $this->json($response)['error']['code']);
     }
 
-    /**
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — tracked by PP.14. Remove this tag once fixed there.
-     */
     public function testAdminCanSetEmbedSettingsOnAnyEvent(): void
     {
-        $event = $this->events->create($this->eventPayload(['slug' => $this->prefix . '-admin-set']));
+        $event = $this->events->create($this->eventPayload([
+            'slug' => $this->prefix . '-admin-set',
+            'status' => 'published',
+            'date' => (new \DateTimeImmutable('+90 days'))->format('Y-m-d'),
+            'registrationDeadline' => (new \DateTimeImmutable('+60 days'))->format('Y-m-d'),
+        ]));
 
         $response = $this->request(
             'PATCH',
@@ -128,6 +128,29 @@ final class EventEmbedContractTest extends HttpTestCase
         self::assertSame(200, $response->getStatusCode());
         self::assertTrue($payload['data']['embedEnabled']);
         self::assertSame(['https://admin-allowed.test'], $payload['data']['embedAllowedOrigins']);
+    }
+
+    /**
+     * Issue 08, "Co widzi każda rola": a Draft gives Admin a full preview but no edit
+     * (only the Event Team edits it); see $canManageEvent in routes.php. Pins that
+     * decision so nobody "fixes" the code instead of the fixture later.
+     */
+    public function testAdminCannotSetEmbedSettingsOnAnotherOrganizersDraft(): void
+    {
+        $event = $this->events->create($this->eventPayload(['slug' => $this->prefix . '-admin-draft']));
+
+        $response = $this->request(
+            'PATCH',
+            '/api/v1/events/' . $event['id'],
+            ['embedEnabled' => true, 'embedAllowedOrigins' => ['https://admin-allowed.test']],
+            $this->bearer($this->admin['id'], 'admin', $this->admin['email'])
+        );
+
+        self::assertSame(403, $response->getStatusCode());
+        self::assertSame('forbidden', $this->json($response)['error']['code']);
+        $reread = $this->events->find((string) $event['id']);
+        self::assertNotNull($reread);
+        self::assertFalse($reread['embedEnabled']);
     }
 
     public function testInvalidOriginStringsAreRejected(): void

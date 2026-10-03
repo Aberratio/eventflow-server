@@ -93,18 +93,12 @@ final class EventRepositoryTest extends TestCase
      * E6.4 (issue 15 §3): "Wydarzenie zewnętrzne" — the barebones reference
      * Event a Moderator/Admin creates for a Zawodnik's manual challenge-entry
      * proof. Pins the minimal shape the spec asks for: `isExternal = true`,
-     * `publicationStatus = 'published'` (visible/selectable immediately, no
-     * moderation workflow to run it through), `registrationStatus = 'none'`,
+     * created `published` (visible/selectable immediately, no moderation
+     * workflow to run it through; like every Published event it reads back
+     * `finished` once its date has passed, issue 08), `registrationStatus = 'none'`,
      * and — the "no Dystansow" half of "stan bez Dystansow i zapisow" —
      * zero `distances` rows, since createExternal() never accepts a
      * `distances` payload at all.
-     *
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — a 2015 external event comes back 'finished' instead of
-     * 'published', a product-semantics question. Tracked by PP.14. Remove this
-     * tag once fixed there.
      */
     public function testCreateExternalPersistsBarebonesEventWithNoDistances(): void
     {
@@ -117,9 +111,21 @@ final class EventRepositoryTest extends TestCase
 
         self::assertNotEmpty($event['id']);
         self::assertTrue($event['isExternal']);
-        self::assertSame('published', $event['publicationStatus']);
+        // Issue 08: Published -> Finished is automatic after the event date, also for external events.
+        self::assertSame('finished', $event['publicationStatus']);
         self::assertSame('none', $event['registrationStatus']);
         self::assertSame([], $event['distances']);
+
+        // Created as published (no moderation) while the date is still ahead.
+        $upcoming = $this->events->createExternal([
+            'name' => $this->slugPrefix . ' Polmaraton Korony przyszly',
+            'date' => (new \DateTimeImmutable('+30 days'))->format('Y-m-d'),
+            'location' => 'Rynek Glowny',
+            'city' => 'Krakow',
+        ], 'phpunit-moderator');
+        self::assertSame('published', $upcoming['publicationStatus']);
+        self::assertSame('none', $upcoming['registrationStatus']);
+        self::assertSame([], $upcoming['distances']);
 
         $reread = $this->events->find((string) $event['id']);
         self::assertNotNull($reread);

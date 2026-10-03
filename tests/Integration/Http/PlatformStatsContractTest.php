@@ -81,14 +81,12 @@ final class PlatformStatsContractTest extends HttpTestCase
         return $this->json($response)['data'];
     }
 
-    /**
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — tracked by PP.14. Remove this tag once fixed there.
-     */
     public function testAdminSeesEventCountsByPublicationStatusOrganizerCountAndActivePackageCredits(): void
     {
+        // Any EventRepository read lazily flips past Published events to Finished (issue 08). Run it first so
+        // pre-existing past events cannot move between buckets while this test creates its fixtures.
+        $this->events->featured();
+
         $adminAuth = $this->bearer($this->admin['id'], 'admin', $this->admin['email']);
         $before = $this->fetchStats($adminAuth);
         $beforeByStatus = array_column($before['eventsByStatus'], 'count', 'status');
@@ -125,7 +123,8 @@ final class PlatformStatsContractTest extends HttpTestCase
         self::assertSame($beforeByStatus['draft'] + 1, $afterByStatus['draft']);
         self::assertSame($beforeByStatus['published'] + 1, $afterByStatus['published']);
         self::assertSame($beforeByStatus['cancelled'] + 1, $afterByStatus['cancelled']);
-        self::assertSame($before['organizerCount'] + 2, $after['organizerCount']);
+        // The first organizer is created in setUp(), i.e. already inside the baseline: only the second one is new.
+        self::assertSame($before['organizerCount'] + 1, $after['organizerCount']);
         self::assertSame($before['activePackageCredits'] + 5, $after['activePackageCredits']);
     }
 
@@ -163,7 +162,7 @@ final class PlatformStatsContractTest extends HttpTestCase
             'name' => 'Platform Stats Event',
             'slug' => $slug,
             'discipline' => 'running',
-            'date' => '2026-09-20',
+            'date' => (new \DateTimeImmutable('+90 days'))->format('Y-m-d'),
             'location' => 'Stadion Testowy',
             'city' => 'Warszawa',
             'description' => '<p>Opis testowy</p>',
@@ -171,7 +170,7 @@ final class PlatformStatsContractTest extends HttpTestCase
             'organizerId' => $this->organizer['id'],
             'organizerName' => $this->organizer['name'],
             'status' => 'draft',
-            'registrationDeadline' => '2026-09-01',
+            'registrationDeadline' => (new \DateTimeImmutable('+60 days'))->format('Y-m-d'),
             'featured' => false,
             'isPrivate' => false,
             'paymentConfig' => ['type' => 'admin_gateway'],

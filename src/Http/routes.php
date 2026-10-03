@@ -62,6 +62,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Domain\Users\UserUpdatePolicy;
 use ZmierzymyCzas\Domain\Registrations\RegistrationCreatePolicy;
 use ZmierzymyCzas\Domain\Registrations\RegistrationPatchPolicy;
+use ZmierzymyCzas\Http\DomainErrorCode;
 use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
 use ZmierzymyCzas\Support\Env;
@@ -485,6 +486,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $uploads->storeImage($file, 'avatars');
             } catch (RuntimeException $e) {
+                $code = DomainErrorCode::of($e);
                 $messages = [
                     'file_too_large' => 'Obraz jest za duży. Maksymalny rozmiar pliku to 5 MB.',
                     'unsupported_file_type' => 'Nieobsługiwany format obrazu. Wgraj plik JPG, PNG albo WebP.',
@@ -493,7 +495,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
                     'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
+                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
             }
 
             $auth = (array) $request->getAttribute('auth');
@@ -515,6 +517,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $uploads->storeImage($file, 'events');
             } catch (RuntimeException $e) {
+                $code = DomainErrorCode::of($e);
                 $messages = [
                     'file_too_large' => 'Obraz jest za duży. Maksymalny rozmiar pliku to 5 MB.',
                     'unsupported_file_type' => 'Nieobsługiwany format obrazu. Wgraj plik JPG, PNG albo WebP.',
@@ -523,7 +526,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
                     'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
+                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
             }
 
             return JsonResponder::ok($response, $result, 'Obraz został wgrany.', 201);
@@ -539,6 +542,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $uploads->storeDocument($file, 'event-docs');
             } catch (RuntimeException $e) {
+                $code = DomainErrorCode::of($e);
                 $messages = [
                     'file_too_large' => 'Plik jest za duży. Maksymalny rozmiar pliku to 5 MB.',
                     'unsupported_file_type' => 'Nieobsługiwany format pliku. Dozwolone są PDF, DOC, DOCX, XLS, XLSX, TXT oraz JPG, PNG i WebP.',
@@ -546,7 +550,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
                     'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
+                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
             }
 
             return JsonResponder::ok($response, $result, 'Plik został wgrany.', 201);
@@ -562,6 +566,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $uploads->storeImage($file, 'partners');
             } catch (RuntimeException $e) {
+                $code = DomainErrorCode::of($e);
                 $messages = [
                     'file_too_large' => 'Logo jest za duże. Maksymalny rozmiar pliku to 5 MB.',
                     'unsupported_file_type' => 'Nieobsługiwany format logo. Wgraj plik JPG, PNG albo WebP.',
@@ -570,7 +575,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
                     'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
+                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
             }
 
             return JsonResponder::ok($response, $result, 'Logo zostało wgrane.', 201);
@@ -2215,6 +2220,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     201
                 );
             } catch (RuntimeException $e) {
+                $code = DomainErrorCode::of($e);
                 $messages = [
                     'validation_error' => 'Sprawdz poprawność danych i spróbuj ponownie.',
                     'virtual_event_required' => 'Wynik można zgłosić tylko dla wydarzenia wirtualnego.',
@@ -2222,7 +2228,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     'virtual_result_registration_required' => 'Nie znaleziono aktywnej rejestracji na ten dystans.',
                     'virtual_result_duplicate' => 'Wynik dla tego dystansu został już zgłoszony.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się zgłosić wyniku.', 422);
+                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się zgłosić wyniku.', 422);
             }
         })->add(new AuthMiddleware($jwt, ['participant']));
 
@@ -2260,7 +2266,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 }
                 return JsonResponder::ok($response, $reviewed);
             } catch (RuntimeException $e) {
-                return JsonResponder::error($response, $e->getMessage(), 'Nie udało się zweryfikować wyniku.', 422);
+                $code = DomainErrorCode::of($e);
+                return JsonResponder::error($response, $code, 'Nie udało się zweryfikować wyniku.', 422);
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
@@ -2434,6 +2441,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 );
                 return JsonResponder::ok($response, $batch, 'Import przygotowany', 201);
             } catch (RuntimeException $e) {
+                $code = DomainErrorCode::of($e);
                 $messages = [
                     'file_too_large' => 'Plik jest za duzy. Maksymalny rozmiar to 5 MB.',
                     'unsupported_file_type' => 'Nieobslugiwany format pliku. Wgraj CSV, XLSX albo PDF.',
@@ -2443,7 +2451,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     'pdf_table_not_detected' => 'Odczytano tekst z PDF, ale nie wykryto wierszy wynikow. Wgraj CSV/XLSX albo popraw dane recznie po konwersji.',
                     'validation_error' => 'Sprawdz poprawność danych i spróbuj ponownie.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udalo sie przygotowac importu.', 422);
+                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udalo sie przygotowac importu.', 422);
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
@@ -2470,7 +2478,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 return JsonResponder::ok($response, $resultImports->analyze((string) $args['id'], $payload['mapping'] ?? [], $payload['sheetName'] ?? null));
             } catch (RuntimeException $e) {
-                return JsonResponder::error($response, $e->getMessage(), 'Nie udalo sie przeanalizowac importu.', 422);
+                $code = DomainErrorCode::of($e);
+                return JsonResponder::error($response, $code, 'Nie udalo sie przeanalizowac importu.', 422);
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
@@ -2486,8 +2495,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $batch = $resultImports->updateRow((string) $args['id'], $body($request));
                 return JsonResponder::ok($response, $batch);
             } catch (RuntimeException $e) {
-                $status = $e->getMessage() === 'not_found' ? 404 : 422;
-                return JsonResponder::error($response, $e->getMessage(), 'Nie udalo sie zaktualizowac wiersza importu.', $status);
+                $code = DomainErrorCode::of($e);
+                $status = $code === 'not_found' ? 404 : 422;
+                return JsonResponder::error($response, $code, 'Nie udalo sie zaktualizowac wiersza importu.', $status);
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
@@ -2510,6 +2520,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $logActivity($auth, 'result_import_registration_created', 'Utworzono Zapis dla niesparowanego wiersza importu wynikow', 'result_import_row', (string) $args['id'], '');
                 return JsonResponder::ok($response, $batch, 'Zapis utworzony', 201);
             } catch (RuntimeException $e) {
+                $code = DomainErrorCode::of($e);
                 $messages = [
                     'not_found' => 'Import row not found',
                     'result_import_row_missing_name' => 'Wiersz nie zawiera imienia i nazwiska - nie mozna utworzyc Zapisu.',
@@ -2517,8 +2528,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     'result_import_registration_creation_unsupported' => 'Ta operacja nie jest tu dostępna.',
                     'validation_error' => 'Nie znaleziono wydarzenia albo dystansu dla importu.',
                 ];
-                $status = $e->getMessage() === 'not_found' ? 404 : 422;
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udalo sie utworzyc Zapisu.', $status);
+                $status = $code === 'not_found' ? 404 : 422;
+                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udalo sie utworzyc Zapisu.', $status);
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
@@ -2533,11 +2544,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 return JsonResponder::ok($response, $resultImports->commit((string) $args['id']), 'Wyniki zapisane');
             } catch (RuntimeException $e) {
+                $code = DomainErrorCode::of($e);
                 $messages = [
                     'result_import_unresolved_rows' => 'Rozwiaz wszystkie problematyczne wiersze przed zatwierdzeniem importu.',
                     'validation_error' => 'Nie znaleziono wydarzenia albo dystansu dla importu.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udalo sie zatwierdzic importu.', 422);
+                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udalo sie zatwierdzic importu.', 422);
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
@@ -3135,6 +3147,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $uploads->storeImage($file, 'event-backgrounds');
             } catch (RuntimeException $e) {
+                $code = DomainErrorCode::of($e);
                 $messages = [
                     'file_too_large' => 'Obraz jest za duży. Maksymalny rozmiar pliku to 5 MB.',
                     'unsupported_file_type' => 'Nieobsługiwany format obrazu. Wgraj plik JPG, PNG albo WebP.',
@@ -3143,7 +3156,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
                     'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
                 ];
-                return JsonResponder::error($response, $e->getMessage(), $messages[$e->getMessage()] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
+                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
             }
             return JsonResponder::ok($response, $result, 'Tło wydarzenia zostało wgrane.', 201);
         })->add(new AuthMiddleware($jwt, $staffRoles));
@@ -3752,6 +3765,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 return JsonResponder::ok($response, $competitorMerge->comparison((string) $args['idA'], (string) $args['idB']));
             } catch (\RuntimeException $e) {
+                DomainErrorCode::of($e);
+
                 return JsonResponder::error($response, 'not_found', 'Jeden z profili Zawodnika nie istnieje.', 404);
             }
         })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
@@ -3778,7 +3793,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             } catch (\InvalidArgumentException $e) {
                 return JsonResponder::error($response, 'validation_error', 'Nie można scalić profilu z samym sobą.', 422);
             } catch (\RuntimeException $e) {
-                $code = $e->getMessage();
+                $code = DomainErrorCode::of($e);
                 $message = $code === 'competitor_already_merged'
                     ? 'Jeden z profili jest już scalony.'
                     : 'Jeden z profili Zawodnika nie istnieje.';

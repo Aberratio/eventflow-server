@@ -100,7 +100,8 @@
             "php -l src/Support/Log/PiiRedactor.php",
             "php -l src/Support/Log/PiiRedactingProcessor.php",
             "php -l src/Support/Log/AlertThrottle.php",
-            "php -l src/Support/Log/AlertHandler.php"
+            "php -l src/Support/Log/AlertHandler.php",
+            "php -l src/Http/DomainErrorCode.php"
         ],
         "seed:fresh": "php bin/seed.php --fresh",
         "seed:purge": "php bin/seed.php --purge",

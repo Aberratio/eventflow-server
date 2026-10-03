@@ -22,6 +22,7 @@ use ZmierzymyCzas\Domain\Payments\PayNow\PayNowSignature;
 use ZmierzymyCzas\Http\HttpMiddlewareStack;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Support\Log\PiiRedactingProcessor;
+use ZmierzymyCzas\Support\Uuid;
 use ZmierzymyCzas\Tests\Support\FaultInjectingPdo;
 
 /**
@@ -159,6 +160,48 @@ final class ObservabilityContractTest extends TestCase
         self::assertSame('invalid_payload', $records[0]->context['outcome']);
     }
 
+    public function testDatabaseFailureInsideADomainCatchIsAGeneric500AndIsLogged(): void
+    {
+        $pdo = new FaultInjectingPdo(
+            'result_import_rows',
+            new \PDOException("SQLSTATE[42S22]: Column not found: 1054 Unknown column 'secret_col' in 'field list'")
+        );
+
+        $response = $this->send(
+            $this->buildApp($pdo),
+            'PATCH',
+            '/api/v1/result-import-rows/' . Uuid::v4(),
+            ['Authorization' => $this->bearer('organizer')]
+        );
+        $raw = (string) $response->getBody();
+        $payload = (array) json_decode($raw, true);
+
+        self::assertSame(500, $response->getStatusCode());
+        self::assertSame('server_error', $payload['error']['code']);
+        self::assertStringNotContainsString('SQLSTATE', $raw);
+        self::assertStringNotContainsString('secret_col', $raw);
+
+        $records = $this->logs->getRecords();
+        self::assertCount(1, $records);
+        self::assertSame('Unhandled server error', $records[0]->message);
+        self::assertSame(Level::Error, $records[0]->level);
+        self::assertSame('http.server_error', $records[0]->context['alert']);
+    }
+
+    public function testDomainCodeStillMapsAfterTheGuard(): void
+    {
+        $response = $this->send(
+            $this->buildApp($this->realPdo()),
+            'PATCH',
+            '/api/v1/result-import-rows/' . Uuid::v4(),
+            ['Authorization' => $this->bearer('organizer')]
+        );
+
+        self::assertSame(404, $response->getStatusCode());
+        self::assertSame('not_found', $this->json($response)['error']['code']);
+        self::assertCount(0, $this->logs->getRecords());
+    }
+
     private function realPdo(): PDO
     {
         return Connection::fromEnv();
@@ -183,9 +226,20 @@ final class ObservabilityContractTest extends TestCase
         return $app;
     }
 
-    private function send(App $app, string $method, string $path): ResponseInterface
+    /** @param array<string, string> $headers */
+    private function send(App $app, string $method, string $path, array $headers = []): ResponseInterface
     {
-        return $app->handle((new ServerRequestFactory())->createServerRequest($method, $path));
+        $request = (new ServerRequestFactory())->createServerRequest($method, $path);
+        foreach ($headers as $name => $value) {
+            $request = $request->withHeader($name, $value);
+        }
+
+        return $app->handle($request);
+    }
+
+    private function bearer(string $role): string
+    {
+        return 'Bearer ' . $this->jwt->issue(['sub' => 'pp20-user', 'role' => $role, 'email' => 'phpunit@example.test']);
     }
 
     /** @param array<string, string> $headers */

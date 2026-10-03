@@ -67,6 +67,7 @@ final class SeriesRepositoryTest extends TestCase
             'name' => $this->slugPrefix . ' Series',
             'slug' => $this->slugPrefix . '-series',
             'type' => 'local',
+            'description' => 'PP.13 fixture (series.description is NOT NULL, no default)',
             'eventIds' => $eventIds,
         ], ['sub' => 'phpunit-organizer', 'email' => 'organizer@example.test']);
 
@@ -100,6 +101,7 @@ final class SeriesRepositoryTest extends TestCase
             'name' => $this->slugPrefix . ' Series 2',
             'slug' => $this->slugPrefix . '-series-2',
             'type' => 'local',
+            'description' => 'PP.13 fixture (series.description is NOT NULL, no default)',
             'eventIds' => [$first, $second],
         ], ['sub' => 'phpunit-organizer', 'email' => 'organizer@example.test']);
 
@@ -118,6 +120,7 @@ final class SeriesRepositoryTest extends TestCase
             'name' => $this->slugPrefix . ' Series Empty',
             'slug' => $this->slugPrefix . '-series-empty',
             'type' => 'local',
+            'description' => 'PP.13 fixture (series.description is NOT NULL, no default)',
             'eventIds' => [],
         ], ['sub' => 'phpunit-organizer', 'email' => 'organizer@example.test']);
 

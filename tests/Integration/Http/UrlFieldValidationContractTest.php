@@ -105,7 +105,7 @@ final class UrlFieldValidationContractTest extends HttpTestCase
         $response = $this->patchEvent($eventId, [
             'registrationEmbed' => ['enabled' => true, 'mode' => 'external_embed', 'externalUrl' => 'https://example.com/form'],
             'organizerContact' => ['website' => 'www.example.pl'],
-            'documents' => [['id' => $this->prefix . '-doc', 'name' => 'Regulamin', 'type' => 'regulamin', 'fileUrl' => '/uploads/event-docs/a.pdf']],
+            'documents' => [['id' => $this->prefix . '-doc', 'name' => 'Regulamin', 'type' => 'regulamin', 'fileUrl' => '/uploads/event-docs/a.pdf', 'fileName' => 'a.pdf']],
         ]);
         self::assertSame(200, $response->getStatusCode(), (string) $response->getBody());
 
@@ -381,6 +381,7 @@ final class UrlFieldValidationContractTest extends HttpTestCase
             'location' => 'Stadion Testowy',
             'city' => 'Warszawa',
             'description' => '<p>Opis</p>',
+            'imageUrl' => 'https://example.test/img.jpg',
             'organizerId' => $this->organizer['id'],
             'organizerName' => 'URL Test Organizer',
             'status' => 'draft',

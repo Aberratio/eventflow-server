@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Database\Migrator;
 use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
+use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Shop\ShopRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
@@ -54,7 +55,37 @@ final class ChallengeRewardClaimTest extends TestCase
         }
 
         $this->challengeId = $this->prefix . '-chal';
-        $this->eventId = $this->prefix . '-evt';
+        // A real Event row is required: event_threshold counts manual entries through an INNER JOIN on events.
+        $event = (new EventRepository($this->pdo))->create([
+            'name' => 'PHPUnit Reward Event',
+            'slug' => $this->prefix . '-evt',
+            'discipline' => 'running',
+            'date' => (new \DateTimeImmutable('+90 days'))->format('Y-m-d'),
+            'location' => 'Stadion Testowy',
+            'city' => 'Warszawa',
+            'description' => '<p>desc</p>',
+            'imageUrl' => 'https://example.test/event.jpg',
+            'organizerId' => $this->prefix . '-organizer',
+            'organizerName' => 'PHPUnit Organizer',
+            'status' => 'published',
+            'registrationDeadline' => (new \DateTimeImmutable('+60 days'))->format('Y-m-d'),
+            'featured' => false,
+            'paymentConfig' => ['type' => 'admin_gateway'],
+            'distances' => [[
+                'id' => $this->prefix . '-10k',
+                'name' => '10 km',
+                'length' => 10,
+                'unit' => 'km',
+                'categories' => ['Open'],
+                'ageCategories' => [],
+                'specialCategories' => [],
+                'limit' => 100,
+                'registeredCount' => 0,
+                'price' => 80,
+                'routeFiles' => [],
+            ]],
+        ]);
+        $this->eventId = (string) $event['id'];
 
         $this->pdo->prepare(
             "INSERT INTO challenges (id, name, slug, description, min_completed, status, created_by)
@@ -89,6 +120,12 @@ final class ChallengeRewardClaimTest extends TestCase
         $this->pdo->prepare('DELETE FROM challenge_condition_node_events WHERE node_id IN (SELECT id FROM challenge_condition_nodes WHERE challenge_id = :id)')->execute(['id' => $this->challengeId]);
         $this->pdo->prepare('DELETE FROM challenge_condition_nodes WHERE challenge_id = :id')->execute(['id' => $this->challengeId]);
         $this->pdo->prepare('DELETE FROM challenge_events WHERE challenge_id = :id')->execute(['id' => $this->challengeId]);
+        $eventStmt = $this->pdo->prepare('SELECT id FROM events WHERE slug = :slug');
+        $eventStmt->execute(['slug' => $this->prefix . '-evt']);
+        foreach (($eventStmt->fetchAll(PDO::FETCH_COLUMN) ?: []) as $eventId) {
+            $this->pdo->prepare('DELETE FROM event_distances WHERE event_id = :id')->execute(['id' => $eventId]);
+            $this->pdo->prepare('DELETE FROM events WHERE id = :id')->execute(['id' => $eventId]);
+        }
         $this->pdo->prepare('DELETE FROM challenge_participations WHERE challenge_id = :id')->execute(['id' => $this->challengeId]);
         $this->pdo->prepare('DELETE FROM challenges WHERE id = :id')->execute(['id' => $this->challengeId]);
         $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')->execute(['email' => $this->prefix . '-%@example.test']);
@@ -145,13 +182,6 @@ final class ChallengeRewardClaimTest extends TestCase
         $this->challenges->claimReward($this->challengeId, $product['id'], $this->defaultOrderFields(), $this->competitor['id']);
     }
 
-    /**
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — fails with 'challenge_not_completed' (ChallengeRepository.php:554).
-     * Tracked by PP.14. Remove this tag once fixed there.
-     */
     public function testCanClaimAfterRealTreeCompletion(): void
     {
         $this->challenges->join($this->challengeId, $this->competitor);
@@ -171,13 +201,6 @@ final class ChallengeRewardClaimTest extends TestCase
         self::assertSame(1, (int) $stmt->fetchColumn());
     }
 
-    /**
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — fails with 'challenge_not_completed' (ChallengeRepository.php:554).
-     * Tracked by PP.14. Remove this tag once fixed there.
-     */
     public function testDoubleClaimIsRejectedAndDoesNotCreateASecondOrder(): void
     {
         $this->challenges->join($this->challengeId, $this->competitor);
@@ -206,12 +229,6 @@ final class ChallengeRewardClaimTest extends TestCase
      * A failed claim must also release the reward_granted "claim lock" so
      * the competitor can retry once stock is replenished, and must not touch
      * challenge completion at all.
-     *
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — fails with 'challenge_not_completed' (ChallengeRepository.php:554).
-     * Tracked by PP.14. Remove this tag once fixed there.
      */
     public function testStockExhaustionFailsTheClaimWithoutGrantingRewardOrBreakingCompletion(): void
     {
@@ -234,13 +251,6 @@ final class ChallengeRewardClaimTest extends TestCase
         self::assertTrue($participation['isCompleted']);
     }
 
-    /**
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — fails with 'challenge_not_completed' (ChallengeRepository.php:554).
-     * Tracked by PP.14. Remove this tag once fixed there.
-     */
     public function testZeroPriceRewardClaimsSuccessfullyThroughTheSameOrderFlow(): void
     {
         $this->challenges->join($this->challengeId, $this->competitor);
@@ -258,13 +268,6 @@ final class ChallengeRewardClaimTest extends TestCase
         self::assertSame(0.0, (float) $order['totalPrice']);
     }
 
-    /**
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — fails with 'challenge_not_completed' (ChallengeRepository.php:554).
-     * Tracked by PP.14. Remove this tag once fixed there.
-     */
     public function testCannotClaimAProductNotLinkedAsAChallengeReward(): void
     {
         $this->challenges->join($this->challengeId, $this->competitor);

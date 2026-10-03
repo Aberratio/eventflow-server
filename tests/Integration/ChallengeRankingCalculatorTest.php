@@ -14,6 +14,7 @@ use ZmierzymyCzas\Domain\Challenges\ChallengeRankingCalculator;
 use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
 use ZmierzymyCzas\Domain\Competitors\CompetitorNamePresenter;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
+use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 
@@ -31,6 +32,7 @@ final class ChallengeRankingCalculatorTest extends TestCase
     private ChallengeRepository $challenges;
     private CompetitorRepository $competitors;
     private UserRepository $users;
+    private EventRepository $events;
     private ChallengePointsSettingsRepository $pointsSettings;
     private ChallengeRankingCalculator $ranking;
     private string $prefix;
@@ -54,6 +56,7 @@ final class ChallengeRankingCalculatorTest extends TestCase
         $this->challenges = new ChallengeRepository($this->pdo);
         $this->competitors = new CompetitorRepository($this->pdo);
         $this->users = new UserRepository($this->pdo);
+        $this->events = new EventRepository($this->pdo);
         $this->pointsSettings = new ChallengePointsSettingsRepository($this->pdo);
         $this->originalSettings = $this->pointsSettings->getSettings();
         $scorer = new ChallengePointThresholdScorer($this->pdo, $this->pointsSettings);
@@ -71,6 +74,12 @@ final class ChallengeRankingCalculatorTest extends TestCase
             $this->pdo->prepare('DELETE FROM challenge_entries WHERE challenge_id = :id')->execute(['id' => $id]);
             $this->pdo->prepare('DELETE FROM challenges WHERE id = :id')->execute(['id' => $id]);
         }
+        $eventStmt = $this->pdo->prepare('SELECT id FROM events WHERE slug LIKE :slug');
+        $eventStmt->execute(['slug' => $this->prefix . '-ev-%']);
+        foreach (($eventStmt->fetchAll(PDO::FETCH_COLUMN) ?: []) as $eventId) {
+            $this->pdo->prepare('DELETE FROM event_distances WHERE event_id = :id')->execute(['id' => $eventId]);
+            $this->pdo->prepare('DELETE FROM events WHERE id = :id')->execute(['id' => $eventId]);
+        }
         $this->pdo->prepare("DELETE FROM results WHERE event_id LIKE :like")->execute(['like' => $this->prefix . '%']);
         $this->pdo->prepare('DELETE FROM competitors WHERE last_name = :last')->execute(['last' => $this->prefix]);
         $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')->execute(['email' => $this->prefix . '.%@example.test']);
@@ -81,7 +90,49 @@ final class ChallengeRankingCalculatorTest extends TestCase
         return bin2hex(random_bytes(16));
     }
 
-    /** @return array{0: array<string,mixed>, 1: array<string,mixed>} [user, competitor] */
+    /**
+     * Real `events` row: tree evaluation joins events (ChallengeConditionTreeEvaluator::evaluateEventThreshold()).
+     */
+    private function makeEvent(string $suffix): string
+    {
+        $event = $this->events->create([
+            'name' => 'PHPUnit Rank Event ' . $suffix,
+            'slug' => $this->prefix . '-ev-' . $suffix,
+            'discipline' => 'running',
+            'date' => (new \DateTimeImmutable('+90 days'))->format('Y-m-d'),
+            'location' => 'Stadion Testowy',
+            'city' => 'Warszawa',
+            'description' => '<p>desc</p>',
+            'imageUrl' => 'https://example.test/event.jpg',
+            'organizerId' => $this->prefix . '-organizer',
+            'organizerName' => 'PHPUnit Organizer',
+            'status' => 'active',
+            'registrationDeadline' => (new \DateTimeImmutable('+60 days'))->format('Y-m-d'),
+            'featured' => false,
+            'paymentConfig' => ['type' => 'admin_gateway'],
+            'distances' => [[
+                'id' => $this->prefix . '-' . $suffix . '-10k',
+                'name' => '10 km',
+                'length' => 10,
+                'unit' => 'km',
+                'categories' => ['Open'],
+                'ageCategories' => [],
+                'specialCategories' => [],
+                'limit' => 100,
+                'registeredCount' => 0,
+                'price' => 80,
+                'routeFiles' => [],
+            ]],
+        ]);
+
+        return (string) $event['id'];
+    }
+
+    /**
+     * The Konto's own Zawodnik already exists: UserRepository::create() gives every Konto one (E0.1).
+     *
+     * @return array{0: array<string,mixed>, 1: array<string,mixed>} [user, competitor]
+     */
     private function makeUserAndCompetitor(string $firstName): array
     {
         $user = $this->users->create([
@@ -90,11 +141,8 @@ final class ChallengeRankingCalculatorTest extends TestCase
             'password' => 'demo1234',
             'role' => 'participant',
         ]);
-        $competitor = $this->competitors->create([
-            'firstName' => $firstName,
-            'lastName' => $this->prefix,
-            'userId' => $user['id'],
-        ], skipDuplicateCheck: true);
+        $competitor = $this->competitors->findByUserId((string) $user['id']);
+        self::assertNotNull($competitor, 'UserRepository::create() gives every Konto its own Zawodnik (E0.1).');
         return [$user, $competitor];
     }
 
@@ -102,7 +150,7 @@ final class ChallengeRankingCalculatorTest extends TestCase
     {
         $this->pdo->prepare(
             "INSERT INTO results (id, event_id, event_name, distance_id, distance_name, user_id, user_name, bib_number, category, time, time_in_seconds, position, category_position, status)
-             VALUES (:id, :eventId, 'Test Event', 'dist-1', '10km', :userId, :userName, :bib, 'open', '00:40:00', 2400, :position, :position, 'finished')"
+             VALUES (:id, :eventId, 'Test Event', 'dist-1', '10km', :userId, :userName, :bib, 'open', '00:40:00', 2400, :position, :categoryPosition, 'finished')"
         )->execute([
             'id' => $this->id(),
             'eventId' => $eventId,
@@ -110,6 +158,7 @@ final class ChallengeRankingCalculatorTest extends TestCase
             'userName' => $userName,
             'bib' => (string) $position,
             'position' => $position,
+            'categoryPosition' => $position,
         ]);
     }
 
@@ -143,13 +192,6 @@ final class ChallengeRankingCalculatorTest extends TestCase
      * the standard competition ranking convention ("1,1,3" — NOT "1,1,2"
      * dense ranking, NOT "1,2,2"): two competitors tied for 1st means the
      * next distinct competitor is 3rd.
-     *
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — the fixture creates a 2nd competitor for a user that
-     * UserRepository::create() already gave one via ensureForUser(), tripping
-     * uq_competitors_user. Tracked by PP.14. Remove this tag once fixed there.
      */
     public function testDescendingSortWithExAequoUsesStandardCompetitionRanking(): void
     {
@@ -194,14 +236,6 @@ final class ChallengeRankingCalculatorTest extends TestCase
         self::assertSame(3, $byUserId[$userThird['id']]['rank']);
     }
 
-    /**
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — the fixture creates a 2nd competitor for a user that
-     * UserRepository::create() already gave one via ensureForUser(), tripping
-     * uq_competitors_user. Tracked by PP.14. Remove this tag once fixed there.
-     */
     public function testAnonymizedCompetitorNameIsMaskedNonAnonymizedIsNot(): void
     {
         $this->pointsSettings->updateSettings(['pointsTable' => [100, 90], 'floorPoints' => 0]);
@@ -243,18 +277,11 @@ final class ChallengeRankingCalculatorTest extends TestCase
      * ChallengeRankingCalculator's class doc comment): a Wyzwanie whose tree
      * has no `point_threshold` node at all falls back to a binary
      * completed/not-completed ranking rather than a fake point total.
-     *
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — the fixture creates a 2nd competitor for a user that
-     * UserRepository::create() already gave one via ensureForUser(), tripping
-     * uq_competitors_user. Tracked by PP.14. Remove this tag once fixed there.
      */
     public function testChallengeWithoutPointThresholdNodeFallsBackToCompletionBasedRanking(): void
     {
-        $eventA = $this->prefix . '-flat-a';
-        $eventB = $this->prefix . '-flat-b';
+        $eventA = $this->makeEvent('a');
+        $eventB = $this->makeEvent('b');
 
         [$userCompleted] = $this->makeUserAndCompetitor('Completed');
         [$userPartial] = $this->makeUserAndCompetitor('Partial');

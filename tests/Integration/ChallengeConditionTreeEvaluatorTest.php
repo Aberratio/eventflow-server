@@ -533,34 +533,32 @@ final class ChallengeConditionTreeEvaluatorTest extends TestCase
         self::assertTrue($this->evaluator->evaluateNode($node, $competitor['id'], $memo));
     }
 
-    /**
-     * @group known-failure-pp14
-     *
-     * PP.13: pre-existing failure on both MySQL 8.4 and MariaDB 10.4, unrelated to
-     * migrations/CI — tracked by PP.14. Remove this tag once fixed there.
-     */
     public function testSubChallengeThresholdWindowFallsBackToApprovedEntryTimestampWithoutParticipation(): void
     {
         $competitor = $this->createUser('Sub Window Fallback');
+        // A real Event row is required: event_threshold counts manual entries through an INNER JOIN on events.
+        [$event] = $this->makeEvent('sub-fallback');
         $sub = $this->createChallenge([
             'name' => 'Fallback Sub',
-            'conditionTree' => ['type' => 'event_threshold', 'requiredCount' => 1, 'events' => [['eventId' => 'evt-fallback']]],
+            'conditionTree' => ['type' => 'event_threshold', 'requiredCount' => 1, 'events' => [['eventId' => $event['id']]]],
         ]);
         // No challenge_participations row at all for this competitor+sub -
         // only a manually-approved entry, whose reviewed_at is used as the
         // completion timestamp fallback.
-        $this->approveEntry((string) $sub['id'], $competitor['id'], 'evt-fallback');
+        $this->approveEntry((string) $sub['id'], $competitor['id'], (string) $event['id']);
 
         $node = [
             'type' => 'sub_challenge_threshold',
             'requiredCount' => 1,
-            'windowStart' => date('Y-01-01'),
-            'windowEnd' => date('Y-12-31'),
+            // +/- 1 day around "now": reviewed_at is NOW() on the DB side; the margin absorbs any
+            // DB/PHP timezone offset and avoids the Dec-31 trap of date('Y-12-31') (= 00:00).
+            'windowStart' => date('Y-m-d', strtotime('-1 day')),
+            'windowEnd' => date('Y-m-d', strtotime('+1 day')),
             'subChallenges' => [['challengeId' => $sub['id']]],
         ];
 
         $memo = [];
-        self::assertTrue($this->evaluator->evaluateNode($node, $competitor['id'], $memo), 'Entry reviewed just now falls inside this-year window via the fallback timestamp.');
+        self::assertTrue($this->evaluator->evaluateNode($node, $competitor['id'], $memo), 'Entry reviewed just now falls inside a window around today via the fallback timestamp.');
     }
 
     // --- multi-level tree end-to-end via ChallengeRepository ----------------

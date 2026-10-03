@@ -67,25 +67,4 @@ jobs:
       - name: Migrate again (ledger makes this a no-op)
         run: composer migrate
       - run: composer seed
-      # known-failure-pp14: pre-existing Integration failures unrelated to PP.13's
-      # migration/CI work, tracked by PP.14. Every one fails on a FRESH database on
-      # both MySQL 8.4 and MariaDB 10.4 (verified 2026-09-28/29) — remove this
-      # exclusion and the @group tags together once PP.14 fixes them:
-      #   - ChallengeConditionTreeEvaluatorTest::testSubChallengeThresholdWindowFallsBackToApprovedEntryTimestampWithoutParticipation
-      #   - CompetitorMergeServiceTest::testSearchForMergeResolvesOldIdentityCodeToSurvivor
-      #   - Http\CompetitorMergeContractTest::testModeratorCanSearchCompareAndMerge
-      #   - Http\EventEmbedContractTest::testAdminCanSetEmbedSettingsOnAnyEvent
-      #   - Http\PlatformStatsContractTest::testAdminSeesEventCountsByPublicationStatusOrganizerCountAndActivePackageCredits
-      #   - Http\RegistrationStatsContractTest::testOwnerGetsBuiltInBreakdownsAndStrangerIsForbidden
-      #   - Http\RegistrationStatsContractTest::testClubBreakdownAppearsOnlyOnceTheFieldIsShown
-      #   - ChallengeRankingCalculatorTest::testAnonymizedCompetitorNameIsMaskedNonAnonymizedIsNot
-      #   - ChallengeRankingCalculatorTest::testChallengeWithoutPointThresholdNodeFallsBackToCompletionBasedRanking
-      #   - ChallengeRankingCalculatorTest::testDescendingSortWithExAequoUsesStandardCompetitionRanking
-      #   - ChallengeRewardClaimTest::testCanClaimAfterRealTreeCompletion
-      #   - ChallengeRewardClaimTest::testDoubleClaimIsRejectedAndDoesNotCreateASecondOrder
-      #   - ChallengeRewardClaimTest::testZeroPriceRewardClaimsSuccessfullyThroughTheSameOrderFlow
-      #   - ChallengeRewardClaimTest::testStockExhaustionFailsTheClaimWithoutGrantingRewardOrBreakingCompletion
-      #   - ChallengeRewardClaimTest::testCannotClaimAProductNotLinkedAsAChallengeReward
-      #   - CompetitorMergeServiceTest::testMergeRepointsRegistrationAndCareThenMarksAbsorbedScalony
-      #   - EventRepositoryTest::testCreateExternalPersistsBarebonesEventWithNoDistances
-      - run: composer test -- --testsuite Integration --fail-on-skipped --exclude-group requires-local-samples,known-failure-pp14
+      - run: composer test -- --testsuite Integration --fail-on-skipped --exclude-group requires-local-samples

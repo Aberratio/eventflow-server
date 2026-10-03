@@ -5,7 +5,7 @@
 - Unit PR gate: `composer lint && composer stan && composer test -- --testsuite Unit --fail-on-skipped`
 - Integration gate (exact CI commands): `composer migrate` (twice — the second run must
   print `Migrations applied: 0 file(s).`, proving the ledger works), `composer seed`, then
-  `composer test -- --testsuite Integration --fail-on-skipped --exclude-group requires-local-samples,known-failure-pp14`.
+  `composer test -- --testsuite Integration --fail-on-skipped --exclude-group requires-local-samples`.
 - The test database's `.env` must set `APP_ENV=local`. `bin/seed.php` treats a missing
   `APP_ENV` as production and refuses to seed, so the gate fails without it.
 
@@ -106,12 +106,6 @@ never present in CI) — excluded explicitly via `--exclude-group`. Any other sk
 failure: it usually means a migration or seed step silently failed and the test's own
 `try {...} catch { markTestSkipped(...) }` swallowed it — "0 failures, N skipped" is not a
 green run.
-
-`--exclude-group` on the Integration suite also drops `known-failure-pp14`: tests that fail
-today on a fresh database on both MySQL 8.4 and MariaDB 10.4, for reasons unrelated to
-migrations/CI, tracked by ticket PP.14. The excluded test names are listed in
-`.github/workflows/test.yml`'s comment above that step. PP.14's acceptance criteria include
-removing both the `@group` tags and this exclusion.
 
 ## Checking an existing DB (e.g. staging) before configuring deploy secrets
 

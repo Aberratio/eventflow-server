@@ -635,8 +635,38 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
             return JsonResponder::ok($response, $users->find((string) ($auth['sub'] ?? '')));
         })->add(new AuthMiddleware($jwt));
 
-        $api->post('/auth/password/change', static fn (Request $request, Response $response) => JsonResponder::ok($response, null, 'Password changed'))
-            ->add(new AuthMiddleware($jwt));
+        // PP.45: real self-service password change (was a no-op returning 200).
+        // Self only: the target is always auth.sub, never a body field. Session
+        // invalidation (token_version) is PP.7; rate limiting is PP.10.
+        $api->post('/auth/password/change', function (Request $request, Response $response) use ($users, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $userId = (string) ($auth['sub'] ?? '');
+            $payload = $body($request);
+            $old = $payload['oldPassword'] ?? null;
+            $new = $payload['newPassword'] ?? null;
+            if (!is_string($old) || !is_string($new) || $old === '' || $new === '') {
+                return JsonResponder::error($response, 'validation_error', 'Podaj obecne i nowe hasło.', 422);
+            }
+            $hash = $users->passwordHashById($userId);
+            if ($hash === null) {
+                return JsonResponder::error($response, 'unauthorized', 'Sesja wygasła. Zaloguj się ponownie.', 401);
+            }
+            // A wrong current password is 422, never 401: the client treats a 401 as an expired session.
+            if (!password_verify($old, $hash)) {
+                return JsonResponder::error($response, 'invalid_current_password', 'Obecne hasło jest nieprawidłowe.', 422);
+            }
+            if (mb_strlen($new) < 8) {
+                return JsonResponder::error($response, 'password_too_short', 'Nowe hasło musi mieć co najmniej 8 znaków.', 422);
+            }
+            if (strlen($new) > 72) { // bcrypt (PASSWORD_DEFAULT) silently truncates beyond 72 bytes
+                return JsonResponder::error($response, 'password_too_long', 'Nowe hasło jest za długie.', 422);
+            }
+            if (hash_equals($old, $new)) {
+                return JsonResponder::error($response, 'password_unchanged', 'Nowe hasło musi różnić się od obecnego.', 422);
+            }
+            $users->setPassword($userId, $new);
+            return JsonResponder::ok($response, null, 'Password changed');
+        })->add(new AuthMiddleware($jwt));
 
         $api->get('/users', function (Request $request, Response $response) use ($users, $query) {
             $page = $users->list($query($request));

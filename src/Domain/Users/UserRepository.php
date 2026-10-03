@@ -94,6 +94,19 @@ final class UserRepository extends Repository
         return $this->hydrate($stmt->fetch());
     }
 
+    public function passwordHashById(string $id): ?string
+    {
+        $stmt = $this->pdo->prepare('SELECT password_hash FROM users WHERE id = :id');
+        $stmt->execute(['id' => $id]);
+        $hash = $stmt->fetchColumn();
+        return is_string($hash) ? $hash : null;
+    }
+
+    public function setPassword(string $id, string $plainPassword): void
+    {
+        $this->updateById('users', $id, ['password_hash' => password_hash($plainPassword, PASSWORD_DEFAULT)]);
+    }
+
     /** @param array<string, mixed> $data */
     public function create(array $data): array
     {

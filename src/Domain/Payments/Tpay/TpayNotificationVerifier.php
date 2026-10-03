@@ -13,9 +13,11 @@ use ZmierzymyCzas\Domain\Payments\Http\HttpClientInterface;
  *  1. The header is a compact JWS: base64url(header) . '.' . base64url(payload) . '.' . base64url(signature).
  *     The payload is NOT detached — it is exactly base64url(the raw POST body).
  *  2. The JOSE header carries an `x5u` pointing at the certificate that signed it;
- *     that URL must start with Tpay's own trusted host (secure.tpay.com in
- *     production, secure.sandbox.tpay.com in sandbox — TpayConfig::trustedCertHost())
- *     or the notification is rejected outright, before any network call is made.
+ *     that URL must pass TpayCertificateUrlPolicy (exact https host for the
+ *     configured mode — secure.tpay.com in production, secure.sandbox.tpay.com in
+ *     sandbox — and path /x509/<file>.pem) or the notification is rejected
+ *     outright, before any network call is made. The fetch uses the policy's
+ *     rebuilt canonical URL, never the raw header string.
  *  3. The certificate fetched from `x5u` must itself chain to Tpay's published root
  *     CA (`{trustedCertHost}/x509/tpay-jws-root.pem`) AND must currently be within
  *     its validFrom/validTo window — a correctly-chained but expired (or
@@ -23,11 +25,18 @@ use ZmierzymyCzas\Domain\Payments\Http\HttpClientInterface;
  *  4. The signature is verified as RS256 (SHA-256 with RSA) over
  *     `header_segment . '.' . payload_segment` using the leaf certificate's public key.
  *
+ * Order: every check that needs no key (3 segments, header JSON, alg, x5u policy,
+ * payload == base64url(body), signature decoding) runs before the first fetch. The
+ * signature itself can only be checked after fetching, because the certificate
+ * holds the key.
+ *
  * Never trust the notification body until every one of these steps passes — this is
  * the whole point of the ticket's "nigdy nie ufaj nagłówkom/body bez weryfikacji".
  */
 final class TpayNotificationVerifier
 {
+    private const MAX_PEM_BYTES = 16384;
+
     public function __construct(
         private readonly HttpClientInterface $http,
         private readonly TpayConfig $config
@@ -49,8 +58,12 @@ final class TpayNotificationVerifier
         if ((string) ($header['alg'] ?? '') !== 'RS256') {
             return false;
         }
-        $x5u = (string) ($header['x5u'] ?? '');
-        if ($x5u === '' || !str_starts_with($x5u, $this->config->trustedCertHost())) {
+        $x5u = $header['x5u'] ?? null;
+        if (!is_string($x5u)) {
+            return false;
+        }
+        $certUrl = TpayCertificateUrlPolicy::canonicalize($x5u, $this->config->trustedCertHostname());
+        if ($certUrl === null) {
             return false;
         }
 
@@ -67,7 +80,7 @@ final class TpayNotificationVerifier
             return false;
         }
 
-        $leafCertPem = $this->fetchPem($x5u);
+        $leafCertPem = $this->fetchPem($certUrl);
         $rootCaCertPem = $this->fetchPem($this->config->rootCaCertUrl());
         if ($leafCertPem === null || $rootCaCertPem === null) {
             return false;
@@ -149,6 +162,9 @@ final class TpayNotificationVerifier
             return null;
         }
         if (!$response->isSuccessful() || trim($response->body) === '') {
+            return null;
+        }
+        if (strlen($response->body) > self::MAX_PEM_BYTES || !str_contains($response->body, '-----BEGIN CERTIFICATE-----')) {
             return null;
         }
 

@@ -7,6 +7,7 @@ namespace ZmierzymyCzas\Tests\Integration\Http;
 use Psr\Http\Message\ResponseInterface;
 use Slim\Psr7\Factory\ServerRequestFactory;
 use Slim\Psr7\Factory\StreamFactory;
+use ZmierzymyCzas\Domain\Payments\Tpay\TpayConfig;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
@@ -45,6 +46,30 @@ final class TpayWebhookContractTest extends HttpTestCase
         self::assertSame(400, $response->getStatusCode());
         $body = $this->json($response);
         self::assertSame('invalid_signature', $body['error']['code']);
+    }
+
+    public function testUserinfoX5uNeverOpensAnOutboundConnection(): void
+    {
+        $server = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+        self::assertNotFalse($server, (string) $errstr);
+        stream_set_blocking($server, false);
+        $port = (int) substr((string) strrchr((string) stream_socket_get_name($server, false), ':'), 1);
+        $host = TpayConfig::fromEnv()->trustedCertHostname();
+        $x5u = "https://{$host}@127.0.0.1:{$port}/x509/notifications-jws.pem";
+        $body = '{"transactionId":"TX-1"}';
+        $b64 = static fn (string $v): string => rtrim(strtr(base64_encode($v), '+/', '-_'), '=');
+        $jws = $b64((string) json_encode(['alg' => 'RS256', 'x5u' => $x5u])) . '.' . $b64($body) . '.' . $b64('x');
+
+        $started = microtime(true);
+        $response = $this->postRaw('/api/v1/webhooks/tpay', $body, ['X-JWS-Signature' => $jws]);
+        $elapsed = microtime(true) - $started;
+        $connected = @stream_socket_accept($server, 0);
+        fclose($server);
+
+        self::assertSame(400, $response->getStatusCode());
+        self::assertSame('invalid_signature', $this->json($response)['error']['code']);
+        self::assertFalse($connected, 'webhook must not connect to the x5u host');
+        self::assertLessThan(2.0, $elapsed);
     }
 
     /** @param array<string, string> $headers */

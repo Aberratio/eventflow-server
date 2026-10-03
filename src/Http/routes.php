@@ -85,7 +85,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt): void {
     $tpayGateway = $tpayConfig->isConfigured()
         ? new TpayGateway($tpayHttp, $tpayConfig, new TpayOAuthClient($tpayHttp, $tpayConfig))
         : null;
-    $tpayNotificationVerifier = new TpayNotificationVerifier($tpayHttp, $tpayConfig);
+    $tpayNotificationVerifier = new TpayNotificationVerifier(new CurlHttpClient(5), $tpayConfig);
     // E1.7: trasa A's second gateway, PayNow — same "only wired up with real
     // credentials configured" stance as Tpay above (see PayNowConfig::isConfigured()).
     // Which of the two an event actually uses is resolved per-Wydarzenie by

@@ -36,7 +36,12 @@ final class CurlHttpClient implements HttpClientInterface
             CURLOPT_HTTPHEADER => $headerLines,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => $this->timeoutSeconds,
+            CURLOPT_CONNECTTIMEOUT => min(5, $this->timeoutSeconds),
+            // Payment gateway bases are hard-coded https://; never follow a redirect or speak another protocol.
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
             CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_MAXREDIRS => 0,
             CURLOPT_HEADERFUNCTION => static function ($curl, string $line) use (&$responseHeaders): int {
                 $parts = explode(':', $line, 2);
                 if (count($parts) === 2) {

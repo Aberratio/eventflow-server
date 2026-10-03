@@ -19,8 +19,8 @@ final class TpayConfig
 {
     private const PRODUCTION_API_BASE = 'https://api.tpay.com';
     private const SANDBOX_API_BASE = 'https://openapi.sandbox.tpay.com';
-    private const PRODUCTION_CERT_HOST = 'https://secure.tpay.com';
-    private const SANDBOX_CERT_HOST = 'https://secure.sandbox.tpay.com';
+    private const PRODUCTION_CERT_HOSTNAME = 'secure.tpay.com';
+    private const SANDBOX_CERT_HOSTNAME = 'secure.sandbox.tpay.com';
 
     public function __construct(
         public readonly string $clientId,
@@ -53,10 +53,16 @@ final class TpayConfig
         return $this->sandbox ? self::SANDBOX_API_BASE : self::PRODUCTION_API_BASE;
     }
 
-    /** The host every notification's JWS `x5u` certificate URL must start with. */
+    /** Bare hostname every notification's JWS `x5u` must use — exact match, see TpayCertificateUrlPolicy. */
+    public function trustedCertHostname(): string
+    {
+        return $this->sandbox ? self::SANDBOX_CERT_HOSTNAME : self::PRODUCTION_CERT_HOSTNAME;
+    }
+
+    /** Trusted origin of Tpay's certificate host (config-derived, not attacker input); used for the root CA URL. */
     public function trustedCertHost(): string
     {
-        return $this->sandbox ? self::SANDBOX_CERT_HOST : self::PRODUCTION_CERT_HOST;
+        return 'https://' . $this->trustedCertHostname();
     }
 
     public function rootCaCertUrl(): string

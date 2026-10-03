@@ -8,18 +8,23 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface as Handler;
+use Psr\Log\LoggerInterface;
 use Slim\Exception\HttpException;
 use Slim\Psr7\Response as SlimResponse;
 use Throwable;
 use ZmierzymyCzas\Support\JsonResponder;
+use ZmierzymyCzas\Support\Log\LoggerFactory;
 
 final class JsonErrorMiddleware implements MiddlewareInterface
 {
     public const GENERIC_SERVER_ERROR_MESSAGE = 'Wystąpił nieoczekiwany błąd serwera. Spróbuj ponownie później.';
     public const GENERIC_REQUEST_ERROR_MESSAGE = 'Nieprawidłowe żądanie.';
 
-    public function __construct(private readonly bool $debug = false)
+    private readonly LoggerInterface $logger;
+
+    public function __construct(private readonly bool $debug = false, ?LoggerInterface $logger = null)
     {
+        $this->logger = $logger ?? LoggerFactory::fallback();
     }
 
     public function process(Request $request, Handler $handler): Response
@@ -33,8 +38,10 @@ final class JsonErrorMiddleware implements MiddlewareInterface
             }
 
             $isServerError = $status >= 500;
+            $requestId = null;
             if ($isServerError) {
-                $this->reportServerError($exception, $request);
+                $requestId = bin2hex(random_bytes(8));
+                $this->reportServerError($exception, $request, $requestId, $status);
             }
 
             if ($this->debug) {
@@ -50,21 +57,36 @@ final class JsonErrorMiddleware implements MiddlewareInterface
 
             $details = $this->debug ? ['exception' => $exception::class, 'trace' => $exception->getTraceAsString()] : [];
 
-            return JsonResponder::error(
+            $response = JsonResponder::error(
                 new SlimResponse(),
                 $isServerError ? 'server_error' : 'request_error',
                 $message,
                 $status,
                 $details
             );
+
+            return $requestId !== null ? $response->withHeader('X-Request-Id', $requestId) : $response;
         }
     }
 
     /**
-     * Seam for PP.20 (observability): every 5xx passes through here exactly once.
-     * Intentionally a no-op until a PSR-3 logger is injected.
+     * PP.20 seam: every 5xx passes through here exactly once. Logs the exception summary,
+     * method and path only (never query string, headers or body) and must never throw.
      */
-    private function reportServerError(Throwable $exception, Request $request): void
+    private function reportServerError(Throwable $exception, Request $request, string $requestId, int $status): void
     {
+        try {
+            $path = $request->getUri()->getPath();
+            $this->logger->error('Unhandled server error', [
+                'exception' => $exception,
+                'requestId' => $requestId,
+                'method' => $request->getMethod(),
+                'path' => $path,
+                'http_status' => $status,
+                'alert' => str_contains($path, '/webhooks/') ? 'payments.webhook_error' : 'http.server_error',
+            ]);
+        } catch (Throwable) {
+            // Logging must never change the error response.
+        }
     }
 }

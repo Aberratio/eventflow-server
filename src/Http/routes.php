@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
+use Psr\Log\LoggerInterface;
 use Slim\App;
 use Slim\Routing\RouteCollectorProxy;
 use ZmierzymyCzas\Database\SeedManifest;
@@ -64,9 +65,11 @@ use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Support\JsonResponder;
+use ZmierzymyCzas\Support\Log\LoggerFactory;
 use ZmierzymyCzas\Support\UploadedFileStorage;
 
-return static function (App $app, PDO $pdo, JwtService $jwt): void {
+return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $logger = null): void {
+    $logger ??= LoggerFactory::fallback();
     $users = new UserRepository($pdo);
     $events = new EventRepository($pdo);
     // E3.1/E3.3: static per-application incoming API key config (Central Mailer

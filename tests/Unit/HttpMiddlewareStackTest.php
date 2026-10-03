@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Tests\Unit;
 
+use Monolog\Handler\TestHandler;
+use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Slim\App;
@@ -14,12 +16,12 @@ use ZmierzymyCzas\Http\HttpMiddlewareStack;
 
 final class HttpMiddlewareStackTest extends TestCase
 {
-    private function buildApp(AppConfig $config): App
+    private function buildApp(AppConfig $config, ?\Psr\Log\LoggerInterface $logger = null): App
     {
         $app = AppFactory::create();
         $app->setBasePath('');
 
-        HttpMiddlewareStack::register($app, $config);
+        HttpMiddlewareStack::register($app, $config, $logger);
 
         $app->get('/ok', function ($request, $response) {
             $response->getBody()->write('{"success":true}');
@@ -116,5 +118,16 @@ final class HttpMiddlewareStackTest extends TestCase
         $stagingApp = $this->buildApp($this->stagingConfig());
         $stagingResponse = $stagingApp->handle((new ServerRequestFactory())->createServerRequest('GET', '/ok'));
         self::assertTrue($stagingResponse->hasHeader('Strict-Transport-Security'));
+    }
+
+    public function testInjectedLoggerReceivesServerErrorsThroughTheStack(): void
+    {
+        $handler = new TestHandler();
+        $app = $this->buildApp($this->localConfig(), new Logger('test', [$handler]));
+
+        $response = $app->handle((new ServerRequestFactory())->createServerRequest('GET', '/boom'));
+
+        self::assertSame(500, $response->getStatusCode());
+        self::assertTrue($handler->hasErrorRecords());
     }
 }

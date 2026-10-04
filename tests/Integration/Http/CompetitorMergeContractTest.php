@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Tests\Integration\Http;
 
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
+use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
@@ -18,12 +19,29 @@ final class CompetitorMergeContractTest extends HttpTestCase
 {
     private CompetitorRepository $competitors;
     private string $prefix;
+    /** @var array<string, array<string, mixed>> role => real user row */
+    private array $actors = [];
 
     protected function setUp(): void
     {
         parent::setUp();
         $this->competitors = new CompetitorRepository($this->pdo);
         $this->prefix = 'HttpMerge-' . bin2hex(random_bytes(4));
+        // PP.7: the session guard rejects tokens of users that do not exist, so each role is a real account.
+        $users = new UserRepository($this->pdo);
+        foreach (['participant', 'organizer', 'moderator', 'admin'] as $role) {
+            $this->actors[$role] = $users->create([
+                'name' => 'Merge ' . $role,
+                'email' => strtolower($this->prefix) . '-' . $role . '@example.test',
+                'password' => 'demo1234',
+                'role' => $role,
+            ]);
+        }
+    }
+
+    private function actor(string $role): array
+    {
+        return $this->bearer((string) $this->actors[$role]['id'], $role, (string) $this->actors[$role]['email']);
     }
 
     protected function tearDown(): void
@@ -40,12 +58,14 @@ final class CompetitorMergeContractTest extends HttpTestCase
         $this->pdo->prepare('DELETE FROM activity_logs WHERE target_type = "competitor" AND target_id IN (SELECT id FROM competitors WHERE last_name = :last)')
             ->execute(['last' => $this->prefix]);
         $this->pdo->prepare('DELETE FROM competitors WHERE last_name = :last')->execute(['last' => $this->prefix]);
+        $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')
+            ->execute(['email' => strtolower($this->prefix) . '-%@example.test']);
     }
 
     public function testParticipantCannotSearchCompareOrMerge(): void
     {
         [$survivor, $absorbed] = $this->twoCompetitors();
-        $headers = $this->bearer('phpunit-participant', 'participant');
+        $headers = $this->actor('participant');
 
         self::assertSame(403, $this->request('GET', '/api/v1/admin/competitors/search?q=' . $this->prefix, [], $headers)->getStatusCode());
         self::assertSame(
@@ -71,7 +91,7 @@ final class CompetitorMergeContractTest extends HttpTestCase
             'POST',
             '/api/v1/admin/competitors/merge',
             ['survivorId' => $survivor['id'], 'absorbedId' => $absorbed['id']],
-            $this->bearer('phpunit-organizer', 'organizer')
+            $this->actor('organizer')
         );
 
         self::assertSame(403, $response->getStatusCode());
@@ -80,7 +100,7 @@ final class CompetitorMergeContractTest extends HttpTestCase
     public function testModeratorCanSearchCompareAndMerge(): void
     {
         [$survivor, $absorbed] = $this->twoCompetitors();
-        $headers = $this->bearer('phpunit-moderator', 'moderator');
+        $headers = $this->actor('moderator');
 
         $search = $this->request('GET', '/api/v1/admin/competitors/search?q=' . $this->prefix, [], $headers);
         self::assertSame(200, $search->getStatusCode());
@@ -109,7 +129,7 @@ final class CompetitorMergeContractTest extends HttpTestCase
     {
         $this->twoCompetitors();
 
-        $search = $this->request('GET', '/api/v1/admin/competitors/search?q=' . $this->prefix, [], $this->bearer('phpunit-admin', 'admin'));
+        $search = $this->request('GET', '/api/v1/admin/competitors/search?q=' . $this->prefix, [], $this->actor('admin'));
 
         self::assertSame(200, $search->getStatusCode());
         self::assertCount(2, $this->json($search)['data']);
@@ -123,7 +143,7 @@ final class CompetitorMergeContractTest extends HttpTestCase
             'POST',
             '/api/v1/admin/competitors/merge',
             ['survivorId' => $survivor['id'], 'absorbedId' => $absorbed['id'], 'fieldDecisions' => []],
-            $this->bearer('phpunit-admin', 'admin')
+            $this->actor('admin')
         );
 
         self::assertSame(200, $merge->getStatusCode());
@@ -138,7 +158,7 @@ final class CompetitorMergeContractTest extends HttpTestCase
             'POST',
             '/api/v1/admin/competitors/merge',
             ['survivorId' => $survivor['id'], 'absorbedId' => $absorbed['id']],
-            $this->bearer('phpunit-admin', 'admin')
+            $this->actor('admin')
         );
 
         // Deliberately 200: a pending field decision is a normal pause in this

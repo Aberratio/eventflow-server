@@ -184,7 +184,7 @@ final class RbacFixtures
     }
 
     /** @return array<string, mixed> */
-    private function eventPayload(string $name, string $organizerId, string $status, bool $private): array
+    public function eventPayload(string $name, string $organizerId, string $status, bool $private, array $overrides = []): array
     {
         $slug = $this->prefix . '-' . $name;
         $payload = [
@@ -240,7 +240,7 @@ final class RbacFixtures
             $payload['accessCode'] = 'rbac-code';
         }
 
-        return $payload;
+        return array_replace($payload, $overrides);
     }
 
     /** @param array<string, string> $params */

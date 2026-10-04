@@ -130,6 +130,13 @@ final class UserRepository extends Repository
             ->execute(['id' => $id]);
     }
 
+    /** PP.7: applies a confirmed self e-mail change; the new address counts as verified. PDOException 23000 = address taken. */
+    public function changeEmailVerified(string $id, string $email): void
+    {
+        $this->pdo->prepare('UPDATE users SET email = :email, email_verified_at = NOW() WHERE id = :id')
+            ->execute(['email' => $email, 'id' => $id]);
+    }
+
     public function setPassword(string $id, string $plainPassword): void
     {
         $this->updateById('users', $id, ['password_hash' => password_hash($plainPassword, PASSWORD_DEFAULT)]);

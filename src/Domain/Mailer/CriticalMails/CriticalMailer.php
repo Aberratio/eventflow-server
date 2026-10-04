@@ -46,16 +46,23 @@ final class CriticalMailer
 
     // --- 1-3: uwierzytelnianie (technical queue, systemic templates) ---------
 
-    public function sendEmailVerification(string $userId, string $email, string $verificationLink): ?array
+    /**
+     * @param string $sourceEntityId must be unique per mail instance (the idempotency key is built from it),
+     *                               e.g. the action-token id; a user id would send only the first mail ever
+     */
+    public function sendEmailVerification(string $sourceEntityId, string $email, string $verificationLink): ?array
     {
-        return $this->send(MailCatalog::EMAIL_VERIFICATION, $userId, null, $email, [
+        return $this->send(MailCatalog::EMAIL_VERIFICATION, $sourceEntityId, null, $email, [
             'verificationLink' => $verificationLink,
         ]);
     }
 
-    public function sendPasswordReset(string $userId, string $email, string $resetLink, int $expiresInMinutes): ?array
+    /**
+     * @param string $sourceEntityId must be unique per mail instance, e.g. the action-token id (see sendEmailVerification)
+     */
+    public function sendPasswordReset(string $sourceEntityId, string $email, string $resetLink, int $expiresInMinutes): ?array
     {
-        return $this->send(MailCatalog::PASSWORD_RESET, $userId, null, $email, [
+        return $this->send(MailCatalog::PASSWORD_RESET, $sourceEntityId, null, $email, [
             'resetLink' => $resetLink,
             'expiresInMinutes' => (string) $expiresInMinutes,
         ]);

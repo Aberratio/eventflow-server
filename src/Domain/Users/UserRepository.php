@@ -123,6 +123,43 @@ final class UserRepository extends Repository
         return $this->tokenVersion($id);
     }
 
+    /** PP.70: users.role ENUM (001_init.sql). */
+    public const ROLES = ['participant', 'organizer', 'moderator', 'admin', 'superadmin'];
+    /** PP.70: users.status ENUM (001_init.sql). */
+    public const STATUSES = ['active', 'blocked'];
+
+    /**
+     * PP.70: sets the role and ends every session of the account in ONE statement (atomic).
+     * False when the role is unchanged or the account does not exist.
+     */
+    public function changeRoleEndingSessions(string $id, string $role): bool
+    {
+        $stmt = $this->pdo->prepare(
+            'UPDATE users SET role = :role, token_version = token_version + 1 WHERE id = :id AND role <> :unchangedRole'
+        );
+        $stmt->execute(['role' => $role, 'id' => $id, 'unchangedRole' => $role]);
+
+        return $stmt->rowCount() === 1;
+    }
+
+    /** PP.70: same for the status (block/unblock). False when unchanged or no such account. */
+    public function changeStatusEndingSessions(string $id, string $status): bool
+    {
+        $stmt = $this->pdo->prepare(
+            'UPDATE users SET status = :status, token_version = token_version + 1 WHERE id = :id AND status <> :unchangedStatus'
+        );
+        $stmt->execute(['status' => $status, 'id' => $id, 'unchangedStatus' => $status]);
+
+        return $stmt->rowCount() === 1;
+    }
+
+    /** PP.78: a staff e-mail edit; the new address is unverified and every session ends. */
+    public function unverifyEmailEndingSessions(string $id): void
+    {
+        $this->pdo->prepare('UPDATE users SET email_verified_at = NULL, token_version = token_version + 1 WHERE id = :id')
+            ->execute(['id' => $id]);
+    }
+
     /** PP.7: marks the address verified; keeps the first verification time. */
     public function markEmailVerified(string $id): void
     {

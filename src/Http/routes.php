@@ -1010,28 +1010,46 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $adminRoles));
         $api->patch('/users/{id}/role', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount, $logActivity) {
-            $payload = ['role' => $body($request)['role'] ?? null];
-            if ($touchesAdminAccount($users->find($args['id']), $payload) && !$isSuperAdmin($request)) {
+            $existing = $users->find((string) $args['id']);
+            if ($existing === null) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono konta.', 404);
+            }
+            $role = $body($request)['role'] ?? null;
+            // Authorization first, then validation.
+            if ($touchesAdminAccount($existing, ['role' => $role]) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can modify admin roles', 403);
             }
-            $updated = $users->update($args['id'], $payload);
-            $logActivity((array) $request->getAttribute('auth'), 'user_role_changed', 'Zmieniono rolę użytkownika na ' . (string) ($payload['role'] ?? ''), 'user', (string) $args['id'], (string) ($updated['name'] ?? ''));
+            if (!is_string($role) || !in_array($role, UserRepository::ROLES, true)) {
+                return JsonResponder::error($response, 'invalid_role', 'Wybierz poprawną rolę.', 422);
+            }
+            // PP.70: the role and the session version change in one statement (no-op when unchanged).
+            $users->changeRoleEndingSessions((string) $existing['id'], $role);
+            $updated = $users->find((string) $existing['id']);
+            $logActivity((array) $request->getAttribute('auth'), 'user_role_changed', 'Zmieniono rolę użytkownika na ' . $role, 'user', (string) $args['id'], (string) ($updated['name'] ?? ''));
             return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));
         $api->patch('/users/{id}/status', function (Request $request, Response $response, array $args) use ($users, $body, $isSuperAdmin, $touchesAdminAccount, $logActivity, $mailer) {
-            $existing = $users->find($args['id']);
+            $existing = $users->find((string) $args['id']);
+            if ($existing === null) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono konta.', 404);
+            }
             if ($touchesAdminAccount($existing, []) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can change admin status', 403);
             }
             $payload = $body($request);
             $status = $payload['status'] ?? null;
-            $updated = $users->update($args['id'], ['status' => $status]);
+            if (!is_string($status) || !in_array($status, UserRepository::STATUSES, true)) {
+                return JsonResponder::error($response, 'invalid_status', 'Wybierz poprawny status konta: aktywne lub zablokowane.', 422);
+            }
+            // PP.70: the status and the session version change in one statement (no-op when unchanged).
+            $changed = $users->changeStatusEndingSessions((string) $existing['id'], $status);
+            $updated = $users->find((string) $existing['id']);
             $logActivity((array) $request->getAttribute('auth'), 'user_status_changed', 'Zmieniono status użytkownika na ' . (string) $status, 'user', (string) $args['id'], (string) ($updated['name'] ?? ''));
             // E1.10 mail #3 ("Blokada konta", 09 §5.11) — fires exactly on the
             // active -> blocked edge, not on every /status write (re-blocking an
             // already-blocked account, or unblocking, sends nothing).
-            if ($status === 'blocked' && (string) ($existing['status'] ?? '') !== 'blocked' && $updated !== null) {
+            if ($changed && $status === 'blocked' && $updated !== null) {
                 $mailer->sendAccountLocked(
                     (string) $updated['id'],
                     (string) $updated['email'],

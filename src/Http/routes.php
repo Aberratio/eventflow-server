@@ -60,6 +60,7 @@ use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
 use ZmierzymyCzas\Domain\Mailer\Http\CurlHttpClient as MailerCurlHttpClient;
 use ZmierzymyCzas\Domain\Shop\OrderRepository;
+use ZmierzymyCzas\Domain\Shop\OwnOrderPresenter;
 use ZmierzymyCzas\Domain\Shop\ShopRepository;
 use ZmierzymyCzas\Domain\Care\CareRepository;
 use ZmierzymyCzas\Domain\Competitors\CompetitorMergeService;
@@ -2964,6 +2965,24 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             ->add(new AuthMiddleware($jwt, $staffRoles));
         $api->get('/shop/orders/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $orders->find($args['id'])))
             ->add(new AuthMiddleware($jwt, $staffRoles));
+        // PP.17 (macierz §3 "Zamówienia sklepowe — Uczestnik: własne"): the caller's own orders.
+        // Identity is auth.sub only — there is no userId input (a ?userId= query is ignored).
+        // Buyer projection (OwnOrderPresenter): never adminNotes/history.
+        $api->get('/me/orders', function (Request $request, Response $response) use ($orders) {
+            $callerId = (string) (((array) $request->getAttribute('auth'))['sub'] ?? '');
+            return JsonResponder::ok($response, OwnOrderPresenter::presentList($orders->listForUser($callerId)));
+        })
+            ->add(new AuthMiddleware($jwt, []));
+        // PP.17: a foreign order is indistinguishable from a missing one (404, same body) — no id enumeration.
+        $api->get('/me/orders/{id}', function (Request $request, Response $response, array $args) use ($orders) {
+            $callerId = (string) (((array) $request->getAttribute('auth'))['sub'] ?? '');
+            $order = $orders->findForUser((string) $args['id'], $callerId);
+            if ($order === null) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono zamówienia.', 404);
+            }
+            return JsonResponder::ok($response, OwnOrderPresenter::present($order));
+        })
+            ->add(new AuthMiddleware($jwt, []));
         $api->post('/shop/orders', function (Request $request, Response $response) use ($orders, $users, $body, $mailer) {
             // E5.2: userId is never taken from the request body — it is always
             // the authenticated caller (auth.sub), same as e.g. the

@@ -41,6 +41,7 @@ final class RbacGrid
     public const CARE_OR_STAFF = 'CARE_OR_STAFF';
     public const CARE_REVOKE = 'CARE_REVOKE';
     public const CAPTAIN_ONLY = 'CAPTAIN_ONLY';
+    public const SELF_ONLY = 'SELF_ONLY';
     public const API_KEY = 'API_KEY';
     public const SIGNED_WEBHOOK = 'SIGNED_WEBHOOK';
     public const ENV_GATED = 'ENV_GATED';
@@ -73,6 +74,7 @@ final class RbacGrid
             self::CARE_OR_STAFF => [401, 403, $P, 403, 403, $P, $P, $P],
             self::CARE_REVOKE => [401, 404, $P, 404, 404, 404, 404, 404],
             self::CAPTAIN_ONLY => [401, 403, $P, 403, 403, 403, 403, 403],
+            self::SELF_ONLY => [401, 404, self::OK, 404, 404, 404, 404, 404],
             self::API_KEY => [401, 401, 401, 401, 401, 401, 401, 401],
             self::SIGNED_WEBHOOK => [400, 400, 400, 400, 400, 400, 400, 400],
         ];
@@ -258,9 +260,11 @@ final class RbacGrid
         'POST /api/v1/insurance/variants' => ['policy' => self::ADMIN, 'basis' => 'idem (plan line 2681)'],
         'PATCH /api/v1/insurance/variants/{id}' => ['policy' => self::ADMIN, 'basis' => 'idem (plan line 2688)'],
         'DELETE /api/v1/insurance/variants/{id}' => ['policy' => self::ADMIN, 'basis' => 'idem (plan line 2696)'],
-        'GET /api/v1/shop/orders' => ['policy' => self::STAFF, 'basis' => 'own orders for participants: NEW-B (plan line 2705)'],
-        'GET /api/v1/shop/orders/{id}' => ['policy' => self::STAFF, 'basis' => 'idem (plan line 2707)'],
+        'GET /api/v1/shop/orders' => ['policy' => self::STAFF, 'basis' => 'staff full projection (macierz §3 Zamówienia sklepowe: Moderator/Admin); participant own orders = GET /me/orders (PP.17)'],
+        'GET /api/v1/shop/orders/{id}' => ['policy' => self::STAFF, 'basis' => 'idem; own single order = GET /me/orders/{id} (PP.17)'],
         'POST /api/v1/shop/orders' => ['policy' => self::AUTH, 'basis' => 'buyer = auth.sub (plan line 2709)'],
+        'GET /api/v1/me/orders' => ['policy' => self::AUTH, 'override' => ['participant' => self::OK, 'owner' => self::OK, 'foreignOrganizer' => self::OK, 'organizer' => self::OK, 'moderator' => self::OK, 'admin' => self::OK, 'superadmin' => self::OK], 'basis' => 'macierz §3 Zamówienia sklepowe — Uczestnik: własne; identity = auth.sub (PP.17)'],
+        'GET /api/v1/me/orders/{id}' => ['policy' => self::SELF_ONLY, 'params' => ['id' => 'order'], 'basis' => 'macierz §3 własne; foreign id = 404, not 403 (no enumeration) (PP.17)'],
         'PATCH /api/v1/shop/orders/{id}/status' => ['policy' => self::STAFF, 'basis' => 'macierz: Moderator "tylko zmiana statusu" (§8 Q1) (plan line 2752)'],
         'PATCH /api/v1/shop/orders/{id}' => ['policy' => self::ADMIN, 'basis' => 'H1 (plan line 2765)'],
         'GET /api/v1/shop/products' => ['policy' => self::PUBLIC, 'basis' => 'public read/endpoint (no extra per-row rule) (plan line 2772)'],

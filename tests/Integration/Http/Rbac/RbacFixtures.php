@@ -185,6 +185,36 @@ final class RbacFixtures
         ], true);
         $fx->values['competitorB'] = (string) $other['id'];
 
+        $insertOrder = $pdo->prepare(
+            'INSERT INTO shop_orders (id, order_number, user_id, status, product_total, delivery_price, payment_surcharge,
+                price_adjustment, total_price, delivery_method, payment_method, shipping_address, invoice_data,
+                tracking_number, admin_notes, cancel_reason, estimated_delivery, history)
+             VALUES (:id, :orderNumber, :userId, :status, :productTotal, :deliveryPrice, :paymentSurcharge,
+                :priceAdjustment, :totalPrice, :deliveryMethod, :paymentMethod, :shippingAddress, NULL,
+                :trackingNumber, :adminNotes, NULL, NULL, :history)'
+        );
+        $insertItem = $pdo->prepare(
+            'INSERT INTO shop_order_items (id, order_id, product_id, product_name, quantity, price, size, color)
+             VALUES (:id, :orderId, :productId, :productName, :quantity, :price, NULL, NULL)'
+        );
+        foreach (['order' => 'owner', 'orderForeign' => 'participant'] as $key => $buyer) {
+            $orderId = $fx->prefix . '-' . strtolower($key);
+            $insertOrder->execute([
+                'id' => $orderId, 'orderNumber' => strtoupper($fx->prefix . '-' . $key), 'userId' => $fx->values[$buyer],
+                'status' => 'paid', 'productTotal' => 50, 'deliveryPrice' => 15.99, 'paymentSurcharge' => 0,
+                'priceAdjustment' => 0, 'totalPrice' => 65.99,
+                'deliveryMethod' => '{"id":"courier","name":"Kurier","price":15.99,"estimatedDays":"1-2 dni"}',
+                'paymentMethod' => '{"id":"blik","name":"BLIK","surcharge":0}',
+                'shippingAddress' => '{"fullName":"Rbac ' . $buyer . '","street":"Testowa 1","city":"Warszawa","postalCode":"00-001"}',
+                'trackingNumber' => 'TRK-' . $key,
+                'adminNotes' => 'RBAC-INTERNAL-NOTE',
+                'history' => '[{"id":"h1","action":"notes_updated","userId":"' . $fx->values['admin'] . '","userName":"Rbac admin","description":"RBAC-INTERNAL-HISTORY"}]',
+            ]);
+            $insertItem->execute(['id' => $orderId . '-i1', 'orderId' => $orderId, 'productId' => 'rbac-product',
+                'productName' => 'Rbac koszulka', 'quantity' => 1, 'price' => 50]);
+            $fx->values[$key] = $orderId;
+        }
+
         $fx->values['mailType'] = MailCatalog::PAYMENT_CONFIRMED;
         $fx->values['missing'] = 'rbac-missing-id';
 

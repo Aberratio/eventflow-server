@@ -320,6 +320,14 @@ Out of scope for now (tracked in later tickets): a dynamic per-event
 (PP.11), and COOP/COEP/CORP/`report-uri` (not planned — CORP in particular would break
 cross-origin `<img>` loads of API uploads from the frontend).
 
+## Deployment and operations
+
+Operational procedures live in [`docs/RUNBOOK.md`](docs/RUNBOOK.md): deploy, rollback (code and
+database), backups and the restore test, secrets and the owner checklist. In short: a push to
+`master` deploys to staging; production is `workflow_dispatch` only, from `master`, with a typed
+confirmation. Code rollback is the "Roll back API code" workflow. Database backups are taken by
+hosting cron (`scripts/ops/db-backup.sh`), not by GitHub Actions.
+
 ## Frontend
 
 Set the client env variable:

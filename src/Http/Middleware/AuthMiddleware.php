@@ -30,7 +30,7 @@ final class AuthMiddleware implements MiddlewareInterface
         }
 
         try {
-            $claims = $this->jwt->decode($matches[1]);
+            $claims = $this->jwt->decodeSession($matches[1]);
         } catch (Throwable) {
             return JsonResponder::error(new SlimResponse(), 'unauthorized', 'Twoja sesja wygasła. Zaloguj się ponownie.', 401);
         }

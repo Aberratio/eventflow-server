@@ -7,6 +7,7 @@ namespace ZmierzymyCzas\Tests\Unit;
 use Firebase\JWT\ExpiredException;
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Domain\Auth\JwtService;
+use ZmierzymyCzas\Domain\Auth\SessionGuard;
 
 final class JwtServiceTest extends TestCase
 {
@@ -63,5 +64,72 @@ final class JwtServiceTest extends TestCase
 
         $this->expectException(ExpiredException::class);
         $service->decode($token);
+    }
+
+    public function testDecodeSessionRejectsPurposeClaim(): void
+    {
+        $service = new JwtService('test-secret-at-least-32-bytes-long', 3600);
+        $token = $service->issue(['sub' => 'u-1', 'purpose' => 'email_verification']);
+
+        $this->expectException(\UnexpectedValueException::class);
+        $service->decodeSession($token);
+    }
+
+    public function testDecodeSessionRejectsMissingSub(): void
+    {
+        $service = new JwtService('test-secret-at-least-32-bytes-long', 3600);
+
+        foreach ([['role' => 'admin'], ['sub' => '', 'role' => 'admin'], ['sub' => 123, 'role' => 'admin']] as $claims) {
+            try {
+                $service->decodeSession($service->issue($claims));
+                self::fail('A token without a non-empty string sub must not be a session.');
+            } catch (\UnexpectedValueException) {
+                self::addToAssertionCount(1);
+            }
+        }
+    }
+
+    public function testDecodeSessionConsultsGuard(): void
+    {
+        $base = new JwtService('test-secret-at-least-32-bytes-long', 3600);
+        $token = $base->issue(['sub' => 'u-1', 'role' => 'admin']);
+
+        $deny = $base->withSessionGuard(new class implements SessionGuard {
+            public function isSessionValid(array $claims): bool
+            {
+                return false;
+            }
+        });
+        $allow = $base->withSessionGuard(new class implements SessionGuard {
+            public function isSessionValid(array $claims): bool
+            {
+                return true;
+            }
+        });
+
+        try {
+            $deny->decodeSession($token);
+            self::fail('A rejecting guard must make decodeSession throw.');
+        } catch (\UnexpectedValueException) {
+            self::addToAssertionCount(1);
+        }
+        self::assertSame('u-1', $allow->decodeSession($token)['sub']);
+        // withSessionGuard clones: the original service stays guard-free.
+        self::assertSame('u-1', $base->decodeSession($token)['sub']);
+    }
+
+    public function testDecodeStillAcceptsPurpose(): void
+    {
+        $service = new JwtService('test-secret-at-least-32-bytes-long', 3600);
+        $claims = $service->decode($service->issue(['sub' => 'u-1', 'purpose' => 'password_reset']));
+
+        self::assertSame('password_reset', $claims['purpose']);
+    }
+
+    public function testNewJtiIs32Hex(): void
+    {
+        $a = JwtService::newJti();
+        self::assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $a);
+        self::assertNotSame($a, JwtService::newJti());
     }
 }

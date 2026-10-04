@@ -11,6 +11,7 @@ use Slim\Routing\RouteCollectorProxy;
 use ZmierzymyCzas\Database\SeedManifest;
 use ZmierzymyCzas\Domain\Admin\AdminRepository;
 use ZmierzymyCzas\Domain\Auth\ApplicationApiKeyConfig;
+use ZmierzymyCzas\Domain\Auth\DbSessionGuard;
 use ZmierzymyCzas\Domain\Auth\JwtService;
 use ZmierzymyCzas\Domain\Bz\BzWebhookClient;
 use ZmierzymyCzas\Domain\Bz\BzWebhookConfig;
@@ -75,6 +76,8 @@ use ZmierzymyCzas\Support\UploadedFileStorage;
 return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $logger = null): void {
     $logger ??= LoggerFactory::fallback();
     $users = new UserRepository($pdo);
+    // PP.7: every AuthMiddleware/optionalAuth below captures this guarded copy.
+    $jwt = $jwt->withSessionGuard(new DbSessionGuard($pdo));
     $events = new EventRepository($pdo);
     // E3.1/E3.3: static per-application incoming API key config (Central Mailer
     // pattern) — built once here, same "isConfigured/fromEnv once at boot" stance
@@ -284,7 +287,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return [];
         }
         try {
-            return $jwt->decode($matches[1]);
+            return $jwt->decodeSession($matches[1]);
         } catch (Throwable) {
             return [];
         }

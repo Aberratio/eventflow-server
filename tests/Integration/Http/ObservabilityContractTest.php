@@ -19,6 +19,7 @@ use ZmierzymyCzas\Config\AppConfig;
 use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Domain\Auth\JwtService;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowSignature;
+use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Http\HttpMiddlewareStack;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Support\Log\PiiRedactingProcessor;
@@ -37,6 +38,7 @@ final class ObservabilityContractTest extends TestCase
     private TestHandler $logs;
     private Logger $logger;
     private JwtService $jwt;
+    private ?string $userId = null;
 
     protected function setUp(): void
     {
@@ -58,6 +60,9 @@ final class ObservabilityContractTest extends TestCase
     protected function tearDown(): void
     {
         Env::restore('PAYNOW_SIGNATURE_KEY');
+        if ($this->userId !== null) {
+            $this->realPdo()->prepare('DELETE FROM users WHERE id = :id')->execute(['id' => $this->userId]);
+        }
     }
 
     public function testHealthChecksTheDatabase(): void
@@ -237,9 +242,20 @@ final class ObservabilityContractTest extends TestCase
         return $app->handle($request);
     }
 
+    /** PP.7: the session guard needs a real user row (a token for an unknown sub is a 401). */
     private function bearer(string $role): string
     {
-        return 'Bearer ' . $this->jwt->issue(['sub' => 'pp20-user', 'role' => $role, 'email' => 'phpunit@example.test']);
+        if ($this->userId === null) {
+            $user = (new UserRepository($this->realPdo()))->create([
+                'name' => 'PP20 User',
+                'email' => 'pp20-' . bin2hex(random_bytes(4)) . '@example.test',
+                'password' => 'demo1234',
+                'role' => $role,
+            ]);
+            $this->userId = (string) $user['id'];
+        }
+
+        return 'Bearer ' . $this->jwt->issue(['sub' => $this->userId, 'role' => $role, 'email' => 'phpunit@example.test', 'tv' => 0]);
     }
 
     /** @param array<string, string> $headers */

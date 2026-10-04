@@ -70,8 +70,21 @@ abstract class HttpTestCase extends TestCase
                 'sub' => $userId,
                 'role' => $role,
                 'email' => $email,
+                'tv' => $this->tokenVersionOf($userId),
             ]),
         ];
+    }
+
+    /** PP.7: the session version the guard compares against; 0 for an unknown user (the guard then answers 401). */
+    protected function tokenVersionOf(string $userId): int
+    {
+        try {
+            $stmt = $this->pdo->prepare('SELECT token_version FROM users WHERE id = :id');
+            $stmt->execute(['id' => $userId]);
+            return (int) $stmt->fetchColumn();
+        } catch (\Throwable) {
+            return 0;
+        }
     }
 
     private function createApp(): App

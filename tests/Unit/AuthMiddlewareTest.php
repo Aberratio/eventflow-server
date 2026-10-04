@@ -9,6 +9,7 @@ use Psr\Http\Server\RequestHandlerInterface;
 use Slim\Psr7\Factory\ServerRequestFactory;
 use Slim\Psr7\Response;
 use ZmierzymyCzas\Domain\Auth\JwtService;
+use ZmierzymyCzas\Domain\Auth\SessionGuard;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
 
 final class AuthMiddlewareTest extends TestCase
@@ -126,6 +127,40 @@ final class AuthMiddlewareTest extends TestCase
         $response = $middleware->process($request, $this->noOpHandler());
 
         self::assertSame(200, $response->getStatusCode());
+    }
+
+    public function testPurposeTokenIsRejected401(): void
+    {
+        $middleware = new AuthMiddleware($this->jwt);
+        $token = $this->jwt->issue(['sub' => 'u-1', 'role' => 'participant', 'purpose' => 'email_verification']);
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/api/v1/me')
+            ->withHeader('Authorization', 'Bearer ' . $token);
+
+        $response = $middleware->process($request, $this->noOpHandler());
+
+        self::assertSame(401, $response->getStatusCode());
+        $body = (array) json_decode((string) $response->getBody(), true);
+        self::assertSame('unauthorized', $body['error']['code']);
+    }
+
+    public function testGuardRejectionIs401(): void
+    {
+        $guarded = $this->jwt->withSessionGuard(new class implements SessionGuard {
+            public function isSessionValid(array $claims): bool
+            {
+                return false;
+            }
+        });
+        $middleware = new AuthMiddleware($guarded);
+        $token = $guarded->issue(['sub' => 'u-1', 'role' => 'participant']);
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/api/v1/me')
+            ->withHeader('Authorization', 'Bearer ' . $token);
+
+        $response = $middleware->process($request, $this->noOpHandler());
+
+        self::assertSame(401, $response->getStatusCode());
     }
 
     private function noOpHandler(): RequestHandlerInterface

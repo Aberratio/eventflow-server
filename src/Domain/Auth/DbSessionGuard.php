@@ -7,6 +7,10 @@ namespace ZmierzymyCzas\Domain\Auth;
 use PDO;
 
 /**
+ * PP.70: the same row also says whether the account is still `active`, so a
+ * blocked account has no valid session even if its status was changed outside
+ * the staff routes (which also bump the token version).
+ *
  * PP.7: one primary-key lookup per authenticated request. A PDOException is
  * deliberately not caught: the guard fails closed (500), never open.
  *
@@ -24,7 +28,7 @@ final class DbSessionGuard implements SessionGuard
     {
         $jti = $claims['jti'] ?? null;
         $stmt = $this->pdo->prepare(
-            'SELECT u.token_version AS tv,
+            'SELECT u.token_version AS tv, u.status AS status,
                     (SELECT COUNT(*) FROM revoked_session_tokens r WHERE r.jti = :jti) AS revoked
              FROM users u WHERE u.id = :id'
         );
@@ -34,6 +38,9 @@ final class DbSessionGuard implements SessionGuard
         ]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($row === false) {
+            return false;
+        }
+        if ((string) $row['status'] !== 'active') {
             return false;
         }
         if ((int) ($claims['tv'] ?? 0) !== (int) $row['tv']) {

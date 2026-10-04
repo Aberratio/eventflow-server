@@ -6,7 +6,7 @@ namespace ZmierzymyCzas\Domain\Auth;
 
 /**
  * PP.7: server-side check of an already signature-verified session token
- * (token version, revoked jti, user still exists).
+ * (token version, revoked jti, user still exists and is active).
  */
 interface SessionGuard
 {

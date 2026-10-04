@@ -591,6 +591,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'invalid_credentials', 'Invalid email or password', 401);
             }
             unset($user['passwordHash']);
+            // PP.70: a blocked account never gets a session. Checked after the password, so the
+            // block itself is only disclosed to someone who knows the password.
+            if ((string) ($user['status'] ?? 'active') !== 'active') {
+                return JsonResponder::error(
+                    $response,
+                    'account_blocked',
+                    'Twoje konto zostało zablokowane. Jeśli uważasz, że to pomyłka, napisz do nas: '
+                        . (string) Env::get('SUPPORT_EMAIL', 'kontakt@zmierzymyczas.pl') . '.',
+                    403
+                );
+            }
             // PP.7: tv (session version) and jti (per-session id for logout) travel in the token only, never in the DTO.
             $token = $jwt->issue([
                 'sub' => $user['id'],

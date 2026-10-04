@@ -601,7 +601,23 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, ['user' => $user, 'token' => $token]);
         });
 
-        $api->post('/auth/register', function (Request $request, Response $response) use ($users, $body, $jwt, $mailer) {
+        // PP.7: e-mail verification link = opaque one-time token (24 h), only its sha256 is stored; the mail
+        // idempotency source is the token id so every issued link is actually mailed. A mailer failure is
+        // logged (ids and error class only) and swallowed: the account/request already succeeded.
+        $sendEmailVerification = static function (array $user) use ($pdo, $mailer, $logger): void {
+            $tokens = new ActionTokenRepository($pdo);
+            $userId = (string) $user['id'];
+            $tokens->invalidateOpen($userId, ActionTokenPurpose::EMAIL_VERIFICATION);
+            $token = $tokens->issue($userId, ActionTokenPurpose::EMAIL_VERIFICATION, ActionTokenPurpose::EMAIL_VERIFICATION_TTL);
+            $link = rtrim((string) Env::get('APP_URL', ''), '/') . '/verify-email?token=' . $token['raw'];
+            try {
+                $mailer->sendEmailVerification($token['id'], (string) $user['email'], $link);
+            } catch (Throwable $e) {
+                $logger->error('Verification mail could not be queued', ['userId' => $userId, 'errorClass' => $e::class]);
+            }
+        };
+
+        $api->post('/auth/register', function (Request $request, Response $response) use ($users, $body, $sendEmailVerification) {
             $payload = $body($request);
             if (empty($payload['name']) || empty($payload['email']) || empty($payload['password'])) {
                 return JsonResponder::error($response, 'validation_error', 'Name, email and password are required', 422);
@@ -619,17 +635,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 'password' => $payload['password'],
                 'role' => 'participant',
             ]);
-            // E1.10 mail #1 ("Weryfikacja adresu e-mail", 17 §1 row 1). This
-            // ticket does not build a full email-verification feature (no
-            // `email_verified_at` column, no consuming endpoint exists in this
-            // codebase) — only the mail catalog's trigger wiring is in scope.
-            // The verification token is a short-lived JWT reusing JwtService
-            // (already used for login sessions) rather than a new table, purely
-            // to make the link in the mail meaningful; wiring an actual
-            // `/auth/verify-email` consumer is a separate, later concern.
-            $verificationToken = $jwt->issue(['sub' => $created['id'], 'purpose' => 'email_verification']);
-            $verificationLink = rtrim((string) Env::get('APP_URL', ''), '/') . '/verify-email?token=' . $verificationToken;
-            $mailer->sendEmailVerification((string) $created['id'], (string) $created['email'], $verificationLink);
+            // E1.10 mail #1 ("Weryfikacja adresu e-mail", 17 §1 row 1); PP.7: a real one-time token, consumed by /auth/email/verify.
+            $sendEmailVerification($created);
             return JsonResponder::ok($response, $created, 'User registered', 201);
         });
 
@@ -720,6 +727,41 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
             return JsonResponder::ok($response, null, 'Password reset');
         });
+
+        // PP.7: consumes an e-mail verification link. Public: the token is the credential. Informational only,
+        // nothing is gated on verification, and no session is touched.
+        $api->post('/auth/email/verify', function (Request $request, Response $response) use ($users, $body, $pdo) {
+            $payload = $body($request);
+            $token = $payload['token'] ?? null;
+            $consumed = is_string($token) ? (new ActionTokenRepository($pdo))->consume($token, ActionTokenPurpose::EMAIL_VERIFICATION) : null;
+            if ($consumed === null) {
+                return JsonResponder::error($response, 'invalid_token', 'Link weryfikacyjny jest nieprawidłowy lub wygasł.', 400);
+            }
+            $users->markEmailVerified($consumed['userId']);
+            return JsonResponder::ok($response, null, 'Email verified');
+        });
+
+        // PP.7: re-sends the verification link to the signed-in user's own address (60 s cooldown, 5 per hour).
+        // Authenticated, so a 429 reveals nothing about other accounts.
+        $api->post('/auth/email/verification/resend', function (Request $request, Response $response) use ($users, $pdo, $sendEmailVerification) {
+            $auth = (array) $request->getAttribute('auth');
+            $user = $users->find((string) ($auth['sub'] ?? ''));
+            if ($user === null) {
+                return JsonResponder::error($response, 'unauthorized', 'Sesja wygasła. Zaloguj się ponownie.', 401);
+            }
+            if (!empty($user['emailVerified'])) {
+                return JsonResponder::ok($response, ['alreadyVerified' => true]);
+            }
+            $tokens = new ActionTokenRepository($pdo);
+            if (
+                $tokens->countRecent((string) $user['id'], ActionTokenPurpose::EMAIL_VERIFICATION, 60) > 0
+                || $tokens->countRecent((string) $user['id'], ActionTokenPurpose::EMAIL_VERIFICATION, 3600) >= 5
+            ) {
+                return JsonResponder::error($response, 'too_many_requests', 'Wysłaliśmy już link. Spróbuj ponownie za chwilę.', 429);
+            }
+            $sendEmailVerification($user);
+            return JsonResponder::ok($response, ['alreadyVerified' => false]);
+        })->add(new AuthMiddleware($jwt));
 
         $api->get('/auth/me', function (Request $request, Response $response) use ($users) {
             $auth = (array) $request->getAttribute('auth');

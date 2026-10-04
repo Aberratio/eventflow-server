@@ -8,6 +8,17 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class OrderRepository extends Repository
 {
+    /** PP.17: column list shared by the buyer-scoped reads (same as find()). */
+    private const ORDER_COLUMNS = "o.id, o.order_number AS orderNumber, o.user_id AS userId, o.status,
+        o.product_total AS productTotal, o.delivery_price AS deliveryPrice,
+        o.payment_surcharge AS paymentSurcharge, o.price_adjustment AS priceAdjustment,
+        o.total_price AS totalPrice, o.delivery_method AS deliveryMethod,
+        o.payment_method AS paymentMethod, o.shipping_address AS shippingAddress,
+        o.invoice_data AS invoiceData,
+        o.tracking_number AS trackingNumber, o.admin_notes AS adminNotes,
+        o.cancel_reason AS cancelReason, o.estimated_delivery AS estimatedDelivery,
+        o.history, o.created_at AS createdAt, o.updated_at AS updatedAt";
+
     private const JSON_FIELDS = ['deliveryMethod', 'paymentMethod', 'shippingAddress', 'invoiceData', 'history'];
 
     /**
@@ -126,6 +137,35 @@ final class OrderRepository extends Repository
              FROM shop_orders o WHERE o.id = :id"
         );
         $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch();
+        return $row ? $this->withItems($this->hydrateOrder($row)) : null;
+    }
+
+    /** PP.17: the caller's own orders, newest first, each with items[]. $userId MUST be auth.sub. */
+    public function listForUser(string $userId): array
+    {
+        if ($userId === '') {
+            return [];
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::ORDER_COLUMNS . ' FROM shop_orders o
+             WHERE o.user_id = :userId ORDER BY o.created_at DESC, o.id DESC'
+        );
+        $stmt->execute(['userId' => $userId]);
+        return array_map(fn (array $row): array => $this->withItems($this->hydrateOrder($row)), $stmt->fetchAll());
+    }
+
+    /** PP.17: one order iff it belongs to $userId; a foreign id and a missing id are both null (no oracle). */
+    public function findForUser(string $id, string $userId): ?array
+    {
+        if ($userId === '') {
+            return null;
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::ORDER_COLUMNS . ' FROM shop_orders o
+             WHERE o.id = :id AND o.user_id = :userId'
+        );
+        $stmt->execute(['id' => $id, 'userId' => $userId]);
         $row = $stmt->fetch();
         return $row ? $this->withItems($this->hydrateOrder($row)) : null;
     }

@@ -13,6 +13,8 @@ use ZmierzymyCzas\Domain\Admin\AdminRepository;
 use ZmierzymyCzas\Domain\Auth\ApplicationApiKeyConfig;
 use ZmierzymyCzas\Domain\Auth\DbSessionGuard;
 use ZmierzymyCzas\Domain\Auth\JwtService;
+use ZmierzymyCzas\Domain\Auth\PasswordRule;
+use ZmierzymyCzas\Domain\Auth\SessionRevocationRepository;
 use ZmierzymyCzas\Domain\Bz\BzWebhookClient;
 use ZmierzymyCzas\Domain\Bz\BzWebhookConfig;
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxRepository;
@@ -586,7 +588,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'invalid_credentials', 'Invalid email or password', 401);
             }
             unset($user['passwordHash']);
-            $token = $jwt->issue(['sub' => $user['id'], 'role' => $user['role'], 'email' => $user['email']]);
+            // PP.7: tv (session version) and jti (per-session id for logout) travel in the token only, never in the DTO.
+            $token = $jwt->issue([
+                'sub' => $user['id'],
+                'role' => $user['role'],
+                'email' => $user['email'],
+                'tv' => $users->tokenVersion((string) $user['id']),
+                'jti' => JwtService::newJti(),
+            ]);
             return JsonResponder::ok($response, ['user' => $user, 'token' => $token]);
         });
 
@@ -622,7 +631,23 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $created, 'User registered', 201);
         });
 
-        $api->post('/auth/logout', static fn (Request $request, Response $response) => JsonResponder::ok($response, null));
+        // PP.7: logout ends only the current session (jti deny-list); other devices stay signed in. Stays
+        // outside AuthMiddleware on purpose: an expired or garbage token is still a successful logout.
+        $api->post('/auth/logout', function (Request $request, Response $response) use ($jwt, $pdo) {
+            if (preg_match('/^Bearer\s+(.+)$/i', $request->getHeaderLine('Authorization'), $matches)) {
+                try {
+                    $claims = $jwt->decodeSession($matches[1]);
+                } catch (Throwable) {
+                    return JsonResponder::ok($response, null);
+                }
+                if (is_string($claims['jti'] ?? null) && $claims['jti'] !== '') {
+                    $sessionRevocations = new SessionRevocationRepository($pdo);
+                    $sessionRevocations->revoke($claims['jti'], (string) $claims['sub'], max(0, (int) ($claims['exp'] ?? 0) - time()));
+                    $sessionRevocations->purgeExpired();
+                }
+            }
+            return JsonResponder::ok($response, null);
+        });
         $api->post('/auth/password/reset', function (Request $request, Response $response) use ($users, $body, $jwt, $mailer) {
             $payload = $body($request);
             $email = trim((string) ($payload['email'] ?? ''));
@@ -647,8 +672,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
         // PP.45: real self-service password change (was a no-op returning 200).
         // Self only: the target is always auth.sub, never a body field. Session
-        // invalidation (token_version) is PP.7; rate limiting is PP.10.
-        $api->post('/auth/password/change', function (Request $request, Response $response) use ($users, $body) {
+        // invalidation (token_version) is PP.7 (below); rate limiting is PP.10.
+        $api->post('/auth/password/change', function (Request $request, Response $response) use ($users, $body, $jwt, $pdo) {
             $auth = (array) $request->getAttribute('auth');
             $userId = (string) ($auth['sub'] ?? '');
             $payload = $body($request);
@@ -665,17 +690,32 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             if (!password_verify($old, $hash)) {
                 return JsonResponder::error($response, 'invalid_current_password', 'Obecne hasło jest nieprawidłowe.', 422);
             }
-            if (mb_strlen($new) < 8) {
-                return JsonResponder::error($response, 'password_too_short', 'Nowe hasło musi mieć co najmniej 8 znaków.', 422);
+            $violation = PasswordRule::violation($new, $old);
+            if ($violation !== null) {
+                return JsonResponder::error($response, $violation['code'], $violation['message'], 422);
             }
-            if (strlen($new) > 72) { // bcrypt (PASSWORD_DEFAULT) silently truncates beyond 72 bytes
-                return JsonResponder::error($response, 'password_too_long', 'Nowe hasło jest za długie.', 422);
+            // PP.7: bumping token_version ends every other session (and this device's old token);
+            // the caller gets a fresh token so this device stays signed in.
+            $pdo->beginTransaction();
+            try {
+                $users->setPassword($userId, $new);
+                $tokenVersion = $users->bumpTokenVersion($userId);
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
             }
-            if (hash_equals($old, $new)) {
-                return JsonResponder::error($response, 'password_unchanged', 'Nowe hasło musi różnić się od obecnego.', 422);
-            }
-            $users->setPassword($userId, $new);
-            return JsonResponder::ok($response, null, 'Password changed');
+            $account = $users->find($userId);
+            $token = $jwt->issue([
+                'sub' => $userId,
+                'role' => (string) ($account['role'] ?? ($auth['role'] ?? '')),
+                'email' => (string) ($account['email'] ?? ($auth['email'] ?? '')),
+                'tv' => $tokenVersion,
+                'jti' => JwtService::newJti(),
+            ]);
+            return JsonResponder::ok($response, ['token' => $token], 'Password changed');
         })->add(new AuthMiddleware($jwt));
 
         $api->get('/users', function (Request $request, Response $response) use ($users, $query) {

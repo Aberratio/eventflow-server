@@ -25,6 +25,7 @@ use ZmierzymyCzas\Domain\Cms\InfoPageRepository;
 use ZmierzymyCzas\Domain\Cms\PartnerRepository;
 use ZmierzymyCzas\Domain\Events\EventBackgroundRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
+use ZmierzymyCzas\Domain\Events\PublicEventPresenter;
 use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Payments\Http\CurlHttpClient;
@@ -394,36 +395,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         }
         return ['registration' => $registration, 'isManager' => $isManager];
     };
-    // E3.2: the pasted BZ organization token must never reach a non-manager read
-    // (issue 12 §3 — it is a credential-shaped identifier, unlike the rest of the
-    // Event payload which this codebase already returns unfiltered to anonymous
-    // readers). Applied to every read path a participant/guest can hit; manager
-    // reads (organizer-owner or the same $canManageEvent-eligible staff) keep it.
-    // E8.2 (spec 21 Answer §4): "ten sam wzorzec przełącznika co przy liście
-    // startowej publicznej/ukrytej" — mirrors `display_options.showParticipants`
-    // (events.display_options JSON, generic PATCH /events/{id}) exactly: a new
-    // key, `showFreeSlots`, in the same JSON blob, same per-Event scope (spec
-    // says "ukryć per Wydarzenie"), same generic update path, no new column.
-    // Default visible (spec: "domyślnie widoczny") — only an explicit `false`
-    // hides it, so events saved before this key existed keep showing it.
-    // Folded into $stripBzToken below (same call sites, same "redact for every
-    // non-manager read" contract as the BZ token) rather than a second function
-    // threaded through every route — one pass, one place to keep both grants in
-    // sync as this codebase's own precedent (BZ token) already established.
-    $stripBzToken = static function (array $event): array {
-        $event['bzOrganizationToken'] = null;
-        $showFreeSlots = (($event['displayOptions'] ?? [])['showFreeSlots'] ?? true) !== false;
-        if (!$showFreeSlots && !empty($event['distances'])) {
-            $event['distances'] = array_map(static function (array $distance): array {
-                unset($distance['slotsRemaining']);
-                return $distance;
-            }, $event['distances']);
-        }
-        return $event;
-    };
-    $stripBzTokenFromList = static function (array $events) use ($stripBzToken): array {
-        return array_map($stripBzToken, $events);
-    };
+    // PP.55: every non-manager Event read goes through PublicEventPresenter (allowlist;
+    // accessCode/bzOrganizationToken null; discount `usedBy` dropped; E8.2 showFreeSlots).
+    // Names kept from E3.2 to avoid touching the group's use-list.
+    $stripBzToken = static fn (array $event): array => PublicEventPresenter::present($event);
+    $stripBzTokenFromList = static fn (array $events): array => PublicEventPresenter::presentList($events);
     $touchesAdminAccount = static function (?array $existing, array $payload): bool {
         $existingRole = (string) ($existing['role'] ?? '');
         $nextRole = array_key_exists('role', $payload) ? (string) $payload['role'] : '';
@@ -861,23 +837,27 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         });
         $api->get('/events/featured', fn (Request $request, Response $response) => JsonResponder::ok($response, $stripBzTokenFromList($events->featured())));
         $api->get('/events/live', fn (Request $request, Response $response) => JsonResponder::ok($response, $stripBzTokenFromList($events->live())));
-        $api->get('/events/slug/{slug}', function (Request $request, Response $response, array $args) use ($events, $optionalAuth, $canViewEvent, $canManageEvent, $stripBzToken) {
+        $api->get('/events/slug/{slug}', function (Request $request, Response $response, array $args) use ($events, $optionalAuth, $canViewEvent, $canManageEvent, $isStaffRole, $stripBzToken) {
             $event = $events->findBySlug($args['slug']);
             $auth = $optionalAuth($request);
             $accessCode = $request->getQueryParams()['accessCode'] ?? null;
             if (!$canViewEvent($event, $auth, $accessCode !== null ? (string) $accessCode : null)) {
                 return JsonResponder::error($response, 'not_found', 'Event not found', 404);
             }
-            return JsonResponder::ok($response, $canManageEvent($event, $auth) ? $event : $stripBzToken($event));
+            // PP.55: managers and staff keep the raw Event; everyone else gets the public shape.
+            $isManagerRead = $canManageEvent($event, $auth) || $isStaffRole((string) ($auth['role'] ?? ''));
+            return JsonResponder::ok($response, $isManagerRead ? $event : $stripBzToken($event));
         });
-        $api->get('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $optionalAuth, $canViewEvent, $canManageEvent, $stripBzToken) {
+        $api->get('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $optionalAuth, $canViewEvent, $canManageEvent, $isStaffRole, $stripBzToken) {
             $event = $events->find($args['id']);
             $auth = $optionalAuth($request);
             $accessCode = $request->getQueryParams()['accessCode'] ?? null;
             if (!$canViewEvent($event, $auth, $accessCode !== null ? (string) $accessCode : null)) {
                 return JsonResponder::error($response, 'not_found', 'Event not found', 404);
             }
-            return JsonResponder::ok($response, $canManageEvent($event, $auth) ? $event : $stripBzToken($event));
+            // PP.55: managers and staff keep the raw Event; everyone else gets the public shape.
+            $isManagerRead = $canManageEvent($event, $auth) || $isStaffRole((string) ($auth['role'] ?? ''));
+            return JsonResponder::ok($response, $isManagerRead ? $event : $stripBzToken($event));
         });
         // E8.11: unauthenticated so the CLIENT's dedicated embed page
         // (/embed/event/:id/register, a follow-up client-repo task) can check

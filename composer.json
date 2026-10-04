@@ -57,6 +57,7 @@
             "php -l src/Database/FixtureFieldFiller.php",
             "php -l src/Database/EventCoherence.php",
             "php -l src/Domain/Events/EventRepository.php",
+            "php -l src/Domain/Events/PublicEventPresenter.php",
             "php -l src/Domain/Competitors/CompetitorRepository.php",
             "php -l src/Domain/Competitors/CompetitorNamePresenter.php",
             "php -l src/Domain/Care/CareRepository.php",

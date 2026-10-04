@@ -22,3 +22,23 @@ CREATE TABLE IF NOT EXISTS revoked_session_tokens (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_rst_expires (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Blok 7b: jednorazowe tokeny akcji (reset hasła; w 7c także weryfikacja i
+-- zmiana e-maila). W bazie leży tylko sha256 tokenu, surowy token jest
+-- wyłącznie w linku z maila. `id` jest też źródłem idempotencji maila
+-- (CriticalMailer), dzięki czemu każdy kolejny mail dla tego samego
+-- użytkownika jest wysyłany. Celowo bez klucza obcego do `users`: migracje 057
+-- (anonimizacja) i 059 (scalanie) zostają nietknięte, a konsumpcja łączy
+-- `users`, więc osierocone wiersze są nieszkodliwe.
+CREATE TABLE IF NOT EXISTS user_action_tokens (
+  id VARCHAR(36) NOT NULL PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL,
+  purpose VARCHAR(32) NOT NULL,
+  token_hash CHAR(64) NOT NULL,
+  new_email VARCHAR(255) NULL,
+  expires_at DATETIME NOT NULL,
+  used_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_uat_token_hash (token_hash),
+  INDEX idx_uat_user_purpose (user_id, purpose, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

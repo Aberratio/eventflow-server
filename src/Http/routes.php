@@ -2015,7 +2015,22 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $data['userName'] = $isOwnProfile
                 ? (string) $caller['name']
                 : trim((string) $competitor['firstName'] . ' ' . (string) $competitor['lastName']);
-            $data['userEmail'] = $isOwnProfile ? (string) $caller['email'] : (string) ($competitor['email'] ?? '');
+            // PP.44: the Zapis's contact e-mail receives every start mail (spec 10 §3,
+            // model-formularza §2.1). A Zawodnik without a Konto (a child) has no e-mail of
+            // their own, so the guardian's goes on the Zapis; a Zawodnik with a Konto gets that
+            // Konto's current e-mail (competitors.email is only a copy taken at creation).
+            if ($isOwnProfile) {
+                $data['userEmail'] = (string) $caller['email'];
+            } else {
+                $competitorUserId = (string) ($competitor['userId'] ?? '');
+                $competitorKonto = $competitorUserId !== '' ? $users->find($competitorUserId) : null;
+                $candidates = [
+                    (string) ($competitorKonto['email'] ?? ''),
+                    $competitorUserId !== '' ? (string) ($competitor['email'] ?? '') : '',
+                    (string) $caller['email'],
+                ];
+                $data['userEmail'] = (string) (array_values(array_filter($candidates, static fn (string $e): bool => trim($e) !== ''))[0] ?? '');
+            }
             $data['registeredById'] = $isOwnProfile ? null : $callerId;
 
             // PP.54: the authenticated caller, for the team captain-consent check (never taken from the body).

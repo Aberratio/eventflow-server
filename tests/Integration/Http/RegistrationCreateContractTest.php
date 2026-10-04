@@ -268,6 +268,62 @@ final class RegistrationCreateContractTest extends HttpTestCase
         self::assertSame($this->p['id'], $data['userId']);
         self::assertSame($this->p['id'], $data['registeredById']);
         self::assertSame('Dziecko ' . $this->prefix, $data['userName']);
+
+        // PP.44: the Zapis row keeps the child as the participant and the guardian as contact.
+        $row = $this->rawRegistration($data['id']);
+        self::assertSame($child['id'], $row['competitor_id']);
+        self::assertSame($this->p['id'], $row['user_id']);
+        self::assertSame($this->p['id'], $row['registered_by_id']);
+        self::assertSame('Dziecko ' . $this->prefix, $row['user_name']);
+        self::assertSame($this->p['email'], $row['user_email']);
+    }
+
+    public function testChildCompetitorEmailIsNotUsedAsContactEmail(): void
+    {
+        $child = $this->json($this->request(
+            'POST',
+            '/api/v1/care',
+            ['firstName' => 'Dziecko', 'lastName' => $this->prefix, 'birthDate' => '2015-05-05'],
+            $this->bearer($this->p['id'], 'participant', $this->p['email'])
+        ))['data']['competitor'];
+        $this->pdo->prepare('UPDATE competitors SET email = :email WHERE id = :id')->execute([
+            'email' => $this->prefix . '-child@example.test',
+            'id' => $child['id'],
+        ]);
+
+        $response = $this->post($this->p, $this->selfPayload($this->p, ['competitorId' => $child['id']]));
+        $data = $this->json($response)['data'];
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame($this->p['email'], $this->rawRegistration($data['id'])['user_email']);
+    }
+
+    public function testAdultUnderCareGetsCurrentKontoEmail(): void
+    {
+        $grant = $this->request(
+            'POST',
+            '/api/v1/care',
+            ['email' => $this->p['email']],
+            $this->bearer($this->q['id'], 'participant', $this->q['email'])
+        );
+        self::assertSame(201, $grant->getStatusCode());
+        $qCompetitor = $this->competitorIdOf($this->q['id']);
+
+        // The competitor row keeps the e-mail copied at creation; the Konto's e-mail moves on.
+        $newEmail = $this->prefix . '-q-new@example.test';
+        $this->pdo->prepare('UPDATE users SET email = :email WHERE id = :id')->execute([
+            'email' => $newEmail,
+            'id' => $this->q['id'],
+        ]);
+
+        $response = $this->post($this->p, $this->selfPayload($this->p, ['competitorId' => $qCompetitor]));
+        $data = $this->json($response)['data'];
+
+        self::assertSame(201, $response->getStatusCode());
+        $row = $this->rawRegistration($data['id']);
+        self::assertSame($newEmail, $row['user_email']);
+        self::assertSame($this->q['id'], $row['user_id']);
+        self::assertSame($this->p['id'], $row['registered_by_id']);
     }
 
     public function testCareGrantedByAdultAccountAllowsRegistration(): void

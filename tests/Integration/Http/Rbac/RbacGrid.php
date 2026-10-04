@@ -152,6 +152,8 @@ final class RbacGrid
         'POST /api/v1/auth/password/reset/confirm' => ['policy' => self::PUBLIC, 'body' => ['token' => 'rbac-bad', 'newPassword' => 'rbac-pass-9999'], 'basis' => 'PP.7: public, authorised by the one-time token only (plan 3.9)'],
         'POST /api/v1/auth/email/verify' => ['policy' => self::PUBLIC, 'body' => ['token' => 'rbac-bad'], 'basis' => 'PP.7: public, authorised by the one-time token only (plan 3.9)'],
         'POST /api/v1/auth/email/verification/resend' => ['policy' => self::AUTH, 'basis' => 'PP.7: any signed-in session, self only (plan 3.9)'],
+        'POST /api/v1/auth/email/change' => ['policy' => self::AUTH, 'basis' => 'PP.7: any signed-in session, self only; the empty body is a 422 (plan 3.9)'],
+        'POST /api/v1/auth/email/change/confirm' => ['policy' => self::PUBLIC, 'body' => ['token' => 'rbac-bad'], 'basis' => 'PP.7: public, authorised by the one-time token only (plan 3.9)'],
         'GET /api/v1/auth/me' => ['policy' => self::AUTH, 'basis' => 'any signed-in session (no extra per-row rule) (plan line 658)'],
         'POST /api/v1/auth/password/change' => ['policy' => self::AUTH, 'basis' => 'self only (auth.sub) (plan line 666)'],
         'GET /api/v1/users' => ['policy' => self::STAFF, 'basis' => 'macierz: lista Kont — Moderator odczyt (plan line 696)'],

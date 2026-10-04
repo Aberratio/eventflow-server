@@ -763,6 +763,91 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, ['alreadyVerified' => false]);
         })->add(new AuthMiddleware($jwt));
 
+        // PP.7: verified self e-mail change, step 1. Needs the current password (a stolen session alone must not
+        // be able to hijack the account's address). The link goes to the NEW address; users.email changes only
+        // when it is confirmed. The caller is authenticated and password-verified, so the 409 below exposes
+        // nothing that PATCH /users/{id} and register do not already expose. Reuses the email_verification
+        // mail template (a dedicated template is follow-up PP.72).
+        $api->post('/auth/email/change', function (Request $request, Response $response) use ($users, $body, $pdo, $mailer, $logger) {
+            $auth = (array) $request->getAttribute('auth');
+            $userId = (string) ($auth['sub'] ?? '');
+            $payload = $body($request);
+            $newEmail = $payload['newEmail'] ?? null;
+            $password = $payload['currentPassword'] ?? null;
+            if (!is_string($newEmail) || !is_string($password) || trim($newEmail) === '' || $password === '') {
+                return JsonResponder::error($response, 'validation_error', 'Podaj nowy adres e-mail i obecne hasło.', 422);
+            }
+            $new = mb_strtolower(trim($newEmail));
+            if (filter_var($new, FILTER_VALIDATE_EMAIL) === false || strlen($new) > 255) {
+                return JsonResponder::error($response, 'invalid_email', 'Podaj poprawny adres e-mail.', 422);
+            }
+            $hash = $users->passwordHashById($userId);
+            $user = $users->find($userId);
+            if ($hash === null || $user === null) {
+                return JsonResponder::error($response, 'unauthorized', 'Sesja wygasła. Zaloguj się ponownie.', 401);
+            }
+            // A wrong current password is 422, never 401: the client treats a 401 as an expired session.
+            if (!password_verify($password, $hash)) {
+                return JsonResponder::error($response, 'invalid_current_password', 'Obecne hasło jest nieprawidłowe.', 422);
+            }
+            if ($new === mb_strtolower((string) $user['email'])) {
+                return JsonResponder::error($response, 'email_unchanged', 'To jest Twój obecny adres e-mail.', 422);
+            }
+            $taken = $users->findByEmail($new);
+            if ($taken !== null && (string) $taken['id'] !== $userId) {
+                return JsonResponder::error($response, 'email_taken', 'Ten adres e-mail jest już zajęty.', 409);
+            }
+            $tokens = new ActionTokenRepository($pdo);
+            if (
+                $tokens->countRecent($userId, ActionTokenPurpose::EMAIL_CHANGE, 60) > 0
+                || $tokens->countRecent($userId, ActionTokenPurpose::EMAIL_CHANGE, 3600) >= 5
+            ) {
+                return JsonResponder::error($response, 'too_many_requests', 'Wysłaliśmy już link. Spróbuj ponownie za chwilę.', 429);
+            }
+            $tokens->invalidateOpen($userId, ActionTokenPurpose::EMAIL_CHANGE);
+            $token = $tokens->issue($userId, ActionTokenPurpose::EMAIL_CHANGE, ActionTokenPurpose::EMAIL_CHANGE_TTL, $new);
+            $link = rtrim((string) Env::get('APP_URL', ''), '/') . '/confirm-email-change?token=' . $token['raw'];
+            try {
+                $mailer->sendEmailVerification($token['id'], $new, $link);
+            } catch (Throwable $e) {
+                $logger->error('E-mail change mail could not be queued', ['userId' => $userId, 'errorClass' => $e::class]);
+            }
+            return JsonResponder::ok($response, ['pendingEmail' => $new], 'Wysłaliśmy link potwierdzający na nowy adres.');
+        })->add(new AuthMiddleware($jwt));
+
+        // PP.7: verified self e-mail change, step 2. Public: the token is the credential. The new address is
+        // marked verified (the link proved the owner reads it) and every session ends (token_version++), so the
+        // user signs in again with the new address. An address taken in the meantime is a 409 and the link stays
+        // used; the user starts over.
+        $api->post('/auth/email/change/confirm', function (Request $request, Response $response) use ($users, $body, $pdo) {
+            $payload = $body($request);
+            $token = $payload['token'] ?? null;
+            $consumed = is_string($token) ? (new ActionTokenRepository($pdo))->consume($token, ActionTokenPurpose::EMAIL_CHANGE) : null;
+            if ($consumed === null || $consumed['newEmail'] === null) {
+                return JsonResponder::error($response, 'invalid_token', 'Link jest nieprawidłowy lub wygasł.', 400);
+            }
+            $taken = $users->findByEmail($consumed['newEmail']);
+            if ($taken !== null && (string) $taken['id'] !== $consumed['userId']) {
+                return JsonResponder::error($response, 'email_taken', 'Ten adres e-mail jest już zajęty.', 409);
+            }
+            $pdo->beginTransaction();
+            try {
+                $users->changeEmailVerified($consumed['userId'], $consumed['newEmail']);
+                $users->bumpTokenVersion($consumed['userId']);
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                // 23000 = a concurrent request took the address between the check above and the UPDATE.
+                if ($e instanceof PDOException && (string) $e->getCode() === '23000') {
+                    return JsonResponder::error($response, 'email_taken', 'Ten adres e-mail jest już zajęty.', 409);
+                }
+                throw $e;
+            }
+            return JsonResponder::ok($response, null, 'Email changed');
+        });
+
         $api->get('/auth/me', function (Request $request, Response $response) use ($users) {
             $auth = (array) $request->getAttribute('auth');
             return JsonResponder::ok($response, $users->find((string) ($auth['sub'] ?? '')));
@@ -874,7 +959,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     return JsonResponder::error(
                         $response,
                         'email_change_not_allowed',
-                        'Zmiana adresu e-mail wymaga weryfikacji i nie jest jeszcze dostępna. Skontaktuj się z obsługą.',
+                        'Adres e-mail zmienisz w profilu, w sekcji „Zmień adres e-mail” — zmiana wymaga potwierdzenia linkiem.',
                         422
                     );
                 }

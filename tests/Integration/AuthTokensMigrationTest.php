@@ -52,6 +52,28 @@ final class AuthTokensMigrationTest extends TestCase
         self::assertSame(['created_at', 'expires_at', 'jti', 'user_id'], $columns);
     }
 
+    public function testUserActionTokensTableAndUniqueHashExist(): void
+    {
+        $columns = $this->pdo->query(
+            "SELECT column_name FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND table_name = 'user_action_tokens'"
+        )->fetchAll(PDO::FETCH_COLUMN);
+        $columns = array_map('strtolower', $columns);
+        sort($columns);
+        self::assertSame(
+            ['created_at', 'expires_at', 'id', 'new_email', 'purpose', 'token_hash', 'used_at', 'user_id'],
+            $columns
+        );
+
+        $index = $this->pdo->query(
+            "SELECT NON_UNIQUE, COLUMN_NAME FROM information_schema.statistics
+             WHERE table_schema = DATABASE() AND table_name = 'user_action_tokens' AND index_name = 'uq_uat_token_hash'"
+        )->fetchAll(PDO::FETCH_ASSOC);
+        self::assertCount(1, $index);
+        self::assertSame(0, (int) $index[0]['NON_UNIQUE']);
+        self::assertSame('token_hash', $index[0]['COLUMN_NAME']);
+    }
+
     public function testMigrationFileHasNoIfNotExistsInAlter(): void
     {
         $sql = (string) file_get_contents(Migrator::migrationsDir() . '/' . self::FILE);

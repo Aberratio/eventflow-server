@@ -72,6 +72,32 @@ final class SavepointPdoTest extends TestCase
         self::assertSame(1, $this->pageCount($this->pdo, $this->slug));
     }
 
+    public function testFailedWorldBuildLeavesNoOpenTransactionOrLocks(): void
+    {
+        $probe = Connection::fromEnv();
+        $thread = null;
+        try {
+            SavepointPdo::openWorld(function (SavepointPdo $pdo) use (&$thread): void {
+                $thread = (int) $pdo->query('SELECT CONNECTION_ID()')->fetchColumn();
+                $this->insertPage($pdo, $this->slug);
+                throw new \RuntimeException('fixture build failed');
+            });
+            self::fail('The build exception must propagate.');
+        } catch (\RuntimeException $e) {
+            self::assertSame('fixture build failed', $e->getMessage());
+        }
+
+        $open = $probe->prepare('SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_mysql_thread_id = :t');
+        $open->execute(['t' => $thread]);
+        self::assertSame(0, (int) $open->fetchColumn(), 'The outer transaction leaked.');
+
+        // Lock-level proof: would fail with 1205 after 1 s if the unique-key lock leaked.
+        $probe->exec('SET SESSION innodb_lock_wait_timeout = 1');
+        $probe->beginTransaction();
+        $this->insertPage($probe, $this->slug);
+        $probe->rollBack();
+    }
+
     public function testCommitWithoutBeginThrowsLikePdo(): void
     {
         $this->pdo->beginOuter();

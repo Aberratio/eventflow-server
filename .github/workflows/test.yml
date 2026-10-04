@@ -28,6 +28,7 @@ jobs:
   integration:
     name: Backend integration gate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       mysql:
         image: mysql:8.4

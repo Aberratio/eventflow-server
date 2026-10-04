@@ -16,25 +16,24 @@ use ZmierzymyCzas\Tests\Support\SavepointPdo;
  */
 final class RbacGridContractTest extends HttpTestCase
 {
-    private static SavepointPdo $sharedPdo;
+    private static ?SavepointPdo $sharedPdo = null;
     private static RbacFixtures $fx;
 
     public static function setUpBeforeClass(): void
     {
         // A missing schema makes fixture building error out - it must never skip.
-        self::$sharedPdo = new SavepointPdo();
-        self::$sharedPdo->beginOuter();
-        self::$fx = RbacFixtures::build(self::$sharedPdo);
+        [self::$sharedPdo, self::$fx] = SavepointPdo::openWorld(RbacFixtures::build(...));
     }
 
     public static function tearDownAfterClass(): void
     {
-        self::$sharedPdo->rollbackOuter();
+        self::$sharedPdo?->rollbackOuter();
+        self::$sharedPdo = null;
     }
 
     protected function createPdo(): \PDO
     {
-        return self::$sharedPdo;
+        return self::$sharedPdo ?? throw new \LogicException('The fixture world is not open.');
     }
 
     /** @return list<string> */

@@ -46,6 +46,41 @@ final class SavepointPdo extends PDO
                 PDO::ATTR_TIMEOUT => 5,
             ]
         );
+        // A conflict inside the isolated world must fail fast, not after the 50 s default.
+        $this->exec('SET SESSION innodb_lock_wait_timeout = 5');
+    }
+
+    /** Safety net: never leave an open transaction (and its locks) behind. */
+    public function __destruct()
+    {
+        try {
+            if (parent::inTransaction()) {
+                parent::rollBack();
+            }
+        } catch (\Throwable) {
+        }
+    }
+
+    /**
+     * Opens the outer transaction and builds the fixture world. If $build throws, the
+     * transaction is rolled back before the exception leaves.
+     *
+     * @template T
+     * @param callable(self): T $build
+     * @return array{0: self, 1: T}
+     */
+    public static function openWorld(callable $build): array
+    {
+        $pdo = new self();
+        $pdo->beginOuter();
+        try {
+            return [$pdo, $build($pdo)];
+        } catch (\Throwable $e) {
+            // PHPUnit never calls tearDownAfterClass() when setUpBeforeClass() fails,
+            // so the transaction (and its locks) must not outlive a failed build.
+            $pdo->rollbackOuter();
+            throw $e;
+        }
     }
 
     public function beginOuter(): void

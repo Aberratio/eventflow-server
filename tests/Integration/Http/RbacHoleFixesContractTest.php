@@ -19,25 +19,24 @@ use ZmierzymyCzas\Tests\Support\SavepointPdo;
  */
 final class RbacHoleFixesContractTest extends HttpTestCase
 {
-    private static SavepointPdo $sharedPdo;
+    private static ?SavepointPdo $sharedPdo = null;
     private static RbacFixtures $fx;
     private static int $seq = 0;
 
     public static function setUpBeforeClass(): void
     {
-        self::$sharedPdo = new SavepointPdo();
-        self::$sharedPdo->beginOuter();
-        self::$fx = RbacFixtures::build(self::$sharedPdo);
+        [self::$sharedPdo, self::$fx] = SavepointPdo::openWorld(RbacFixtures::build(...));
     }
 
     public static function tearDownAfterClass(): void
     {
-        self::$sharedPdo->rollbackOuter();
+        self::$sharedPdo?->rollbackOuter();
+        self::$sharedPdo = null;
     }
 
     protected function createPdo(): \PDO
     {
-        return self::$sharedPdo;
+        return self::$sharedPdo ?? throw new \LogicException('The fixture world is not open.');
     }
 
     protected function setUp(): void

@@ -14,6 +14,8 @@ final class SchedulerJobsTest extends TestCase
     {
         self::assertSame([
             'events.finish_past',
+            'registrations.expire_unpaid',
+            'registrations.payment_reminders',
         ], SchedulerJobs::NAMES);
     }
 }

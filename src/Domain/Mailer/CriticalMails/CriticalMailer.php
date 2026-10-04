@@ -138,14 +138,24 @@ final class CriticalMailer
         ]);
     }
 
-    public function sendUnpaidReminder(string $registrationId, string $eventId, string $email, string $eventName, string $amountDue, string $payNowLink, string $expiresAt): ?array
+    /** PP.18: lets the scheduler skip (and not claim anything) when no mail could be enqueued anyway. */
+    public function isConfigured(): bool
+    {
+        return $this->config->isConfigured();
+    }
+
+    /**
+     * @param string $windowKey identifies the payment window the reminder belongs to (the registration's
+     *                          `payment_expires_at`): one reminder per window, a reopened window gets its own
+     */
+    public function sendUnpaidReminder(string $registrationId, string $eventId, string $email, string $eventName, string $amountDue, string $payNowLink, string $expiresAt, string $windowKey): ?array
     {
         return $this->send(MailCatalog::UNPAID_REMINDER, $registrationId, $eventId, $email, [
             'eventName' => $eventName,
             'amountDue' => $amountDue,
             'payNowLink' => $payNowLink,
             'expiresAt' => $expiresAt,
-        ]);
+        ], 'w' . substr(hash('sha256', $windowKey), 0, 12));
     }
 
     /**
@@ -229,7 +239,7 @@ final class CriticalMailer
      * @param array<string, string> $variables
      * @return array<string, mixed>|null
      */
-    private function send(string $mailType, string $sourceEntityId, ?string $eventId, string $recipientEmail, array $variables): ?array
+    private function send(string $mailType, string $sourceEntityId, ?string $eventId, string $recipientEmail, array $variables, string $keyDiscriminator = ''): ?array
     {
         if (!$this->config->isConfigured() || $recipientEmail === '') {
             return null;
@@ -245,6 +255,9 @@ final class CriticalMailer
         // (entity, mail type) pair that legitimately changes the key, and it
         // does so exactly when the rendered HTML itself legitimately changes.
         $idempotencyKey = sprintf('%s:%s:v%d', $sourceEntityId, $mailType, $template['version']);
+        if ($keyDiscriminator !== '') {
+            $idempotencyKey .= ':' . $keyDiscriminator;
+        }
 
         return $this->outbox->enqueue([
             'sourceEntityType' => $mailType,

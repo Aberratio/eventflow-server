@@ -715,7 +715,8 @@ final class RegistrationRepositoryTest extends TestCase
 
         $registration = $this->registrations->create($this->registrationPayload($event, ''));
         $this->backdatePaymentExpiry($registration['id'], (new \DateTimeImmutable('-1 minute'))->format(DATE_ATOM));
-        // Force the lazy expiry to run so retryPayment() sees an 'expired' Zapis.
+        // PP.18: the scheduler's expiry job turns it 'expired' so retryPayment() can reopen it.
+        $this->registrations->expireOverdueRegistrations(new \DateTimeImmutable());
         self::assertSame('expired', $this->registrations->find($registration['id'])['status']);
 
         $retried = $this->registrations->retryPayment($registration['id']);
@@ -748,12 +749,12 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * The core of E1.4: once a pending Zapis's frozen deadline has passed, the next
-     * read (find(), same as any other read path) lazily flips it to `expired` and
-     * releases the Dystans slot the same way a manual cancel does (E1.3) — the
-     * ticket's "wygaśnięcie natychmiast odblokowuje miejsce" guarantee.
+     * The core of E1.4: once a pending Zapis's frozen deadline has passed, the
+     * scheduler's expiry job (PP.18; it used to be the next read) flips it to
+     * `expired` and releases the Dystans slot the same way a manual cancel does
+     * (E1.3) — the ticket's "wygaśnięcie natychmiast odblokowuje miejsce" guarantee.
      */
-    public function testLazyReadExpiresPastDeadlineRegistrationAndReleasesSlot(): void
+    public function testExpiryJobExpiresPastDeadlineRegistrationAndReleasesSlot(): void
     {
         $event = $this->events->create($this->payload([
             'slug' => $this->slugPrefix . '-expiry-lazy',
@@ -768,18 +769,23 @@ final class RegistrationRepositoryTest extends TestCase
 
         $this->backdatePaymentExpiry($registration['id'], (new \DateTimeImmutable('-1 minute'))->format(DATE_ATOM));
 
+        // A plain read no longer expires anything (PP.18); the job does.
+        self::assertSame('pending', $this->registrations->find($registration['id'])['status']);
+
+        $this->registrations->expireOverdueRegistrations(new \DateTimeImmutable());
+
         $reloaded = $this->registrations->find($registration['id']);
         self::assertSame('expired', $reloaded['status']);
         self::assertSame(0, $this->rawRegisteredCount('d-expiry-lazy-1'));
     }
 
     /**
-     * Running the lazy check more than once (e.g. two read paths hit back to back,
-     * or the same registration already flipped by an earlier read) must not
-     * decrement the counter a second time — expireRegistration()'s re-check under
-     * the row lock (status still 'pending') is what guards this.
+     * Running the expiry more than once (overlapping scheduler runs, or create() on
+     * the same Dystans) must not decrement the counter a second time —
+     * expireRegistration()'s re-check under the row lock (status still 'pending')
+     * is what guards this.
      */
-    public function testExpiryDoesNotDoubleDecrementOnRepeatedLazyChecks(): void
+    public function testExpiryDoesNotDoubleDecrementOnRepeatedExpiryRuns(): void
     {
         $event = $this->events->create($this->payload([
             'slug' => $this->slugPrefix . '-expiry-no-dbl-dec',
@@ -792,12 +798,13 @@ final class RegistrationRepositoryTest extends TestCase
         $registration = $this->registrations->create($this->registrationPayload($event, ''));
         $this->backdatePaymentExpiry($registration['id'], (new \DateTimeImmutable('-1 minute'))->format(DATE_ATOM));
 
-        // First read expires it and decrements once.
-        $this->registrations->find($registration['id']);
+        // First run expires it and decrements once.
+        $this->registrations->expireOverdueRegistrations(new \DateTimeImmutable());
         self::assertSame(0, $this->rawRegisteredCount('d-expiry-double-1'));
         self::assertSame('expired', $this->rawRegistration($registration['id'])['status']);
 
-        // Further reads (list/byEvent/find again) must all be no-ops for this row.
+        // Further runs and reads must all be no-ops for this row.
+        $this->registrations->expireOverdueRegistrations(new \DateTimeImmutable());
         $this->registrations->find($registration['id']);
         $this->registrations->byEvent((string) $event['id']);
         $this->registrations->list(['eventId' => $event['id']]);
@@ -1284,6 +1291,7 @@ final class RegistrationRepositoryTest extends TestCase
         $registration = $this->registrations->create($payload);
         $this->backdatePaymentExpiry($registration['id'], (new \DateTimeImmutable('-1 minute'))->format(DATE_ATOM));
 
+        $this->registrations->expireOverdueRegistrations(new \DateTimeImmutable());
         $expired = $this->registrations->find($registration['id']);
         self::assertSame('expired', $expired['status']);
         self::assertSame(0, $this->rawRegisteredCount('d-retry-1'));

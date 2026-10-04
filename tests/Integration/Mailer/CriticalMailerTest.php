@@ -109,6 +109,28 @@ final class CriticalMailerTest extends TestCase
         self::assertSame($sourceId . ':' . MailCatalog::REGISTRATION_CREATED . ':v1', $row['idempotencyKey']);
     }
 
+    /** PP.18: only the unpaid reminder gains a payment-window discriminator; every other key stays byte-identical. */
+    public function testUnpaidReminderKeyCarriesWindowDiscriminatorOthersUnchanged(): void
+    {
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-w1', 'status' => 'pending'])));
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-w2', 'status' => 'pending'])));
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-w3', 'status' => 'pending'])));
+        $mailer = $this->mailer();
+        $sourceId = $this->prefix . '-reg-window';
+        $window = '2026-10-05T12:00:00+00:00';
+
+        $row = $mailer->sendUnpaidReminder($sourceId, 'evt-1', 'user@example.test', 'Bieg', '80.00', 'https://x.test/participant', '05.10.2026, 14:00', $window);
+        $otherWindow = $mailer->sendUnpaidReminder($sourceId, 'evt-1', 'user@example.test', 'Bieg', '80.00', 'https://x.test/participant', '06.10.2026, 14:00', '2026-10-06T12:00:00+00:00');
+        $other = $mailer->sendRegistrationCreated($sourceId . '-b', 'evt-1', 'user@example.test', 'Bieg', '10km', '50.00');
+
+        self::assertMatchesRegularExpression(
+            '/^' . preg_quote($sourceId . ':' . MailCatalog::UNPAID_REMINDER . ':v1:w', '/') . '[0-9a-f]{12}$/',
+            $row['idempotencyKey']
+        );
+        self::assertNotSame($row['idempotencyKey'], $otherWindow['idempotencyKey']);
+        self::assertSame($sourceId . '-b:' . MailCatalog::REGISTRATION_CREATED . ':v1', $other['idempotencyKey']);
+    }
+
     public function testRepeatedCallWithSameEntityDoesNotCallCentralMailerTwice(): void
     {
         $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-4', 'status' => 'pending'])));

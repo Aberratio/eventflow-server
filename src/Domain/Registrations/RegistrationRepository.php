@@ -78,6 +78,14 @@ final class RegistrationRepository extends Repository
         $this->bzWebhookOutbox = $bzWebhookOutbox;
     }
 
+    /** PP.18: batch sizes and lead/grace times of the scheduler jobs (docs/scheduler.md). */
+    public const EXPIRY_BATCH_LIMIT = 500;
+    private const EXPIRY_PER_DISTANCE_LIMIT = 50;
+    public const GATEWAY_IN_FLIGHT_GRACE_MINUTES = 15;
+    public const REMINDER_BATCH_LIMIT = 200;
+    private const REMINDER_LEAD_GATEWAY_MINUTES = 15;
+    private const REMINDER_LEAD_TRANSFER_HOURS = 24;
+
     /** Provider name for the default gateway constructor argument ($gateway) — Tpay, E1.6. */
     private const PROVIDER_TPAY = 'tpay';
     /** Provider name for the second gateway constructor argument ($payNowGateway) — PayNow, E1.7. */
@@ -172,7 +180,6 @@ SQL;
      */
     public function list(array $filters = []): array
     {
-        $this->lazilyExpireUnpaidRegistrations();
         $where = [];
         $params = [];
         foreach (['eventId' => 'event_id', 'userId' => 'user_id', 'status' => 'status'] as $input => $column) {
@@ -211,7 +218,6 @@ SQL;
     /** @return array<int, array<string, mixed>> */
     public function byEvent(string $eventId): array
     {
-        $this->lazilyExpireUnpaidRegistrations();
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE event_id = :eventId ORDER BY registered_at DESC');
         $stmt->execute(['eventId' => $eventId]);
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
@@ -235,7 +241,6 @@ SQL;
     /** @return array<int, array<string, mixed>> */
     public function publicStartList(string $eventId, bool $showAll): array
     {
-        $this->lazilyExpireUnpaidRegistrations();
         $hasMerchandiseExpr = 'EXISTS (SELECT 1 FROM registration_merchandise_orders mo WHERE mo.registration_id = %s) AS hasMerchandise';
         if ($showAll) {
             // Qualified `registrations.id`: an unqualified `id` here would resolve to
@@ -402,7 +407,6 @@ SQL;
      */
     public function bzParticipantList(string $eventId): array
     {
-        $this->lazilyExpireUnpaidRegistrations();
 
         $stmt = $this->pdo->prepare(
             'SELECT ' . self::COLUMNS . " FROM registrations WHERE event_id = :eventId AND status NOT IN ('removed', 'cancelled', 'expired') ORDER BY registered_at ASC"
@@ -1006,7 +1010,6 @@ SQL;
      */
     public function startListExportRows(string $eventId, string $distanceId): array
     {
-        $this->lazilyExpireUnpaidRegistrations();
 
         $stmt = $this->pdo->prepare(
             'SELECT ' . self::COLUMNS . " FROM registrations WHERE event_id = :eventId AND distance_id = :distanceId AND status != 'removed' ORDER BY registered_at ASC"
@@ -1107,7 +1110,6 @@ SQL;
      */
     public function organizerStats(string $eventId): array
     {
-        $this->lazilyExpireUnpaidRegistrations();
 
         $stats = [
             'byDistance' => $this->statsByDistance($eventId),
@@ -1520,7 +1522,6 @@ SQL;
     /** @return array<int, array<string, mixed>> */
     public function byUser(string $userId): array
     {
-        $this->lazilyExpireUnpaidRegistrations();
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE user_id = :userId ORDER BY registered_at DESC');
         $stmt->execute(['userId' => $userId]);
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
@@ -1528,7 +1529,6 @@ SQL;
 
     public function find(string $id): ?array
     {
-        $this->lazilyExpireUnpaidRegistrations();
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE id = :id');
         $stmt->execute(['id' => $id]);
         $row = $stmt->fetch();
@@ -1544,7 +1544,6 @@ SQL;
      */
     public function listByCompetitor(string $competitorId): array
     {
-        $this->lazilyExpireUnpaidRegistrations();
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE competitor_id = :competitorId ORDER BY registered_at ASC');
         $stmt->execute(['competitorId' => $competitorId]);
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
@@ -1618,11 +1617,12 @@ SQL;
      */
     public function create(array $data, bool $confirmWhenNothingDue = false): array
     {
-        // E1.4: free up any slots an expired Zapis is still silently holding before
+        // E1.4: free up any slots an overdue Zapis of THIS Dystans is still holding before
         // this new one checks capacity/tier thresholds below — this is exactly the
         // "wygaśnięcie natychmiast odblokowuje miejsce w tańszej puli" guarantee the
-        // spec asks for, not just a display-time cleanup.
-        $this->lazilyExpireUnpaidRegistrations();
+        // spec asks for. PP.18: scoped to the Dystans (the full sweep is the scheduler's job),
+        // with the same money guards as the scheduler (paid / in-flight Zapisy are kept).
+        $this->expireOverdueForDistance((string) ($data['distanceId'] ?? ''), new \DateTimeImmutable());
 
         $id = $this->id();
         $this->pdo->beginTransaction();
@@ -2023,84 +2023,205 @@ SQL;
     }
 
     /**
-     * Lazy `pending` -> `expired` transition (E1.4), the same delete/finish-on-read
-     * pattern as AdminRepository::pruneExpiredActivityLogs() (E0.8) and
-     * EventRepository::lazilyFinishPastEvents() (E1.1) — no cron/queue
-     * infrastructure exists in this codebase, so every read path (and create(),
-     * so a new Zapis never has to fight an already-expired one for the same slot)
-     * runs this first. Each expiry is its own small transaction (expireRegistration())
-     * rather than one bulk UPDATE, because — unlike lazilyFinishPastEvents(), which
-     * only ever touches the `events` row it's updating — this must also release the
-     * Dystans slot the same transactional way E1.3's cancel path does, which needs
-     * the Dystans row locked per-registration, not once for the whole batch.
+     * PP.18: the scheduler's expiry batch (registrations.expire_unpaid) — `pending` -> `expired`
+     * for every Zapis whose payment window has passed, releasing the Dystans slot. It replaces the
+     * old "sweep on every read" (E1.4): reads no longer change status. create() still expires the
+     * overdue Zapisy of its own Dystans (expireOverdueForDistance()) so a lapsed one never blocks
+     * the next registrant, and retryPayment() expires its own row.
+     *
+     * The candidate query is only a prefilter (lexical compare on a DATE_ATOM string, so it can be
+     * off by the UTC-offset difference, up to 14 h — hence the slack); the decision is made per
+     * row, under a row lock, by expireRegistration() with an offset-aware comparison against the
+     * injected $now.
+     *
+     * @return array{checked: int, expired: int, deferredInFlight: int, keptPaid: int}
      */
-    private function lazilyExpireUnpaidRegistrations(): void
+    public function expireOverdueRegistrations(\DateTimeImmutable $now, int $limit = self::EXPIRY_BATCH_LIMIT): array
     {
-        $this->sendPaymentReminders();
-
-        $stmt = $this->pdo->prepare(
-            "SELECT id FROM registrations
-             WHERE status = 'pending' AND payment_expires_at IS NOT NULL AND payment_expires_at < :now"
-        );
-        $stmt->execute(['now' => date(DATE_ATOM)]);
-        foreach ($stmt->fetchAll(\PDO::FETCH_COLUMN) ?: [] as $id) {
-            $this->expireRegistration((string) $id);
-        }
+        return $this->expireCandidates($now, $limit, null);
     }
 
-    /**
-     * E1.10 mail #7 ("Przypomnienie o nieopłaconym zapisie", §5.16). Same lazy,
-     * no-cron trigger shape as lazilyExpireUnpaidRegistrations() itself (this
-     * repo has none — see that method's doc comment) — called from the same
-     * spot, once per read, before expiry is checked, so a registration gets one
-     * last chance to be reminded before it lapses. Never sends twice for the
-     * same registration: CriticalMailer's idempotency key is
-     * `{registrationId}:unpaid_reminder:v{version}`, so a repeat call within
-     * the reminder window is a guaranteed outbox no-op (see
-     * CentralMailerOutboxService::enqueue()), not a duplicate mail — no extra
-     * "already reminded" column needed.
-     */
-    private const REMINDER_WINDOW_MINUTES = 15;
-
-    private function sendPaymentReminders(): void
+    /** create(): same as the batch, scoped to one Dystans and capped, run before the capacity check. */
+    private function expireOverdueForDistance(string $distanceId, \DateTimeImmutable $now): void
     {
-        if ($this->mailer === null) {
+        if ($distanceId === '') {
             return;
         }
+        $this->expireCandidates($now, self::EXPIRY_PER_DISTANCE_LIMIT, $distanceId);
+    }
 
-        $now = new \DateTimeImmutable();
-        $windowEnd = $now->modify('+' . self::REMINDER_WINDOW_MINUTES . ' minutes')->format(DATE_ATOM);
+    /** @return array{checked: int, expired: int, deferredInFlight: int, keptPaid: int} */
+    private function expireCandidates(\DateTimeImmutable $now, int $limit, ?string $distanceId): array
+    {
         $stmt = $this->pdo->prepare(
-            "SELECT id, event_id AS eventId, event_name AS eventName, user_email AS userEmail, payment_expires_at AS paymentExpiresAt
-             FROM registrations
-             WHERE status = 'pending' AND payment_expires_at IS NOT NULL
-               AND payment_expires_at >= :now AND payment_expires_at < :windowEnd"
+            "SELECT id FROM registrations
+             WHERE status = 'pending' AND payment_expires_at IS NOT NULL AND payment_expires_at < :upperBound"
+            . ($distanceId !== null ? ' AND distance_id = :distanceId' : '')
+            . ' ORDER BY payment_expires_at ASC LIMIT :limit'
         );
-        $stmt->execute(['now' => $now->format(DATE_ATOM), 'windowEnd' => $windowEnd]);
+        $stmt->bindValue('upperBound', $now->modify('+14 hours')->format(DATE_ATOM));
+        if ($distanceId !== null) {
+            $stmt->bindValue('distanceId', $distanceId);
+        }
+        $stmt->bindValue('limit', $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+        $ids = $stmt->fetchAll(\PDO::FETCH_COLUMN) ?: [];
 
-        foreach ($stmt->fetchAll() as $row) {
-            $this->mailer->sendUnpaidReminder(
-                (string) $row['id'],
-                (string) $row['eventId'],
-                (string) $row['userEmail'],
-                (string) $row['eventName'],
-                number_format($this->totalAmountFor((string) $row['id']), 2, '.', ''),
-                rtrim((string) \ZmierzymyCzas\Support\Env::get('APP_URL', ''), '/') . '/registrations/' . $row['id'] . '/pay',
-                (string) $row['paymentExpiresAt']
-            );
+        $result = ['checked' => count($ids), 'expired' => 0, 'deferredInFlight' => 0, 'keptPaid' => 0];
+        foreach ($ids as $id) {
+            try {
+                $outcome = $this->expireRegistration((string) $id, $now);
+            } catch (\Throwable $e) {
+                // One bad row (e.g. a deadlock, SQLSTATE 40001) must not abort the batch; it is retried next tick.
+                $this->logger->warning('Registration expiry failed', ['registrationId' => (string) $id, 'exception' => $e]);
+                continue;
+            }
+            if ($outcome === 'expired') {
+                $result['expired']++;
+            } elseif ($outcome === 'deferred_in_flight') {
+                $result['deferredInFlight']++;
+            } elseif ($outcome === 'kept_paid') {
+                $result['keptPaid']++;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Offset-aware "has this stored DATE_ATOM moment passed" — never a string compare, so the PHP
+     * default timezone (CLI vs web) can only delay a decision, never make it early. Null or
+     * unparseable is "not past".
+     */
+    private static function isPast(?string $atom, \DateTimeImmutable $now): bool
+    {
+        if ($atom === null || $atom === '') {
+            return false;
+        }
+        try {
+            return new \DateTimeImmutable($atom) <= $now;
+        } catch (\Throwable) {
+            return false;
         }
     }
 
     /**
-     * Expires exactly one Zapis, transactionally: locks the row, re-checks under
-     * the lock that it is still `pending` and still past its deadline (guards both
-     * a concurrent expireRegistration() for the same id — the second one's lock
-     * wait ends with nothing left to do — and this method simply being called
-     * twice for the same id, e.g. from two lazy checks racing on different read
-     * paths), then flips the status and decrements the Dystans counter exactly
-     * once, the same way updateStatus() does for a manual cancel.
+     * PP.18: mail #7 reminders (§5.16), sent by the scheduler (registrations.payment_reminders) —
+     * once per payment window (`registrations.payment_reminder_for` holds the `payment_expires_at`
+     * the reminder was sent for), 24 h before the deadline for a bank transfer and 15 min before for
+     * a gateway payment. Runs after the expiry job, so a lapsed Zapis is never reminded.
+     * The claim happens before the send (at most once); the outbox row is durable even when the
+     * HTTP call fails (PP.19 retries failed outbox rows).
+     *
+     * @return array{checked: int, sent: int}|array{skipped: int}
      */
-    private function expireRegistration(string $id): void
+    public function sendDuePaymentReminders(\DateTimeImmutable $now, int $limit = self::REMINDER_BATCH_LIMIT): array
+    {
+        if ($this->mailer === null || !$this->mailer->isConfigured()) {
+            // Before claiming anything: otherwise rows would be marked reminded while nothing was sent.
+            return ['skipped' => 1];
+        }
+
+        $stmt = $this->pdo->prepare(
+            "SELECT r.id, r.event_id AS eventId, r.event_name AS eventName, r.user_email AS userEmail,
+                    r.payment_expires_at AS paymentExpiresAt, e.payment_config AS paymentConfig
+             FROM registrations r INNER JOIN events e ON e.id = r.event_id
+             WHERE r.status = 'pending' AND r.payment_expires_at IS NOT NULL
+               AND (r.payment_reminder_for IS NULL OR r.payment_reminder_for <> r.payment_expires_at)
+               AND r.payment_expires_at < :upperBound
+             ORDER BY r.payment_expires_at ASC LIMIT :limit"
+        );
+        // Longest lead (24 h) plus the same offset slack as the expiry prefilter.
+        $stmt->bindValue(
+            'upperBound',
+            $now->modify('+' . (self::REMINDER_LEAD_TRANSFER_HOURS + 14) . ' hours')->format(DATE_ATOM)
+        );
+        $stmt->bindValue('limit', $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+        $rows = $stmt->fetchAll();
+
+        $sent = 0;
+        foreach ($rows as $row) {
+            $raw = (string) $row['paymentExpiresAt'];
+            try {
+                $expires = new \DateTimeImmutable($raw);
+            } catch (\Throwable) {
+                continue;
+            }
+            if ($expires <= $now) {
+                continue; // the expiry job handles it
+            }
+            $lead = $this->paymentTypeFromConfig($row['paymentConfig'] ?? null) === 'organizer_bank'
+                ? 'PT' . self::REMINDER_LEAD_TRANSFER_HOURS . 'H'
+                : 'PT' . self::REMINDER_LEAD_GATEWAY_MINUTES . 'M';
+            if ($expires > $now->add(new \DateInterval($lead))) {
+                continue;
+            }
+
+            $claim = $this->pdo->prepare(
+                "UPDATE registrations SET payment_reminder_for = :claimValue
+                 WHERE id = :id AND status = 'pending' AND payment_expires_at = :currentExpiry
+                   AND (payment_reminder_for IS NULL OR payment_reminder_for <> :previousValue)"
+            );
+            $claim->execute([
+                'claimValue' => $raw,
+                'id' => (string) $row['id'],
+                'currentExpiry' => $raw,
+                'previousValue' => $raw,
+            ]);
+            if ($claim->rowCount() !== 1) {
+                continue; // another run or a status change got there first
+            }
+
+            try {
+                $this->mailer->sendUnpaidReminder(
+                    (string) $row['id'],
+                    (string) $row['eventId'],
+                    (string) $row['userEmail'],
+                    (string) $row['eventName'],
+                    number_format($this->totalAmountFor((string) $row['id']), 2, '.', ''),
+                    rtrim((string) \ZmierzymyCzas\Support\Env::get('APP_URL', ''), '/') . '/participant?tab=registrations',
+                    $this->formatPolishDeadline($expires),
+                    $raw
+                );
+                $sent++;
+            } catch (\Throwable $e) {
+                $this->logger->warning('Payment reminder could not be enqueued', ['registrationId' => (string) $row['id'], 'exception' => $e]);
+            }
+        }
+
+        return ['checked' => count($rows), 'sent' => $sent];
+    }
+
+    /** `payment_config.type` of an event row's raw JSON ('' when unset), same decoding as paymentExpiryDeadline(). */
+    private function paymentTypeFromConfig(mixed $raw): string
+    {
+        $paymentConfig = is_string($raw) && trim($raw) !== '' ? (json_decode($raw, true) ?: []) : [];
+
+        return is_array($paymentConfig) ? (string) ($paymentConfig['type'] ?? '') : '';
+    }
+
+    private function formatPolishDeadline(\DateTimeImmutable $moment): string
+    {
+        return $moment->setTimezone(new \DateTimeZone('Europe/Warsaw'))->format('d.m.Y, H:i');
+    }
+
+    /**
+     * Expires exactly one Zapis, transactionally: locks the row and re-checks under the lock that
+     * it is still `pending` and past its deadline (offset-aware, against the injected $now). Money
+     * guards (PP.18): a Zapis whose start fee is already paid, or that has a `paid` /
+     * `amount_mismatch` gateway transaction (money arrived, needs a human) is never expired, and one
+     * with an open `created` gateway transaction gets GATEWAY_IN_FLIGHT_GRACE_MINUTES past the
+     * deadline (the payer may be on the gateway page right now; a late "paid" is handled by
+     * confirmGatewayPayment()). Otherwise flips the status and decrements the Dystans counter
+     * exactly once, the same way updateStatus() does for a manual cancel.
+     *
+     * The gateway read is deliberately NON-locking: the webhook locks transaction -> registration,
+     * and a locking read here (registration -> transaction) would invert that order and can deadlock.
+     *
+     * @return 'expired'|'skipped'|'deferred_in_flight'|'kept_paid'
+     */
+    private function expireRegistration(string $id, \DateTimeImmutable $now): string
     {
         $this->pdo->beginTransaction();
         try {
@@ -2110,15 +2231,46 @@ SQL;
             );
             $stmt->execute(['id' => $id]);
             $current = $stmt->fetch();
-            $now = date(DATE_ATOM);
             if (
                 $current === false
                 || $current['status'] !== 'pending'
-                || $current['paymentExpiresAt'] === null
-                || (string) $current['paymentExpiresAt'] >= $now
+                || !self::isPast($current['paymentExpiresAt'] !== null ? (string) $current['paymentExpiresAt'] : null, $now)
             ) {
                 $this->pdo->rollBack();
-                return;
+
+                return 'skipped';
+            }
+
+            $paid = $this->pdo->prepare(
+                'SELECT 1 FROM registration_payment_details WHERE registration_id = :id AND start_fee_paid = 1'
+            );
+            $paid->execute(['id' => $id]);
+            if ($paid->fetchColumn() !== false) {
+                $this->pdo->rollBack();
+                $this->logger->warning('Pending registration has a paid start fee; not expiring', ['registrationId' => $id]);
+
+                return 'kept_paid';
+            }
+
+            $transactions = $this->pdo->prepare(
+                'SELECT status FROM registration_gateway_transactions WHERE registration_id = :id'
+            );
+            $transactions->execute(['id' => $id]);
+            $statuses = $transactions->fetchAll(\PDO::FETCH_COLUMN) ?: [];
+            if (array_intersect($statuses, ['paid', 'amount_mismatch']) !== []) {
+                $this->pdo->rollBack();
+                $this->logger->warning('Pending registration has a paid gateway transaction; not expiring', ['registrationId' => $id]);
+
+                return 'kept_paid';
+            }
+            if (in_array('created', $statuses, true)) {
+                $graceEnd = (new \DateTimeImmutable((string) $current['paymentExpiresAt']))
+                    ->modify('+' . self::GATEWAY_IN_FLIGHT_GRACE_MINUTES . ' minutes');
+                if ($graceEnd > $now) {
+                    $this->pdo->rollBack();
+
+                    return 'deferred_in_flight';
+                }
             }
 
             $updated = $this->pdo->prepare("UPDATE registrations SET status = 'expired' WHERE id = :id AND status = 'pending'");
@@ -2128,8 +2280,12 @@ SQL;
             }
 
             $this->pdo->commit();
+
+            return 'expired';
         } catch (\Throwable $e) {
-            $this->pdo->rollBack();
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
             throw $e;
         }
     }
@@ -2614,7 +2770,8 @@ SQL;
      */
     public function retryPayment(string $id): ?array
     {
-        $this->lazilyExpireUnpaidRegistrations();
+        // PP.18: a lapsed-but-not-yet-swept Zapis can be retried right away (single-row expiry).
+        $this->expireRegistration($id, new \DateTimeImmutable());
         $this->pdo->beginTransaction();
         try {
             $registration = $this->lockRegistration($id);
@@ -2935,7 +3092,7 @@ SQL;
      * call is the one that actually flipped the state to paid/failed). A repeated
      * mismatch is a no-op and is not logged again.
      *
-     * @return array{applied: bool, registrationId: ?string, amountMismatch: bool}
+     * @return array{applied: bool, registrationId: ?string, amountMismatch: bool, paidAfterExpiry?: bool}
      */
     public function applyGatewayNotification(string $transactionId, bool $paid, ?int $notifiedAmountGrosze): array
     {
@@ -2997,12 +3154,44 @@ SQL;
             }
 
             $this->closeGatewayTransaction($transactionId, 'paid');
-            $this->markGatewayPaymentPaid($registrationId);
+            $outcome = $this->confirmGatewayPayment($registrationId);
 
             $this->pdo->commit();
         } catch (\Throwable $e) {
             $this->pdo->rollBack();
             throw $e;
+        }
+
+        // PP.18: money arrived (the transaction row above is the truth about the money) but the Zapis
+        // could not be confirmed. No "payment confirmed" mail — it would promise a place the payer
+        // does not have. PII-free ERROR for an admin to resolve (refund or manual admission).
+        if ($outcome === 'paid_after_expiry' || $outcome === 'not_pending') {
+            $this->logger->error(
+                $outcome === 'paid_after_expiry'
+                    ? 'Gateway payment arrived after expiry and the distance is full; registration left expired'
+                    : 'Gateway payment arrived for a registration that is not awaiting payment',
+                [
+                    'transactionId' => $transactionId,
+                    'registrationId' => $registrationId,
+                    'gateway' => (string) $transaction['gateway'],
+                    'outcome' => $outcome,
+                    'alert' => 'payments.paid_after_expiry',
+                ]
+            );
+
+            return [
+                'applied' => true,
+                'registrationId' => $registrationId,
+                'amountMismatch' => false,
+                'paidAfterExpiry' => $outcome === 'paid_after_expiry',
+            ];
+        }
+        if ($outcome === 'revived') {
+            $this->logger->warning('Gateway payment arrived after expiry; registration revived', [
+                'transactionId' => $transactionId,
+                'registrationId' => $registrationId,
+                'gateway' => (string) $transaction['gateway'],
+            ]);
         }
 
         // E1.10 mail #5 ("Potwierdzenie płatności / bilet") — sent only after the
@@ -3014,7 +3203,44 @@ SQL;
         // for an amount mismatch.
         $this->sendPaymentConfirmedMail($registrationId);
 
-        return ['applied' => true, 'registrationId' => $registrationId, 'amountMismatch' => false];
+        return ['applied' => true, 'registrationId' => $registrationId, 'amountMismatch' => false, 'paidAfterExpiry' => false];
+    }
+
+    /**
+     * PP.18: the Zapis side of a cleared gateway payment, inside applyGatewayNotification()'s
+     * transaction. A `pending` Zapis is confirmed as before. An `expired` one (the scheduler
+     * lapsed it before the payer finished) is revived to `pending` and confirmed when its Dystans
+     * still has a free slot; with no free slot it stays `expired` (never admitted over the limit
+     * automatically). Any other status is left alone. Lock order stays transaction -> registration
+     * -> Dystans, the same as expireRegistration()/retryPayment().
+     *
+     * @return 'confirmed'|'revived'|'paid_after_expiry'|'not_pending'
+     */
+    private function confirmGatewayPayment(string $registrationId): string
+    {
+        $registration = $this->lockRegistration($registrationId);
+        if ($registration === null) {
+            return 'not_pending';
+        }
+
+        $revived = false;
+        if ($registration['status'] === 'expired') {
+            $distanceRow = $this->lockDistanceForRegistration((string) $registration['eventId'], (string) $registration['distanceId']);
+            $limit = $distanceRow['participantLimit'] !== null ? (int) $distanceRow['participantLimit'] : 0;
+            if ($limit > 0 && (int) $distanceRow['registeredCount'] >= $limit) {
+                return 'paid_after_expiry';
+            }
+            $this->pdo->prepare("UPDATE registrations SET status = 'pending' WHERE id = :id AND status = 'expired'")
+                ->execute(['id' => $registrationId]);
+            $this->incrementRegisteredCount((string) $distanceRow['distanceId']);
+            $revived = true;
+        } elseif ($registration['status'] !== 'pending') {
+            return 'not_pending';
+        }
+
+        $this->markGatewayPaymentPaid($registrationId);
+
+        return $revived ? 'revived' : 'confirmed';
     }
 
     /** Moves a still-open (`created` or `amount_mismatch`) gateway transaction row to `paid` or `failed`. */

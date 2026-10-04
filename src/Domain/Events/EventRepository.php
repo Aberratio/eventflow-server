@@ -110,9 +110,11 @@ SQL;
 
     /**
      * @param array<string, mixed> $filters
+     * @param array{userId: string, isOrganizer: bool}|null $privateViewer PP.55: set by the route only;
+     *        null = no private Events unless `includePrivate` (staff) is set.
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, pageSize: int}
      */
-    public function list(array $filters = []): array
+    public function list(array $filters = [], ?array $privateViewer = null): array
     {
         $this->lazilyFinishPastEvents();
         $where = [];
@@ -134,7 +136,20 @@ SQL;
             $params['status'] = $this->normalizeStatus((string) $filters['status']);
         }
         if (empty($filters['includePrivate'])) {
-            $where[] = 'is_private = 0';
+            if ($privateViewer !== null && $privateViewer['userId'] !== '') {
+                if ($privateViewer['isOrganizer']) {
+                    $where[] = '(is_private = 0 OR organizer_id = :privateViewerOrganizerId)';
+                    $params['privateViewerOrganizerId'] = $privateViewer['userId'];
+                } else {
+                    $zapisExists = 'EXISTS (SELECT 1 FROM registrations pv_r WHERE pv_r.event_id = events.id'
+                        . ' AND (pv_r.user_id = :privateViewerUserId OR pv_r.registered_by_id = :privateViewerDelegateId))';
+                    $where[] = "(is_private = 0 OR {$zapisExists})";
+                    $params['privateViewerUserId'] = $privateViewer['userId'];
+                    $params['privateViewerDelegateId'] = $privateViewer['userId'];
+                }
+            } else {
+                $where[] = 'is_private = 0';
+            }
         }
         if (array_key_exists('isExternal', $filters) && $filters['isExternal'] !== '') {
             $where[] = 'is_external = :isExternal';
@@ -207,7 +222,7 @@ SQL;
     public function featured(): array
     {
         $this->lazilyFinishPastEvents();
-        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE featured = 1 AND publication_status IN ('published', 'finished') ORDER BY date ASC");
+        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE featured = 1 AND is_private = 0 AND deleted_at IS NULL AND publication_status IN ('published', 'finished') ORDER BY date ASC");
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
 
@@ -215,7 +230,7 @@ SQL;
     public function live(): array
     {
         $this->lazilyFinishPastEvents();
-        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE is_live = 1 AND publication_status IN ('published', 'finished') ORDER BY date ASC");
+        $stmt = $this->pdo->query("SELECT " . self::EVENT_COLUMNS . " FROM events WHERE is_live = 1 AND is_private = 0 AND deleted_at IS NULL AND publication_status IN ('published', 'finished') ORDER BY date ASC");
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
 

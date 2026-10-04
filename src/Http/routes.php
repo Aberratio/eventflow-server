@@ -816,23 +816,35 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $page['data']);
         })->add(new AuthMiddleware($jwt, $staffRoles));
 
-        $api->get('/events', function (Request $request, Response $response) use ($events, $query, $optionalAuth, $isStaffRole, $stripBzTokenFromList) {
+        $api->get('/events', function (Request $request, Response $response) use ($events, $query, $optionalAuth, $isStaffRole, $canManageEvent, $stripBzToken) {
             $filters = $query($request);
             $auth = $optionalAuth($request);
             $role = (string) ($auth['role'] ?? '');
-            if (!empty($filters['includeUnpublished']) && $isStaffRole($role)) {
-                $filters['includeUnpublished'] = true;
-                $filters['includePrivate'] = true;
-                $filters['includeDeleted'] = $role === 'superadmin' && !empty($filters['includeDeleted']);
-            } else {
-                unset($filters['includeUnpublished']);
-                unset($filters['includeDeleted']);
+            $userId = (string) ($auth['sub'] ?? '');
+            // PP.55: the three visibility switches are never forwarded verbatim from the query string.
+            $wantsUnpublished = !empty($filters['includeUnpublished']);
+            $wantsPrivate = !empty($filters['includePrivate']);
+            $wantsDeleted = !empty($filters['includeDeleted']);
+            unset($filters['includeUnpublished'], $filters['includePrivate'], $filters['includeDeleted']);
+            $privateViewer = null;
+            if ($isStaffRole($role)) {
+                if ($wantsUnpublished) {
+                    $filters['includeUnpublished'] = true;
+                    $filters['includePrivate'] = true;
+                    $filters['includeDeleted'] = $role === 'superadmin' && $wantsDeleted;
+                } elseif ($wantsPrivate) {
+                    $filters['includePrivate'] = true;
+                }
+            } elseif ($wantsPrivate && $userId !== '') {
+                // Non-staff: only private Events the caller owns (organizer) or holds a Zapis on.
+                $privateViewer = ['userId' => $userId, 'isOrganizer' => $role === 'organizer'];
             }
-            $page = $events->list($filters);
-            // E3.2: staff dashboards may legitimately browse this list (includeUnpublished
-            // above); everyone else hitting this generic listing endpoint is a public/guest
-            // reader, so the BZ token is stripped unless the requester is staff.
-            $data = $isStaffRole($role) ? $page['data'] : $stripBzTokenFromList($page['data']);
+            $page = $events->list($filters, $privateViewer);
+            // Staff list rows stay raw (staff dashboards); everyone else gets the public shape,
+            // except rows they manage (an organizer's own Events).
+            $data = $isStaffRole($role)
+                ? $page['data']
+                : array_map(static fn (array $event): array => $canManageEvent($event, $auth) ? $event : $stripBzToken($event), $page['data']);
             return JsonResponder::paginated($response, $data, $page['total'], $page['page'], $page['pageSize']);
         });
         $api->get('/events/featured', fn (Request $request, Response $response) => JsonResponder::ok($response, $stripBzTokenFromList($events->featured())));

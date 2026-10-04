@@ -103,12 +103,14 @@ final class RbacGrid
     }
 
     /**
-     * Visibility probes - hold today and after PP.55.
+     * Visibility probes (PP.55 closed the PP.4 tripwires T1-T3: V5-V8).
      *
-     * @return array<string, array{path: string, actors: array<string, int|string>}>
+     * @return array<string, array{kind: string, path: string, actors: array<string, int|string>}>
      */
     public static function visibilityProbes(): array
     {
+        $allList = array_fill_keys(self::ACTORS, 'list');
+
         return [
             'V1 list hides draft and private' => ['kind' => 'list', 'path' => '/api/v1/events?search={prefix}',
                 'actors' => ['anon' => 'list', 'participant' => 'list', 'foreignOrganizer' => 'list']],
@@ -120,21 +122,12 @@ final class RbacGrid
                 'organizer' => 200, 'moderator' => 200, 'admin' => 200]],
             'V4 private event by id with code' => ['kind' => 'status', 'path' => '/api/v1/events/{eventPrivate}?accessCode=rbac-code', 'actors' => [
                 'anon' => 200, 'participant' => 200, 'foreignOrganizer' => 404]],
-        ];
-    }
-
-    /**
-     * Tripwires: the leak is STILL present today. When the closing ticket lands the
-     * tripwire fails and tells its implementer to move the probe to visibilityProbes().
-     *
-     * @return array<string, array{path: string, ticket: string}>
-     */
-    public static function knownGaps(): array
-    {
-        return [
-            'T1 includePrivate lists private events' => ['path' => '/api/v1/events?includePrivate=1&search={prefix}', 'ticket' => 'PP.55'],
-            'T2 featured lists private events' => ['path' => '/api/v1/events/featured', 'ticket' => 'PP.55 (H8)'],
-            'T3 live lists private events' => ['path' => '/api/v1/events/live', 'ticket' => 'PP.55 (H8)'],
+            'V5 includePrivate does not widen the list for the non-entitled' => ['kind' => 'list', 'path' => '/api/v1/events?includePrivate=1&search={prefix}',
+                'actors' => ['anon' => 'list', 'participant' => 'list', 'owner' => 'list', 'foreignOrganizer' => 'list']],
+            'V6 includePrivate lists private for the owner and staff' => ['kind' => 'list+private', 'path' => '/api/v1/events?includePrivate=1&search={prefix}',
+                'actors' => ['organizer' => 'list+private', 'moderator' => 'list+private', 'admin' => 'list+private', 'superadmin' => 'list+private']],
+            'V7 featured hides private and deleted (H8)' => ['kind' => 'list', 'path' => '/api/v1/events/featured', 'actors' => $allList],
+            'V8 live hides private and deleted (H8)' => ['kind' => 'list', 'path' => '/api/v1/events/live', 'actors' => $allList],
         ];
     }
 
@@ -167,9 +160,9 @@ final class RbacGrid
         'PATCH /api/v1/users/{id}/status' => ['policy' => self::STAFF, 'params' => ['id' => 'owner'], 'basis' => 'macierz §5.11: blokowanie — Moderator ✔ (plan line 802)'],
         'GET /api/v1/participants' => ['policy' => self::STAFF, 'basis' => 'PP.1 (plan line 828)'],
         'GET /api/v1/organizers' => ['policy' => self::STAFF, 'basis' => 'PP.1 (plan line 832)'],
-        'GET /api/v1/events' => ['policy' => self::PUBLIC, 'override' => self::allActors(self::OK), 'basis' => 'public calendar (visibility: probe V1, tripwire T1) (plan line 837)'],
-        'GET /api/v1/events/featured' => ['policy' => self::PUBLIC, 'override' => self::allActors(self::OK), 'basis' => 'tripwire T2 (plan line 856)'],
-        'GET /api/v1/events/live' => ['policy' => self::PUBLIC, 'override' => self::allActors(self::OK), 'basis' => 'tripwire T3 (plan line 857)'],
+        'GET /api/v1/events' => ['policy' => self::PUBLIC, 'override' => self::allActors(self::OK), 'basis' => 'public calendar (visibility: probes V1, V5, V6) (plan line 837)'],
+        'GET /api/v1/events/featured' => ['policy' => self::PUBLIC, 'override' => self::allActors(self::OK), 'basis' => 'public feed (probe V7, PP.55 H8) (plan line 856)'],
+        'GET /api/v1/events/live' => ['policy' => self::PUBLIC, 'override' => self::allActors(self::OK), 'basis' => 'public feed (probe V8, PP.55 H8) (plan line 857)'],
         'GET /api/v1/events/slug/{slug}' => ['policy' => self::PUBLIC, 'params' => ['slug' => 'eventSlug'], 'override' => self::allActors(self::OK), 'basis' => 'published public Event (plan line 858)'],
         'GET /api/v1/events/{id}' => ['policy' => self::PUBLIC, 'params' => ['id' => 'event'], 'override' => self::allActors(self::OK), 'basis' => 'idem (draft/private: probes V2–V4) (plan line 867)'],
         'GET /api/v1/events/{id}/embed/public' => ['policy' => self::PUBLIC, 'params' => ['id' => 'event'], 'basis' => 'E8.11 (NEW-C note) (plan line 884)'],

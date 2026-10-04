@@ -70,7 +70,12 @@ final class RbacFixtures
         $event = $events->create($fx->eventPayload('event', $organizerId, 'active', false));
         $draft = $events->create($fx->eventPayload('draft', $organizerId, 'draft', false));
         $private = $events->create($fx->eventPayload('private', $organizerId, 'active', true));
-        $pdo->prepare('UPDATE events SET featured = 1, is_live = 1 WHERE id = :id')->execute(['id' => $private['id']]);
+        $deleted = $events->create($fx->eventPayload('deleted', $organizerId, 'active', false));
+        $events->delete((string) $deleted['id']); // the real soft-delete path
+        foreach ([$event['id'], $private['id'], $deleted['id']] as $featuredId) {
+            $pdo->prepare('UPDATE events SET featured = 1, is_live = 1 WHERE id = :id')->execute(['id' => $featuredId]);
+        }
+        $fx->values['eventDeleted'] = (string) $deleted['id'];
 
         $fx->values['event'] = (string) $event['id'];
         $fx->values['eventSlug'] = (string) $event['slug'];

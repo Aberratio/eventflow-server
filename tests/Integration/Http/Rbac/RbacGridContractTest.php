@@ -181,6 +181,14 @@ final class RbacGridContractTest extends HttpTestCase
                 self::assertContains(self::$fx->values['event'], $ids, "{$name} / {$actor}");
                 self::assertNotContains(self::$fx->values['eventDraft'], $ids, "{$name} / {$actor}");
                 self::assertNotContains(self::$fx->values['eventPrivate'], $ids, "{$name} / {$actor}");
+                self::assertNotContains(self::$fx->values['eventDeleted'], $ids, "{$name} / {$actor}");
+                continue;
+            }
+            if ($probe['kind'] === 'list+private') {
+                $ids = $this->listedIds($probe['path'], $identity);
+                self::assertContains(self::$fx->values['event'], $ids, "{$name} / {$actor}");
+                self::assertContains(self::$fx->values['eventPrivate'], $ids, "{$name} / {$actor}");
+                self::assertNotContains(self::$fx->values['eventDeleted'], $ids, "{$name} / {$actor}");
                 continue;
             }
             $path = (string) preg_replace_callback('/\{(\w+)\}/', static fn (array $m): string => self::$fx->values[$m[1]], $probe['path']);
@@ -190,28 +198,7 @@ final class RbacGridContractTest extends HttpTestCase
         }
     }
 
-    /** @return array<string, array{string}> */
-    public static function knownGaps(): array
-    {
-        return array_map(static fn (string $k): array => [$k], array_combine(array_keys(RbacGrid::knownGaps()), array_keys(RbacGrid::knownGaps())));
-    }
-
-    #[DataProvider('knownGaps')]
-    public function testKnownGapsAreStillOpen(string $name): void
-    {
-        $gap = RbacGrid::knownGaps()[$name];
-        $ids = $this->listedIds($gap['path'], null);
-
-        self::assertContains(
-            self::$fx->values['eventPrivate'],
-            $ids,
-            sprintf(
-                '%s no longer leaks - %s is fixed: move this probe from RbacGrid::knownGaps() to RbacGrid::visibilityProbes() with the expectation inverted.',
-                $name,
-                $gap['ticket']
-            )
-        );
-    }
+    // PP.4 tripwires T1-T3 closed by PP.55; re-add a knownGaps() provider here for the next known-open leak.
 
     public function testDevSeedEndpointIsClosedOutsideLocal(): void
     {

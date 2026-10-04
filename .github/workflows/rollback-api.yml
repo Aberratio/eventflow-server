@@ -1,0 +1,108 @@
+name: Roll back API code
+
+# Manual only. Restores a code snapshot taken by Deploy API. Runs no migrations
+# and no tests, and never touches the database. See docs/RUNBOOK.md.
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: "Which environment should be rolled back?"
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      snapshot:
+        description: "latest, list, or a code-YYYYmmdd-HHMMSS-<id>.tar.gz name from 'list'."
+        required: true
+        default: list
+        type: string
+      confirm_production:
+        description: "Type ROLLBACK_PRODUCTION to confirm a production rollback."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-${{ inputs.deploy_target }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Guard rollback inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check rollback inputs
+        env:
+          GUARD_OPERATION: rollback
+          GUARD_EVENT: ${{ github.event_name }}
+          GUARD_TARGET: ${{ inputs.deploy_target }}
+          GUARD_CONFIRM: ${{ inputs.confirm_production }}
+          GUARD_REF: ${{ github.ref }}
+          GUARD_PRODUCTION_REF: refs/heads/master
+          GUARD_SNAPSHOT: ${{ inputs.snapshot }}
+        run: bash scripts/ci/deploy-guard.sh
+
+  rollback:
+    name: Roll back API ${{ inputs.deploy_target }}
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.deploy_target }}
+    env:
+      TARGET_ENV: ${{ inputs.deploy_target }}
+      SNAPSHOT: ${{ inputs.snapshot }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check deploy configuration
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          BACKEND_REMOTE_DIR: ${{ secrets.BACKEND_REMOTE_DIR }}
+          BACKEND_ALLOWED_ROOT: ${{ secrets.BACKEND_ALLOWED_ROOT }}
+          BACKEND_BACKUP_DIR: ${{ secrets.BACKEND_BACKUP_DIR }}
+          API_URL: ${{ secrets.API_URL }}
+        run: bash scripts/deploy/require-env.sh SSH_HOST SSH_PORT SSH_USER SSH_PRIVATE_KEY SSH_KNOWN_HOSTS BACKEND_REMOTE_DIR BACKEND_ALLOWED_ROOT BACKEND_BACKUP_DIR API_URL
+
+      - name: Configure SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: bash scripts/deploy/configure-ssh.sh
+
+      - name: Roll back code
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          BACKEND_REMOTE_DIR: ${{ secrets.BACKEND_REMOTE_DIR }}
+          BACKEND_ALLOWED_ROOT: ${{ secrets.BACKEND_ALLOWED_ROOT }}
+          BACKEND_BACKUP_DIR: ${{ secrets.BACKEND_BACKUP_DIR }}
+        run: |
+          set -Eeuo pipefail
+          printf -v REMOTE_ENV 'BACKEND_REMOTE_DIR=%q BACKEND_ALLOWED_ROOT=%q BACKEND_BACKUP_DIR=%q TARGET_ENV=%q' "$BACKEND_REMOTE_DIR" "$BACKEND_ALLOWED_ROOT" "$BACKEND_BACKUP_DIR" "$TARGET_ENV"
+          printf -v SNAP_ARG '%q' "$SNAPSHOT"
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "$REMOTE_ENV bash -s -- rollback $SNAP_ARG" < scripts/deploy/api-remote.sh
+
+      - name: Health check
+        if: env.SNAPSHOT != 'list'
+        env:
+          API_URL: ${{ secrets.API_URL }}
+        run: |
+          set -Eeuo pipefail
+          curl --fail --show-error --location "${API_URL%/}/health"

@@ -63,6 +63,17 @@ assert_not_contains() {
 
 assert_file_mode() {
   local mode="$1" file="$2" actual
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+      # NTFS does not honour chmod; Linux CI is the authority for file modes.
+      if [ -e "$file" ]; then
+        pass "mode $mode: $(basename "$file") (exists; modes are not enforced on Windows, verified in Linux CI)"
+      else
+        fail "mode $mode: missing $file"
+      fi
+      return
+      ;;
+  esac
   actual="$(stat -c '%a' "$file" 2>/dev/null || echo missing)"
   check_eq "mode $mode: $(basename "$file")" "$mode" "$actual"
 }

@@ -38,6 +38,7 @@
             "php -l public/index.php",
             "php -l bin/migrate.php",
             "php -l bin/seed.php",
+            "php -l bin/scheduler.php",
             "php -l bin/prune-demo.php",
             "php -l src/Database/Migrator.php",
             "php -l src/Database/MigrationGuard.php",

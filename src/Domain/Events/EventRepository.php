@@ -571,15 +571,20 @@ SQL;
     }
 
     /**
-     * Lazy Published -> Finished transition (E1.1). Mirrors
-     * AdminRepository::pruneExpiredActivityLogs()'s delete-on-read pattern from E0.8: no
-     * cron/queue infrastructure exists in this codebase to hook a scheduled job into
-     * (confirmed there, still true here), so every read path below runs this bulk UPDATE
-     * first — a published event whose day has passed is corrected before anyone reads it.
+     * Published -> Finished for events whose last day has passed (E1.1). PP.18: the scheduler
+     * (events.finish_past) is the primary driver; the read paths below still run it as a
+     * harmless fallback (one indexed, idempotent UPDATE, no money, no mail) so a missed cron
+     * tick never serves a stale "published" past event.
      */
     private function lazilyFinishPastEvents(): void
     {
-        $this->pdo->exec(
+        $this->finishPastEvents();
+    }
+
+    /** PP.18: shared by the read-path fallback and the scheduler job. Returns the number of events finished. */
+    public function finishPastEvents(): int
+    {
+        return (int) $this->pdo->exec(
             "UPDATE events SET publication_status = 'finished'
              WHERE publication_status = 'published'
                AND COALESCE(NULLIF(end_date, ''), date) < CURDATE()"

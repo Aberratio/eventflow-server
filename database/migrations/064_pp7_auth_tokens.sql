@@ -42,3 +42,18 @@ CREATE TABLE IF NOT EXISTS user_action_tokens (
   UNIQUE KEY uq_uat_token_hash (token_hash),
   INDEX idx_uat_user_purpose (user_id, purpose, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Blok 7c: `users.email_verified_at` (NULL = niezweryfikowany; w API tylko jako
+-- bool `emailVerified`, nigdy znacznik czasu). Nic nie jest uzależnione od
+-- weryfikacji — to informacja dla użytkownika.
+--
+-- Backfill: konta założone przed wdrożeniem liczą się jako zweryfikowane
+-- (inaczej każdy obecny użytkownik zobaczyłby niewyjaśnioną plakietkę
+-- "niezweryfikowany"; ich maile rejestracyjne i tak zawierały martwy link).
+-- Literał daty (dzień po commicie 7c) sprawia, że ponowne uruchomienie pliku
+-- jest idempotentne: konta założone później nigdy nie są auto-weryfikowane.
+-- @guard: column-missing users.email_verified_at
+ALTER TABLE users ADD COLUMN email_verified_at DATETIME NULL AFTER email;
+
+UPDATE users SET email_verified_at = created_at
+WHERE email_verified_at IS NULL AND created_at < '2026-10-05';

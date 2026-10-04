@@ -8,6 +8,7 @@ use PDO;
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Database\Migrator;
+use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
@@ -72,6 +73,35 @@ final class AuthTokensMigrationTest extends TestCase
         self::assertCount(1, $index);
         self::assertSame(0, (int) $index[0]['NON_UNIQUE']);
         self::assertSame('token_hash', $index[0]['COLUMN_NAME']);
+    }
+
+    public function testEmailVerifiedAtColumnExistsAndBackfillOnlyTouchesPreCutoffAccounts(): void
+    {
+        $column = $this->pdo->query(
+            "SELECT IS_NULLABLE FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'email_verified_at'"
+        )->fetchAll(PDO::FETCH_COLUMN);
+        self::assertSame(['YES'], $column);
+
+        $users = new UserRepository($this->pdo);
+        $prefix = 'mig-ev-' . bin2hex(random_bytes(4));
+        $old = $users->create(['name' => 'Old', 'email' => $prefix . '-old@example.test', 'password' => 'demo1234']);
+        $new = $users->create(['name' => 'New', 'email' => $prefix . '-new@example.test', 'password' => 'demo1234']);
+        try {
+            $set = $this->pdo->prepare('UPDATE users SET created_at = :createdAt, email_verified_at = NULL WHERE id = :id');
+            $set->execute(['createdAt' => '2020-01-01 10:00:00', 'id' => $old['id']]);
+            // The cutoff is a literal date, so "created after the deploy" is simulated with a later date.
+            $set->execute(['createdAt' => '2037-01-01 10:00:00', 'id' => $new['id']]);
+
+            $file = Migrator::migrationsDir() . '/' . self::FILE;
+            Migrator::applyFile($this->pdo, $file);
+            Migrator::applyFile($this->pdo, $file);
+
+            self::assertTrue($users->find((string) $old['id'])['emailVerified']);
+            self::assertFalse($users->find((string) $new['id'])['emailVerified']);
+        } finally {
+            $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')->execute(['email' => $prefix . '-%@example.test']);
+        }
     }
 
     public function testMigrationFileHasNoIfNotExistsInAlter(): void

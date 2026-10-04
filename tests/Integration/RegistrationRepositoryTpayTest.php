@@ -9,9 +9,17 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Domain\Events\EventRepository;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerClient;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxRepository;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
+use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
+use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
+use ZmierzymyCzas\Domain\Mailer\Http\HttpResponse;
 use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\Env;
+use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
 /**
  * E1.6: RegistrationRepository wired against a fake gateway (implements the same
@@ -296,12 +304,137 @@ final class RegistrationRepositoryTpayTest extends TestCase
         self::assertStringNotContainsString('PHPUnit User', $logged);
     }
 
-    /** @return array<string, mixed> */
-    private function registrationWithTransaction(string $transactionId): array
+    public function testPaidNotificationAfterExpiryRevivesWhenCapacityAllows(): void
     {
+        [$logs, $registrations] = $this->mailingRepository();
+        $registration = $this->registrationWithTransaction('TX-revive', $registrations);
+        $this->backdateExpiry($registration['id']);
+        $registrations->expireOverdueRegistrations(new \DateTimeImmutable());
+        self::assertSame('expired', $this->rawStatus($registration['id']));
+        self::assertSame(0, $this->rawRegisteredCount((string) $registration['distanceId']));
+
+        $result = $registrations->applyGatewayNotification('TX-revive', true, 8000);
+
+        self::assertTrue($result['applied']);
+        self::assertFalse($result['paidAfterExpiry']);
+        self::assertSame('confirmed', $this->rawStatus($registration['id']));
+        self::assertSame(1, $this->rawRegisteredCount((string) $registration['distanceId']));
+        self::assertSame('paid', $this->rawGatewayTransaction('TX-revive')['status']);
+        self::assertTrue($registrations->find($registration['id'])['paymentDetails']['startFeePaid']);
+        self::assertSame(1, $this->outboxRows($registration['id'], 'payment_confirmed'));
+        self::assertTrue($logs->hasWarningThatContains('registration revived'));
+    }
+
+    public function testPaidNotificationAfterExpiryWithFullDistanceLeavesExpiredAlertsAndSendsNoMail(): void
+    {
+        [$logs, $registrations] = $this->mailingRepository();
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-full',
+            'distances' => [['id' => $this->slugPrefix . '-full-10k', 'limit' => 1]],
+        ]));
+        $this->gateway->nextSession = ['transactionId' => 'TX-full', 'redirectUrl' => 'https://pay.example.test/full'];
+        $first = $registrations->create($this->registrationPayload($event, 'phpunit-participant'));
+        $this->backdateExpiry($first['id']);
+        $registrations->expireOverdueRegistrations(new \DateTimeImmutable());
+        self::assertSame('expired', $this->rawStatus($first['id']));
+
+        // Someone else takes the freed slot (the Dystans limit is 1).
+        $this->gateway->nextSession = ['transactionId' => 'TX-full-other', 'redirectUrl' => 'https://pay.example.test/other'];
+        $second = $registrations->create($this->registrationPayload($event, 'phpunit-other'));
+        self::assertSame('pending', $second['status']);
+
+        $result = $registrations->applyGatewayNotification('TX-full', true, 8000);
+
+        self::assertTrue($result['applied']);
+        self::assertTrue($result['paidAfterExpiry']);
+        self::assertSame('paid', $this->rawGatewayTransaction('TX-full')['status'], 'the money did arrive');
+        self::assertSame('expired', $this->rawStatus($first['id']));
+        self::assertSame(1, $this->rawRegisteredCount((string) $first['distanceId']), 'no over-capacity admission');
+        self::assertSame(0, $this->outboxRows($first['id'], 'payment_confirmed'));
+
+        $alerts = array_values(array_filter(
+            $logs->getRecords(),
+            static fn ($r): bool => ($r->context['alert'] ?? null) === 'payments.paid_after_expiry'
+        ));
+        self::assertCount(1, $alerts);
+        self::assertSame(\Monolog\Level::Error, $alerts[0]->level);
+        $encoded = (string) json_encode($alerts[0]->context);
+        self::assertStringNotContainsString('@', $encoded, 'no e-mail address in the alert record');
+        self::assertStringNotContainsString('PHPUnit User', $encoded);
+    }
+
+    public function testPaidNotificationForACancelledRegistrationSendsNoPaymentConfirmedMail(): void
+    {
+        [$logs, $registrations] = $this->mailingRepository();
+        $registration = $this->registrationWithTransaction('TX-cancelled', $registrations);
+        $this->pdo->prepare("UPDATE registrations SET status = 'cancelled' WHERE id = :id")->execute(['id' => $registration['id']]);
+
+        $registrations->applyGatewayNotification('TX-cancelled', true, 8000);
+
+        self::assertSame('cancelled', $this->rawStatus($registration['id']));
+        self::assertSame(0, $this->outboxRows($registration['id'], 'payment_confirmed'));
+        self::assertTrue($logs->hasErrorThatContains('not awaiting payment'));
+    }
+
+    /** @return array{0: \Monolog\Handler\TestHandler, 1: RegistrationRepository} */
+    private function mailingRepository(): array
+    {
+        $logs = new \Monolog\Handler\TestHandler();
+        $http = new FakeCentralMailerHttpClient();
+        for ($i = 0; $i < 20; $i++) {
+            $http->queueResponse(new HttpResponse(201, (string) json_encode(['id' => 'cm-' . $i, 'status' => 'pending'])));
+        }
+        $config = new CentralMailerConfig(apiKey: 'k', baseUrl: 'https://mailer.example.test');
+        $outbox = new CentralMailerOutboxService(new CentralMailerClient($http, $config), new CentralMailerOutboxRepository($this->pdo));
+        $mailer = new CriticalMailer($config, $outbox, new MailTemplateRepository($this->pdo));
+
+        return [$logs, new RegistrationRepository(
+            $this->pdo,
+            $this->gateway,
+            mailer: $mailer,
+            logger: new \Monolog\Logger('test', [$logs])
+        )];
+    }
+
+    private function backdateExpiry(string $registrationId): void
+    {
+        $this->pdo->prepare('UPDATE registrations SET payment_expires_at = :when WHERE id = :id')
+            ->execute(['when' => (new \DateTimeImmutable('-2 hours'))->format(DATE_ATOM), 'id' => $registrationId]);
+    }
+
+    private function rawStatus(string $registrationId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT status FROM registrations WHERE id = :id');
+        $stmt->execute(['id' => $registrationId]);
+
+        return (string) $stmt->fetchColumn();
+    }
+
+    private function rawRegisteredCount(string $distanceId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT registered_count FROM event_distances WHERE id = :id');
+        $stmt->execute(['id' => $distanceId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    private function outboxRows(string $registrationId, string $mailType): int
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM central_mailer_outbox WHERE source_entity_type = :type AND source_entity_id = :id'
+        );
+        $stmt->execute(['type' => $mailType, 'id' => $registrationId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** @return array<string, mixed> */
+    private function registrationWithTransaction(string $transactionId, ?RegistrationRepository $repository = null): array
+    {
+        $repository ??= $this->registrations;
         $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-' . strtolower($transactionId)]));
         $this->gateway->nextSession = ['transactionId' => $transactionId, 'redirectUrl' => 'https://pay.example.test/' . $transactionId];
-        $registration = $this->registrations->create($this->registrationPayload($event));
+        $registration = $repository->create($this->registrationPayload($event));
         self::assertSame('pending', $registration['status']);
         self::assertSame('created', $this->rawGatewayTransaction($transactionId)['status']);
 
@@ -465,6 +598,7 @@ final class RegistrationRepositoryTpayTest extends TestCase
             $regStmt = $this->pdo->prepare('SELECT id FROM registrations WHERE event_id = :eventId');
             $regStmt->execute(['eventId' => $eventId]);
             foreach ($regStmt->fetchAll(PDO::FETCH_COLUMN) ?: [] as $registrationId) {
+                $this->pdo->prepare('DELETE FROM central_mailer_outbox WHERE source_entity_id = :id')->execute(['id' => $registrationId]);
                 $this->pdo->prepare('DELETE FROM registration_gateway_transactions WHERE registration_id = :id')->execute(['id' => $registrationId]);
                 $this->pdo->prepare('DELETE FROM registration_refunds WHERE registration_id = :id')->execute(['id' => $registrationId]);
                 $this->pdo->prepare('DELETE FROM registration_payment_details WHERE registration_id = :id')->execute(['id' => $registrationId]);

@@ -102,6 +102,24 @@ final class UserRepository extends Repository
         return is_string($hash) ? $hash : null;
     }
 
+    /** PP.7: the session version a JWT must carry; never part of any DTO. 0 for an unknown user. */
+    public function tokenVersion(string $id): int
+    {
+        $stmt = $this->pdo->prepare('SELECT token_version FROM users WHERE id = :id');
+        $stmt->execute(['id' => $id]);
+        $version = $stmt->fetchColumn();
+
+        return $version === false ? 0 : (int) $version;
+    }
+
+    /** PP.7: invalidates every session of the user that carries an older version. Returns the new version. */
+    public function bumpTokenVersion(string $id): int
+    {
+        $this->pdo->prepare('UPDATE users SET token_version = token_version + 1 WHERE id = :id')->execute(['id' => $id]);
+
+        return $this->tokenVersion($id);
+    }
+
     public function setPassword(string $id, string $plainPassword): void
     {
         $this->updateById('users', $id, ['password_hash' => password_hash($plainPassword, PASSWORD_DEFAULT)]);

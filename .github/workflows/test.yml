@@ -69,3 +69,60 @@ jobs:
         run: composer migrate
       - run: composer seed
       - run: composer test -- --testsuite Integration --fail-on-skipped --exclude-group requires-local-samples
+
+  workflow-lint:
+    name: Workflow and script checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/repo" --workdir /repo rhysd/actionlint:1.7.7 -color
+      - name: ShellCheck
+        run: shellcheck -S warning scripts/ci/*.sh scripts/deploy/*.sh scripts/ops/*.sh tests/ops/*.sh
+      - name: Shell tests (guard, require-env, remote deploy)
+        run: bash tests/ops/run.sh
+
+  ops-backup-restore:
+    name: Backup and restore scripts (MySQL 8.4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: zmierzymy_czas_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          coverage: none
+          extensions: pdo_mysql
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - name: Configure test env
+        run: |
+          cat > .env <<'ENV'
+          APP_ENV=local
+          DB_HOST=127.0.0.1
+          DB_PORT=3306
+          DB_DATABASE=zmierzymy_czas_test
+          DB_USERNAME=root
+          DB_PASSWORD=
+          JWT_SECRET=ci-test-secret
+          APP_CORS_ORIGIN=*
+          ENV
+      - run: composer migrate
+      - run: composer seed
+      - name: Create scratch restore database
+        run: mysql -h127.0.0.1 -uroot -e 'CREATE DATABASE zmierzymy_czas_restore_check'
+      - name: Backup and restore-check against MySQL 8.4
+        run: bash tests/ops/backup-restore.it.sh

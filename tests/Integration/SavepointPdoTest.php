@@ -26,7 +26,7 @@ final class SavepointPdoTest extends TestCase
 
     private function insertPage(\PDO $pdo, string $name): void
     {
-        $pdo->prepare("INSERT INTO info_pages (id, slug, title, icon, description, content) VALUES (:id, :slug, :title, 'i', 'd', :content)")
+        $pdo->prepare("INSERT INTO info_pages (id, slug, title, icon, description, content, created_at, updated_at) VALUES (:id, :slug, :title, 'i', 'd', :content, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
             ->execute(['id' => 'sp-' . bin2hex(random_bytes(8)), 'slug' => $name, 'title' => 't', 'content' => '[]']);
     }
 

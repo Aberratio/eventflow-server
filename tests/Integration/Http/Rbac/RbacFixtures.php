@@ -118,9 +118,12 @@ final class RbacFixtures
             'distanceName' => $event['distances'][0]['name'],
             'userId' => $fx->values['owner'],
             'userName' => 'Rbac owner',
+            'bibNumber' => 'R1',
+            'category' => 'Open',
             'time' => '0:40:00',
             'timeInSeconds' => 2400,
             'position' => 1,
+            'categoryPosition' => 1,
             'status' => 'finished',
         ]);
         $fx->values['result'] = (string) $result['id'];

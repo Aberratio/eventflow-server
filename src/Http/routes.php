@@ -11,6 +11,8 @@ use Slim\Routing\RouteCollectorProxy;
 use ZmierzymyCzas\Database\SeedManifest;
 use ZmierzymyCzas\Domain\Admin\AdminRepository;
 use ZmierzymyCzas\Domain\Auth\ApplicationApiKeyConfig;
+use ZmierzymyCzas\Domain\Auth\ActionTokenPurpose;
+use ZmierzymyCzas\Domain\Auth\ActionTokenRepository;
 use ZmierzymyCzas\Domain\Auth\DbSessionGuard;
 use ZmierzymyCzas\Domain\Auth\JwtService;
 use ZmierzymyCzas\Domain\Auth\PasswordRule;
@@ -672,21 +674,75 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
             return JsonResponder::ok($response, null);
         });
-        $api->post('/auth/password/reset', function (Request $request, Response $response) use ($users, $body, $jwt, $mailer) {
+        // PP.7: always 200, whatever happened (unknown e-mail, cooldown, mailer failure), so the response
+        // never reveals whether an account exists. The link carries an opaque one-time token (30 min);
+        // only its sha256 is stored. A new request invalidates the previous link. The mail idempotency
+        // source is the token id, so every request produces a mail (the user id would dedupe forever).
+        // IP/global rate limiting is PP.10; this is only a per-user cooldown (60 s, 5 per hour).
+        $api->post('/auth/password/reset', function (Request $request, Response $response) use ($users, $body, $mailer, $pdo, $logger) {
             $payload = $body($request);
             $email = trim((string) ($payload['email'] ?? ''));
             $user = $email !== '' ? $users->findByEmail($email) : null;
-            // E1.10 mail #2 ("Reset hasła", 17 §1 row 2). Same scope boundary as
-            // registration above: only the mail trigger is wired here, not a full
-            // token-consuming "set new password" endpoint (out of scope for this
-            // ticket). Never reveals whether the email exists — always 200.
             if ($user !== null) {
-                $ttlMinutes = max(1, (int) ((int) Env::get('JWT_TTL_SECONDS', '86400')) / 60);
-                $resetToken = $jwt->issue(['sub' => $user['id'], 'purpose' => 'password_reset']);
-                $resetLink = rtrim((string) Env::get('APP_URL', ''), '/') . '/reset-password?token=' . $resetToken;
-                $mailer->sendPasswordReset((string) $user['id'], (string) $user['email'], $resetLink, $ttlMinutes);
+                $tokens = new ActionTokenRepository($pdo);
+                $userId = (string) $user['id'];
+                if (
+                    $tokens->countRecent($userId, ActionTokenPurpose::PASSWORD_RESET, 60) === 0
+                    && $tokens->countRecent($userId, ActionTokenPurpose::PASSWORD_RESET, 3600) < 5
+                ) {
+                    $tokens->invalidateOpen($userId, ActionTokenPurpose::PASSWORD_RESET);
+                    $token = $tokens->issue($userId, ActionTokenPurpose::PASSWORD_RESET, ActionTokenPurpose::PASSWORD_RESET_TTL);
+                    $resetLink = rtrim((string) Env::get('APP_URL', ''), '/') . '/reset-password?token=' . $token['raw'];
+                    try {
+                        $mailer->sendPasswordReset(
+                            $token['id'],
+                            (string) $user['email'],
+                            $resetLink,
+                            intdiv(ActionTokenPurpose::PASSWORD_RESET_TTL, 60)
+                        );
+                    } catch (Throwable $e) {
+                        // A mailer outage must not turn into a 500 that only known e-mails get.
+                        // Context: ids and the error class only, never the link, token or address.
+                        $logger->error('Password reset mail could not be queued', ['userId' => $userId, 'errorClass' => $e::class]);
+                    }
+                }
             }
             return JsonResponder::ok($response, null, 'Password reset email queued');
+        });
+
+        // PP.7: sets a new password from a reset link. Public. The password rule runs before the token is
+        // consumed, so a too-short password does not burn the link. Every failure of the token itself is the
+        // same 400 (unknown, used, expired, wrong purpose, deleted user). No auto-login: the client goes to /login.
+        $api->post('/auth/password/reset/confirm', function (Request $request, Response $response) use ($users, $body, $pdo) {
+            $payload = $body($request);
+            $token = $payload['token'] ?? null;
+            $new = $payload['newPassword'] ?? null;
+            if (!is_string($token) || !is_string($new) || $token === '' || $new === '') {
+                return JsonResponder::error($response, 'validation_error', 'Podaj token i nowe hasło.', 422);
+            }
+            $violation = PasswordRule::violation($new, null);
+            if ($violation !== null) {
+                return JsonResponder::error($response, $violation['code'], $violation['message'], 422);
+            }
+            $tokens = new ActionTokenRepository($pdo);
+            $pdo->beginTransaction();
+            try {
+                $consumed = $tokens->consume($token, ActionTokenPurpose::PASSWORD_RESET);
+                if ($consumed === null) {
+                    $pdo->rollBack();
+                    return JsonResponder::error($response, 'invalid_token', 'Link jest nieprawidłowy lub wygasł. Poproś o nowy link.', 400);
+                }
+                $users->setPassword($consumed['userId'], $new);
+                $users->bumpTokenVersion($consumed['userId']);
+                $tokens->invalidateOpen($consumed['userId'], ActionTokenPurpose::PASSWORD_RESET);
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+            return JsonResponder::ok($response, null, 'Password reset');
         });
 
         $api->get('/auth/me', function (Request $request, Response $response) use ($users) {

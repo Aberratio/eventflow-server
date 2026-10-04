@@ -156,6 +156,7 @@ final class RbacGrid
         'POST /api/v1/auth/register' => ['policy' => self::PUBLIC, 'basis' => 'sign-up, role forced to participant (PP.1) (plan line 608)'],
         'POST /api/v1/auth/logout' => ['policy' => self::PUBLIC, 'basis' => 'public read/endpoint (no extra per-row rule) (plan line 640)'],
         'POST /api/v1/auth/password/reset' => ['policy' => self::PUBLIC, 'basis' => 'public read/endpoint (no extra per-row rule) (plan line 641)'],
+        'POST /api/v1/auth/password/reset/confirm' => ['policy' => self::PUBLIC, 'body' => ['token' => 'rbac-bad', 'newPassword' => 'rbac-pass-9999'], 'basis' => 'PP.7: public, authorised by the one-time token only (plan 3.9)'],
         'GET /api/v1/auth/me' => ['policy' => self::AUTH, 'basis' => 'any signed-in session (no extra per-row rule) (plan line 658)'],
         'POST /api/v1/auth/password/change' => ['policy' => self::AUTH, 'basis' => 'self only (auth.sub) (plan line 666)'],
         'GET /api/v1/users' => ['policy' => self::STAFF, 'basis' => 'macierz: lista Kont — Moderator odczyt (plan line 696)'],

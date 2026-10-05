@@ -6,6 +6,8 @@ namespace ZmierzymyCzas\Domain\Results;
 
 use ZmierzymyCzas\Domain\Competitors\CompetitorNamePresenter;
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Support\InputRules;
+use ZmierzymyCzas\Support\InputValidationException;
 
 final class ResultRepository extends Repository
 {
@@ -201,12 +203,86 @@ final class ResultRepository extends Repository
      */
     private const NON_CLASSIFIED_STATUSES = ['dnf', 'dns', 'dsq'];
 
+    /**
+     * PP.76: request-body rules for POST/PATCH /results (see InputRules). eventName/distanceName
+     * are deliberately lenient here: create() derives them from the event when absent.
+     */
+    private const INPUT_RULES = [
+        'eventId' => [InputRules::TEXT_REQUIRED, 'Wydarzenie'],
+        'distanceId' => [InputRules::TEXT_REQUIRED, 'Dystans'],
+        'eventName' => [InputRules::TEXT, 'Nazwa wydarzenia'],
+        'distanceName' => [InputRules::TEXT, 'Nazwa dystansu'],
+        'userName' => [InputRules::TEXT_REQUIRED, 'Imię i nazwisko zawodnika'],
+        'userId' => [InputRules::TEXT, 'Konto zawodnika'],
+        'registrationId' => [InputRules::TEXT_NULLABLE, 'Zapis'],
+        'bibNumber' => [InputRules::TEXT, 'Numer startowy'],
+        'category' => [InputRules::TEXT, 'Kategoria'],
+        'status' => [InputRules::ENUM, 'Status wyniku', ['finished', 'dnf', 'dns', 'dsq']],
+        'time' => [InputRules::TEXT, 'Czas'],
+        'timeInSeconds' => [InputRules::NUMBER, 'Czas w sekundach'],
+        'netTime' => [InputRules::TEXT_NULLABLE, 'Czas netto'],
+        'netTimeInSeconds' => [InputRules::NUMBER_NULLABLE, 'Czas netto w sekundach'],
+        'position' => [InputRules::INT, 'Miejsce'],
+        'categoryPosition' => [InputRules::INT, 'Miejsce w kategorii'],
+        'gender' => [InputRules::ENUM_NULLABLE, 'Płeć', ['M', 'K']],
+        'birthYear' => [InputRules::INT_NULLABLE, 'Rok urodzenia'],
+        'splits' => [InputRules::OBJECTS_NULLABLE, 'Międzyczasy'],
+    ];
+
+    /**
+     * PP.76: every split needs a label and a non-negative time (both NOT NULL in result_splits).
+     *
+     * @param array<string, mixed> $data
+     */
+    private function assertSplits(array $data): void
+    {
+        if (!isset($data['splits']) || !is_array($data['splits'])) {
+            return;
+        }
+        foreach ($data['splits'] as $index => $split) {
+            $rules = [
+                'label' => [InputRules::TEXT_REQUIRED, 'Nazwa międzyczasu'],
+                'timeSeconds' => [InputRules::NUMBER, 'Czas międzyczasu'],
+            ];
+            try {
+                InputRules::check($split, $rules, true);
+                if (!array_key_exists('timeSeconds', $split)) {
+                    throw InputRules::required('timeSeconds', $rules['timeSeconds'][1]);
+                }
+            } catch (InputValidationException $e) {
+                throw new InputValidationException($e->getMessage(), 'splits[' . $index . '].' . $e->field);
+            }
+        }
+    }
+
     /** @param array<string, mixed> $data */
     public function create(array $data): array
     {
+        InputRules::check($data, self::INPUT_RULES, true);
+        $this->assertSplits($data);
+        $status = (string) ($data['status'] ?? 'finished');
+        if ($status === 'finished') {
+            if (!array_key_exists('time', $data) || trim((string) $data['time']) === '') {
+                throw InputRules::required('time', 'Czas');
+            }
+            if (!array_key_exists('timeInSeconds', $data)) {
+                throw InputRules::required('timeInSeconds', 'Czas w sekundach');
+            }
+        }
+        $data = $this->withDerivedNames($data);
+        // Defaults for NOT NULL columns the caller left out (what non-strict MariaDB stored
+        // silently): only reachable for manual results, imports always send all of them.
+        $data += [
+            'userId' => '',
+            'bibNumber' => '',
+            'category' => '',
+            'time' => strtoupper($status),
+            'timeInSeconds' => 0,
+            'position' => 0,
+            'categoryPosition' => 0,
+        ];
         $id = $this->id();
         $mapped = $this->map($id, $data);
-        $status = (string) ($mapped['status'] ?? 'finished');
         if (in_array($status, self::NON_CLASSIFIED_STATUSES, true)) {
             $mapped['position'] = 0;
             $mapped['category_position'] = 0;
@@ -219,6 +295,42 @@ final class ResultRepository extends Repository
         return $this->find($id);
     }
 
+    /**
+     * PP.76: eventName/distanceName are NOT NULL snapshots; when the caller omits them they come
+     * from the event and distance (server-authoritative). Unknown ids are a validation error.
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    private function withDerivedNames(array $data): array
+    {
+        $eventId = (string) $data['eventId'];
+        $distanceId = (string) $data['distanceId'];
+        $needsEvent = !isset($data['eventName']) || trim((string) $data['eventName']) === '';
+        $needsDistance = !isset($data['distanceName']) || trim((string) $data['distanceName']) === '';
+
+        if ($needsEvent) {
+            $stmt = $this->pdo->prepare('SELECT name FROM events WHERE id = :eventId');
+            $stmt->execute(['eventId' => $eventId]);
+            $name = $stmt->fetchColumn();
+            if ($name === false) {
+                throw InputRules::invalid('eventId', 'Wydarzenie');
+            }
+            $data['eventName'] = (string) $name;
+        }
+        if ($needsDistance) {
+            $stmt = $this->pdo->prepare('SELECT name FROM event_distances WHERE id = :distanceId AND event_id = :eventId');
+            $stmt->execute(['distanceId' => $distanceId, 'eventId' => $eventId]);
+            $name = $stmt->fetchColumn();
+            if ($name === false) {
+                throw InputRules::invalid('distanceId', 'Dystans');
+            }
+            $data['distanceName'] = (string) $name;
+        }
+
+        return $data;
+    }
+
     /** @param array<string, mixed> $data */
     public function update(string $id, array $data): ?array
     {
@@ -227,6 +339,8 @@ final class ResultRepository extends Repository
             return null;
         }
 
+        InputRules::check($data, self::INPUT_RULES, false);
+        $this->assertSplits($data);
         $mapped = $this->map($id, $data, false);
         unset($mapped['id']);
         $status = (string) ($data['status'] ?? $current['status']);

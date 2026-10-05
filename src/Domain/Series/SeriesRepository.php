@@ -5,11 +5,28 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Series;
 
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Support\InputRules;
 
 final class SeriesRepository extends Repository
 {
     private const COLUMNS = 'id, name, slug, type, description, organizer_id AS organizerId, organizer_name AS organizerName, rules, start_date AS startDate, end_date AS endDate, status';
     private const STATUSES = ['active', 'completed', 'upcoming', 'archived'];
+
+    /** PP.76: request-body rules for POST/PATCH /series (see InputRules). */
+    private const INPUT_RULES = [
+        'name' => [InputRules::TEXT_REQUIRED, 'Nazwa serii'],
+        'slug' => [InputRules::TEXT_REQUIRED, 'Adres URL (slug) serii'],
+        'type' => [InputRules::ENUM, 'Typ serii', ['virtual', 'local', 'championship', 'cup']],
+        'description' => [InputRules::TEXT, 'Opis serii'],
+        'organizerId' => [InputRules::TEXT, 'Organizator serii'],
+        'organizerName' => [InputRules::TEXT, 'Nazwa organizatora serii'],
+        'rules' => [InputRules::TEXT_NULLABLE, 'Regulamin serii'],
+        'startDate' => [InputRules::TEXT_NULLABLE, 'Data rozpoczęcia serii'],
+        'endDate' => [InputRules::TEXT_NULLABLE, 'Data zakończenia serii'],
+        'status' => [InputRules::TEXT_NULLABLE, 'Status serii'],
+        'eventIds' => [InputRules::IDS_NULLABLE, 'Wydarzenia serii'],
+        'products' => [InputRules::OBJECTS_NULLABLE, 'Produkty serii'],
+    ];
 
     /**
      * @param array<string, mixed> $filters
@@ -74,6 +91,8 @@ final class SeriesRepository extends Repository
     /** @param array<string, mixed> $data */
     public function create(array $data, array $actor): array
     {
+        InputRules::check($data, self::INPUT_RULES, true);
+        $data += ['description' => ''];
         $id = $this->id();
         $payload = $this->data($id, $data, $actor, true);
         $this->pdo->beginTransaction();
@@ -92,6 +111,7 @@ final class SeriesRepository extends Repository
     /** @param array<string, mixed> $data */
     public function update(string $id, array $data): ?array
     {
+        InputRules::check($data, self::INPUT_RULES, false);
         $this->pdo->beginTransaction();
         try {
             $this->updateById('series', $id, $this->data($id, $data, [], false));

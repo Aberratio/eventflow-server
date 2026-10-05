@@ -3546,8 +3546,8 @@ SQL;
      * let an external call block a state transition that already committed on
      * our side" stance as initiateGatewayRefund(). The outbox row is written
      * (and marked failed) before the HTTP attempt regardless, so nothing here
-     * is silently lost — just not automatically retried (no cron/worker in
-     * this repo, mirroring E1.9's own reconcile()).
+     * is silently lost — failed and stale `queued` rows are retried with
+     * backoff by the scheduler (bz.outbox_retry, BzWebhookOutboxService::retryDue()).
      */
     private function pushBzCriticalChange(string $eventId, string $registrationId, string $changeType): void
     {

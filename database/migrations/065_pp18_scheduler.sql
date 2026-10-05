@@ -26,3 +26,10 @@ UPDATE registrations r SET r.payment_reminder_for = r.payment_expires_at
 WHERE r.status = 'pending' AND r.payment_reminder_for IS NULL AND r.payment_expires_at IS NOT NULL
   AND EXISTS (SELECT 1 FROM central_mailer_outbox o
               WHERE o.source_entity_type = 'unpaid_reminder' AND o.source_entity_id = r.id);
+
+-- Blok 3: ponawianie pushy do BZ (licznik prób i termin następnej próby).
+-- @guard: column-missing bz_webhook_outbox.attempts
+ALTER TABLE bz_webhook_outbox ADD COLUMN attempts INT UNSIGNED NOT NULL DEFAULT 0 AFTER status;
+-- @guard: column-missing bz_webhook_outbox.next_attempt_at
+ALTER TABLE bz_webhook_outbox ADD COLUMN next_attempt_at VARCHAR(64) NULL AFTER attempts;
+UPDATE bz_webhook_outbox SET attempts = 1 WHERE attempts = 0 AND status IN ('sent', 'failed');

@@ -17,6 +17,8 @@ final class SchedulerJobsTest extends TestCase
             'registrations.form_snapshots',
             'registrations.expire_unpaid',
             'registrations.payment_reminders',
+            'bz.outbox_retry',
+            'mail.outbox_reconcile',
         ], SchedulerJobs::NAMES);
     }
 }

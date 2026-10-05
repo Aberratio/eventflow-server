@@ -16,7 +16,7 @@ final class BzWebhookOutboxRepository extends Repository
 {
     private const COLUMNS = 'id, event_id AS eventId, registration_id AS registrationId, '
         . 'change_type AS changeType, idempotency_key AS idempotencyKey, payload, status, '
-        . 'last_error AS lastError, created_at AS createdAt, sent_at AS sentAt';
+        . 'last_error AS lastError, attempts, next_attempt_at AS nextAttemptAt, created_at AS createdAt, sent_at AS sentAt';
 
     /**
      * Writes the outbox row — including its deterministic `idempotency_key` —
@@ -46,6 +46,8 @@ final class BzWebhookOutboxRepository extends Repository
             'idempotency_key' => $data['idempotencyKey'],
             'payload' => $data['payload'],
             'status' => 'queued',
+            // PP.18: the immediate attempt BzWebhookOutboxService::enqueue() makes right after this.
+            'attempts' => 1,
             'created_at' => date(DATE_ATOM),
         ], ['payload']));
 
@@ -86,6 +88,62 @@ final class BzWebhookOutboxRepository extends Repository
         $this->updateById('bz_webhook_outbox', $id, [
             'status' => 'failed',
             'last_error' => mb_substr($error, 0, 1024),
+            // PP.18: first retry 5 minutes after the immediate attempt failed.
+            'next_attempt_at' => (new \DateTimeImmutable('+5 minutes'))->format(DATE_ATOM),
+        ]);
+    }
+
+    /**
+     * PP.18: rows the scheduler may retry — `failed` with attempts left, or `queued` (the process
+     * died between writing the row and recording the result). The backoff / staleness checks are
+     * done offset-aware in PHP by the caller; this is only the prefilter.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listRetryCandidates(int $limit, int $maxAttempts): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT " . self::COLUMNS . " FROM bz_webhook_outbox
+             WHERE (status = 'failed' AND attempts < :maxAttempts) OR status = 'queued'
+             ORDER BY created_at ASC LIMIT :limit"
+        );
+        $stmt->bindValue('maxAttempts', $maxAttempts, \PDO::PARAM_INT);
+        $stmt->bindValue('limit', $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return array_map(fn (array $row): array => $this->decode($row, ['payload']), $stmt->fetchAll());
+    }
+
+    /** PP.18: takes one retry attempt; false when another run (or a status change) got there first. */
+    public function claimAttempt(string $id, string $seenStatus, int $seenAttempts): bool
+    {
+        $stmt = $this->pdo->prepare(
+            'UPDATE bz_webhook_outbox SET attempts = attempts + 1
+             WHERE id = :id AND status = :seenStatus AND attempts = :seenAttempts'
+        );
+        $stmt->execute(['id' => $id, 'seenStatus' => $seenStatus, 'seenAttempts' => $seenAttempts]);
+
+        return $stmt->rowCount() === 1;
+    }
+
+    /** PP.18: a retry failed. Stores only the exception class, never a message (it can carry a response body). */
+    public function markFailedWithBackoff(string $id, string $errorClass, ?\DateTimeImmutable $nextAttemptAt): void
+    {
+        $this->updateById('bz_webhook_outbox', $id, [
+            'status' => 'failed',
+            'last_error' => mb_substr($errorClass, 0, 1024),
+            'next_attempt_at' => $nextAttemptAt?->format(DATE_ATOM),
+        ]);
+    }
+
+    /** PP.18: never retried again (integration switched off for the Event). */
+    public function markAbandoned(string $id, string $reason, int $maxAttempts): void
+    {
+        $this->updateById('bz_webhook_outbox', $id, [
+            'status' => 'failed',
+            'last_error' => mb_substr($reason, 0, 1024),
+            'attempts' => $maxAttempts,
+            'next_attempt_at' => null,
         ]);
     }
 }

@@ -107,11 +107,9 @@ final class CentralMailerOutboxService
     /**
      * Polls Central Mailer for every outbox row still awaiting a terminal
      * status and writes back whatever it reports (§6.4 point 3 — Central Mailer
-     * has no webhooks, only polling). This repo has no cron infrastructure
-     * (mirroring how E0.8/E1.1/E1.4 handled that: lazy checks rather than a
-     * scheduled job), so this is a plain method meant to be called from
-     * wherever needs fresh status — an admin/status endpoint, or a lazy check on
-     * read, per the ticket. There is deliberately no automatic trigger here.
+     * has no webhooks, only polling). PP.18: the scheduler's
+     * mail.outbox_reconcile job calls this every tick; it can also be called from
+     * an admin/status endpoint.
      *
      * @return array{checked: int, updated: int}
      */

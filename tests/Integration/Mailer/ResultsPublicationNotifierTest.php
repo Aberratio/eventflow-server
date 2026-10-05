@@ -44,6 +44,9 @@ final class ResultsPublicationNotifierTest extends TestCase
         // Outside any try/catch: a broken migration must fail, not skip.
         Migrator::applyAll($this->pdo);
         $this->deleteFixtures();
+        // Other suites (e.g. publishing results over HTTP) leave pending requests behind; the counters here must
+        // only see this test's own.
+        $this->pdo->exec('DELETE FROM results_publication_mail_requests WHERE processed_at IS NULL');
 
         $this->events = new EventRepository($this->pdo);
         $this->registrations = new RegistrationRepository($this->pdo);

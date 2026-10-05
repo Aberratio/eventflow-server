@@ -455,6 +455,117 @@ final class ResultsContractTest extends HttpTestCase
         self::assertNotNull($payload['data']['rows'][0]['selectedRegistrationId']);
     }
 
+    private function organizerHeaders(): array
+    {
+        return $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email']);
+    }
+
+    /** @return array<string, mixed> */
+    private function assertValidationError(\Psr\Http\Message\ResponseInterface $response, string $field): array
+    {
+        $payload = $this->json($response);
+
+        self::assertSame(422, $response->getStatusCode(), json_encode($payload));
+        self::assertFalse($payload['success']);
+        self::assertSame('validation_error', $payload['error']['code']);
+        self::assertSame($field, $payload['error']['details']['field']);
+        self::assertStringStartsWith('Pole „', $payload['error']['message']);
+
+        return $payload;
+    }
+
+    private function countResultsOfActiveEvent(): int
+    {
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM results WHERE event_id = :id');
+        $stmt->execute(['id' => $this->activeEvent['id']]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** PP.76: strict MySQL answered 1364 (event_name has no default) -> 500; now a 422 naming the field. */
+    public function testCreateResultWithoutCompetitorNameIs422(): void
+    {
+        $response = $this->request('POST', '/api/v1/results', [
+            'eventId' => $this->activeEvent['id'],
+            'distanceId' => $this->activeEvent['distances'][0]['id'],
+        ], $this->organizerHeaders());
+
+        $payload = $this->assertValidationError($response, 'userName');
+        self::assertSame('Pole „Imię i nazwisko zawodnika” jest wymagane.', $payload['error']['message']);
+        self::assertSame(0, $this->countResultsOfActiveEvent());
+    }
+
+    /** PP.76: a finished result without timeInSeconds hit 1364 on strict MySQL. */
+    public function testCreateFinishedResultWithoutTimeIs422(): void
+    {
+        $response = $this->request('POST', '/api/v1/results', [
+            'eventId' => $this->activeEvent['id'],
+            'distanceId' => $this->activeEvent['distances'][0]['id'],
+            'userName' => 'Bez Czasu',
+            'time' => '00:50:00',
+        ], $this->organizerHeaders());
+
+        $this->assertValidationError($response, 'timeInSeconds');
+        self::assertSame(0, $this->countResultsOfActiveEvent());
+    }
+
+    /** PP.76: an unknown status was 1265 (ENUM) -> 500 on strict MySQL. */
+    public function testCreateResultWithUnknownStatusIs422(): void
+    {
+        $response = $this->request('POST', '/api/v1/results', $this->resultPayload(['status' => 'bogus']), $this->organizerHeaders());
+
+        $this->assertValidationError($response, 'status');
+        self::assertSame(0, $this->countResultsOfActiveEvent());
+    }
+
+    public function testCreateResultFillsDerivedNamesAndDefaults(): void
+    {
+        $response = $this->request('POST', '/api/v1/results', [
+            'eventId' => $this->activeEvent['id'],
+            'distanceId' => $this->activeEvent['distances'][0]['id'],
+            'userName' => 'Minimalny Wynik',
+            'time' => '00:50:00',
+            'timeInSeconds' => 3000,
+        ], $this->organizerHeaders());
+        $payload = $this->json($response);
+
+        self::assertSame(201, $response->getStatusCode(), json_encode($payload));
+        self::assertSame($this->activeEvent['name'], $payload['data']['eventName']);
+        self::assertSame($this->activeEvent['distances'][0]['name'], $payload['data']['distanceName']);
+        self::assertSame('', $payload['data']['bibNumber']);
+        self::assertSame('', $payload['data']['category']);
+        self::assertSame(1, $payload['data']['position']);
+    }
+
+    public function testCreateDnsResultDefaultsTimeAndPosition(): void
+    {
+        $response = $this->request('POST', '/api/v1/results', [
+            'eventId' => $this->activeEvent['id'],
+            'distanceId' => $this->activeEvent['distances'][0]['id'],
+            'userName' => 'Nie Wystartowal',
+            'status' => 'dns',
+        ], $this->organizerHeaders());
+        $payload = $this->json($response);
+
+        self::assertSame(201, $response->getStatusCode(), json_encode($payload));
+        self::assertSame('DNS', $payload['data']['time']);
+        self::assertSame(0, $payload['data']['position']);
+    }
+
+    /** PP.76: {"userName": null} was 1048 -> 500 on strict MySQL. */
+    public function testPatchResultRejectsNullCompetitorName(): void
+    {
+        $created = $this->json($this->request('POST', '/api/v1/results', $this->resultPayload(), $this->organizerHeaders()));
+        $id = (string) $created['data']['id'];
+
+        $response = $this->request('PATCH', '/api/v1/results/' . $id, ['userName' => null], $this->organizerHeaders());
+
+        $this->assertValidationError($response, 'userName');
+        $stmt = $this->pdo->prepare('SELECT user_name FROM results WHERE id = :id');
+        $stmt->execute(['id' => $id]);
+        self::assertSame($this->participant['name'], $stmt->fetchColumn());
+    }
+
     private function resultPayload(array $overrides = []): array
     {
         return array_merge([

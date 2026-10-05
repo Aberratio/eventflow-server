@@ -232,6 +232,99 @@ final class SeriesAndPartnersContractTest extends HttpTestCase
         self::assertIsArray($payload['data']);
     }
 
+    // ── PP.76: strict-MySQL input validation (422 instead of 500) ────────────
+
+    /** @return array<string, string> */
+    private function adminHeaders(): array
+    {
+        return $this->bearer($this->admin['id'], 'admin', $this->admin['email']);
+    }
+
+    private function assertSeriesValidationError(\Psr\Http\Message\ResponseInterface $response, string $field): array
+    {
+        $payload = $this->json($response);
+
+        self::assertSame(422, $response->getStatusCode(), json_encode($payload));
+        self::assertSame('validation_error', $payload['error']['code']);
+        self::assertSame($field, $payload['error']['details']['field']);
+        self::assertStringStartsWith('Pole „', $payload['error']['message']);
+
+        return $payload;
+    }
+
+    private function countSeriesWithPrefix(): int
+    {
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM series WHERE slug LIKE :slug');
+        $stmt->execute(['slug' => $this->prefix . '-%']);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    public function testCreateSeriesWithEmptyBodyIs422(): void
+    {
+        $response = $this->request('POST', '/api/v1/series', [], $this->adminHeaders());
+
+        $payload = $this->assertSeriesValidationError($response, 'name');
+        self::assertSame('Pole „Nazwa serii” jest wymagane.', $payload['error']['message']);
+    }
+
+    public function testCreateSeriesWithoutSlugIs422(): void
+    {
+        $response = $this->request('POST', '/api/v1/series', ['name' => $this->prefix . ' Series'], $this->adminHeaders());
+
+        $this->assertSeriesValidationError($response, 'slug');
+    }
+
+    public function testCreateSeriesRejectsUnknownTypeAndNonListEventIds(): void
+    {
+        $badType = $this->request('POST', '/api/v1/series', $this->seriesPayload(['type' => 'bogus']), $this->adminHeaders());
+        $this->assertSeriesValidationError($badType, 'type');
+
+        $badEvents = $this->request('POST', '/api/v1/series', $this->seriesPayload(['eventIds' => 'x']), $this->adminHeaders());
+        $this->assertSeriesValidationError($badEvents, 'eventIds');
+
+        self::assertSame(0, $this->countSeriesWithPrefix());
+    }
+
+    public function testCreateSeriesWithNameAndSlugOnlyDefaultsDescription(): void
+    {
+        $response = $this->request('POST', '/api/v1/series', [
+            'name' => $this->prefix . ' Series',
+            'slug' => $this->prefix . '-minimal',
+        ], $this->adminHeaders());
+        $payload = $this->json($response);
+
+        self::assertSame(201, $response->getStatusCode(), json_encode($payload));
+        self::assertSame('', $payload['data']['description']);
+        self::assertSame('virtual', $payload['data']['type']);
+    }
+
+    /**
+     * Behavioural change, not a strict-mode crash: before PP.76 a blank name on PATCH was
+     * stored as is (200), on every MySQL mode.
+     */
+    public function testPatchSeriesRejectsBlankName(): void
+    {
+        $seriesId = $this->json($this->request('POST', '/api/v1/series', $this->seriesPayload(), $this->adminHeaders()))['data']['id'];
+
+        $response = $this->request('PATCH', '/api/v1/series/' . $seriesId, ['name' => '   '], $this->adminHeaders());
+
+        $this->assertSeriesValidationError($response, 'name');
+        $stmt = $this->pdo->prepare('SELECT name FROM series WHERE id = :id');
+        $stmt->execute(['id' => $seriesId]);
+        self::assertSame($this->prefix . ' Series', $stmt->fetchColumn());
+    }
+
+    /** `{"description": null}` was 1048 (NOT NULL) -> 500 on strict MySQL. */
+    public function testPatchSeriesRejectsNullDescription(): void
+    {
+        $seriesId = $this->json($this->request('POST', '/api/v1/series', $this->seriesPayload(), $this->adminHeaders()))['data']['id'];
+
+        $response = $this->request('PATCH', '/api/v1/series/' . $seriesId, ['description' => null], $this->adminHeaders());
+
+        $this->assertSeriesValidationError($response, 'description');
+    }
+
     private function seriesPayload(array $overrides = []): array
     {
         return array_merge([

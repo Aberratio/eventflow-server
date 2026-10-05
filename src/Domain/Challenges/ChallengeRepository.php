@@ -6,11 +6,28 @@ namespace ZmierzymyCzas\Domain\Challenges;
 
 use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Domain\Shop\OrderRepository;
+use ZmierzymyCzas\Support\InputRules;
 
 final class ChallengeRepository extends Repository
 {
     private const COLUMNS = 'id, name, slug, description, image_url AS imageUrl, series_id AS seriesId, min_completed AS minCompleted, max_time AS maxTime, start_date AS startDate, end_date AS endDate, status, created_by AS createdBy';
     private const STATUSES = ['active', 'completed', 'upcoming', 'archived'];
+
+    /** PP.76: request-body rules for POST/PATCH /challenges (see InputRules). */
+    private const INPUT_RULES = [
+        'name' => [InputRules::TEXT_REQUIRED, 'Nazwa wyzwania'],
+        'slug' => [InputRules::TEXT_REQUIRED, 'Adres URL (slug) wyzwania'],
+        'description' => [InputRules::TEXT, 'Opis wyzwania'],
+        'imageUrl' => [InputRules::TEXT_NULLABLE, 'Zdjęcie wyzwania'],
+        'seriesId' => [InputRules::TEXT_NULLABLE, 'Seria'],
+        'startDate' => [InputRules::TEXT_NULLABLE, 'Data rozpoczęcia wyzwania'],
+        'endDate' => [InputRules::TEXT_NULLABLE, 'Data zakończenia wyzwania'],
+        'status' => [InputRules::TEXT_NULLABLE, 'Status wyzwania'],
+        'maxTime' => [InputRules::TEXT_NULLABLE, 'Limit czasu'],
+        'events' => [InputRules::LIST_NULLABLE, 'Wydarzenia wyzwania'],
+        'products' => [InputRules::LIST_NULLABLE, 'Nagrody wyzwania'],
+        'rewards' => [InputRules::LIST_NULLABLE, 'Nagrody wyzwania'],
+    ];
     private const ENTRY_STATUSES = ['pending', 'approved', 'rejected'];
     /** E6.1 condition-tree node types (issue 15 §1). */
     private const NODE_TYPES = ['group', 'event_threshold', 'point_threshold', 'sub_challenge_threshold'];
@@ -76,6 +93,8 @@ final class ChallengeRepository extends Repository
     /** @param array<string, mixed> $data */
     public function create(array $data, string $actorId): array
     {
+        InputRules::check($data, self::INPUT_RULES, true);
+        $data += ['description' => ''];
         $id = $this->id();
         $this->pdo->beginTransaction();
         try {
@@ -122,6 +141,7 @@ final class ChallengeRepository extends Repository
      */
     public function update(string $id, array $data): ?array
     {
+        InputRules::check($data, self::INPUT_RULES, false);
         if (array_key_exists('conditionTree', $data)) {
             $this->assertValidTree($id, (array) $data['conditionTree']);
         }

@@ -192,6 +192,75 @@ final class RegistrationFormSnapshotTest extends TestCase
         $this->registrations->correctFormSnapshot($registrationId, ['first_name' => 'Should Not Apply']);
     }
 
+    /** PP.18: the scheduler job freezes every non-removed Zapis of a finished Event, once. */
+    public function testSnapshotJobCapturesAllFinishedRegistrationsOnce(): void
+    {
+        [$first] = $this->createRegistrationWithCompetitor('PHPUnit Snapshot JobA');
+        [$second] = $this->createRegistrationWithCompetitor('PHPUnit Snapshot JobB');
+        [$removed] = $this->createRegistrationWithCompetitor('PHPUnit Snapshot JobRemoved');
+        $this->pdo->prepare("UPDATE registrations SET status = 'removed' WHERE id = :id")->execute(['id' => $removed]);
+        $this->makeFirstNameAndShirtSizePublic();
+
+        self::assertSame(0, $this->registrations->captureMissingFormSnapshots(500, $this->eventId), 'an unfinished Event is not captured');
+        $this->finishEvent();
+
+        self::assertSame(2, $this->registrations->captureMissingFormSnapshots(500, $this->eventId));
+        self::assertNotNull($this->capturedAt($first));
+        self::assertNotNull($this->capturedAt($second));
+        self::assertNull($this->capturedAt($removed));
+
+        $this->registrations->correctFormSnapshot($first, ['first_name' => 'PHPUnit Snapshot Corrected By Job Test']);
+        self::assertSame(0, $this->registrations->captureMissingFormSnapshots(500, $this->eventId), 'a second run captures nothing');
+
+        $snapshot = $this->registrations->formSnapshotFor($first);
+        self::assertSame('PHPUnit Snapshot Corrected By Job Test', array_column($snapshot, 'value', 'fieldKey')['first_name']);
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function firstReaders(): array
+    {
+        return ['BZ pull first' => ['bz'], 'organizer export first' => ['export']];
+    }
+
+    /**
+     * PP.18: whichever reader captured the snapshot first, the public start list must never serve a
+     * field outside publicListColumns() (the BZ identity set holds contact_email, the export set
+     * holds non-public fields). Before the fix the first reader froze ITS column set and every
+     * later reader was served it unfiltered.
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('firstReaders')]
+    public function testPublicStartListNeverLeaksFieldsCapturedByBzOrExportFirst(string $firstReader): void
+    {
+        [$registrationId] = $this->createRegistrationWithCompetitor('PHPUnit Snapshot Leak ' . $firstReader);
+        $this->makeFirstNameAndShirtSizePublic();
+        $this->finishEvent();
+
+        if ($firstReader === 'bz') {
+            $this->registrations->bzParticipantList($this->eventId);
+        } else {
+            $this->registrations->startListExportRows($this->eventId, $this->distanceId);
+        }
+        self::assertNotNull($this->capturedAt($registrationId), 'the first reader froze the snapshot');
+
+        $entry = $this->findInStartList($registrationId);
+        $publicKeys = array_column($this->fields->publicListColumns($this->eventId), 'fieldKey');
+        $servedKeys = array_column($entry['formFields'], 'fieldKey');
+
+        self::assertSame(['first_name'], $publicKeys);
+        self::assertSame($publicKeys, $servedKeys);
+        self::assertNotContains('contact_email', $servedKeys);
+        self::assertStringNotContainsString('@example.test', (string) json_encode($entry['formFields']));
+    }
+
+    private function capturedAt(string $registrationId): ?string
+    {
+        $stmt = $this->pdo->prepare('SELECT form_snapshot_captured_at FROM registrations WHERE id = :id');
+        $stmt->execute(['id' => $registrationId]);
+        $value = $stmt->fetchColumn();
+
+        return $value === false || $value === null ? null : (string) $value;
+    }
+
     private function makeFirstNameAndShirtSizePublic(): void
     {
         $this->fields->ensureSystemCatalog($this->eventId);

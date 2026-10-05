@@ -46,6 +46,11 @@ final class PP18SchedulerMigrationTest extends TestCase
         self::assertSame('varchar(64)', strtolower((string) $reminder['COLUMN_TYPE']));
         self::assertSame('YES', $reminder['IS_NULLABLE']);
 
+        $attempts = $this->column('bz_webhook_outbox', 'attempts');
+        self::assertSame('NO', $attempts['IS_NULLABLE']);
+        self::assertSame('0', (string) $attempts['COLUMN_DEFAULT']);
+        self::assertSame('YES', $this->column('bz_webhook_outbox', 'next_attempt_at')['IS_NULLABLE']);
+
         $runs = $this->column('scheduler_job_runs', 'last_started_at');
         self::assertSame('NO', $runs['IS_NULLABLE']);
         self::assertSame('YES', $this->column('scheduler_job_runs', 'last_error_class')['IS_NULLABLE']);

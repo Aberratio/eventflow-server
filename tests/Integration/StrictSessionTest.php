@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Database\Migrator;
 use ZmierzymyCzas\Support\Env;
+use ZmierzymyCzas\Tests\Support\FailOncePdo;
 use ZmierzymyCzas\Tests\Support\FaultInjectingPdo;
 use ZmierzymyCzas\Tests\Support\FaultInjectingRefundPdo;
 use ZmierzymyCzas\Tests\Support\SavepointPdo;
@@ -69,6 +70,7 @@ final class StrictSessionTest extends TestCase
         $this->assertStrictOrServerMode(new SavepointPdo());
         $this->assertStrictOrServerMode(new FaultInjectingPdo('never-matches', new \PDOException('x')));
         $this->assertStrictOrServerMode(new FaultInjectingRefundPdo('none'));
+        $this->assertStrictOrServerMode(new FailOncePdo('never-matches', new \PDOException('x')));
     }
 
     public function testStrictSessionRejectsMissingNotNullColumn(): void

@@ -946,7 +946,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // Each side gets an explicit field whitelist (UserUpdatePolicy) — role,
         // status, eventLimit, organizerPackageCredits and password* are never
         // accepted here; those go through the dedicated staff endpoints.
-        $api->patch('/users/{id}', function (Request $request, Response $response, array $args) use ($users, $body, $isSelf, $isAccountManager, $isSuperAdmin, $touchesAdminAccount, $logActivity) {
+        $api->patch('/users/{id}', function (Request $request, Response $response, array $args) use ($users, $pdo, $body, $isSelf, $isAccountManager, $isSuperAdmin, $touchesAdminAccount, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $targetId = (string) $args['id'];
             $self = $isSelf($targetId, $auth);
@@ -984,7 +984,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 );
             }
             $allowed = $policyResult['allowed'];
-            if (isset($allowed['email']) && strtolower(trim((string) $allowed['email'])) !== strtolower(trim((string) ($existing['email'] ?? '')))) {
+            $emailChanged = isset($allowed['email'])
+                && strtolower(trim((string) $allowed['email'])) !== strtolower(trim((string) ($existing['email'] ?? '')));
+            if ($emailChanged) {
                 $existingWithEmail = $users->findByEmail((string) $allowed['email']);
                 if ($existingWithEmail !== null && (string) $existingWithEmail['id'] !== $targetId) {
                     return JsonResponder::error($response, 'email_taken', 'Ten adres e-mail jest już zajęty.', 409);
@@ -995,7 +997,22 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
             }
             $allowed = $urlCheck['payload'];
-            $updated = $users->update($targetId, $allowed);
+            $pdo->beginTransaction();
+            try {
+                $users->update($targetId, $allowed);
+                if ($emailChanged) {
+                    // PP.78: staff typed a new address. Nobody has proven it, and every session ends
+                    // (the JWT carries the old e-mail; same rule as the confirmed self change).
+                    $users->unverifyEmailEndingSessions($targetId);
+                }
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+            $updated = $users->find($targetId);
             $logActivity($auth, 'user_updated', 'Zaktualizowano konto użytkownika', 'user', $targetId, (string) ($updated['name'] ?? ''));
             return JsonResponder::ok($response, $updated);
         })
@@ -1016,7 +1033,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
             $role = $body($request)['role'] ?? null;
             // Authorization first, then validation.
-            if ($touchesAdminAccount($existing, ['role' => $role]) && !$isSuperAdmin($request)) {
+            if ($touchesAdminAccount($existing, ['role' => is_string($role) ? $role : '']) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can modify admin roles', 403);
             }
             if (!is_string($role) || !in_array($role, UserRepository::ROLES, true)) {

@@ -74,15 +74,18 @@ final class ResultRepository extends Repository
     {
         $where = [];
         $params = [];
+        // PP.76: only scalar query params count; an array value (?search[]=x) is ignored.
+        $scalar = static fn (mixed $value): bool => (is_string($value) || is_int($value)) && !empty($value);
         foreach (['eventId' => 'event_id', 'distanceId' => 'distance_id', 'category' => 'category', 'gender' => 'gender'] as $input => $column) {
-            if (!empty($filters[$input])) {
+            if ($scalar($filters[$input] ?? null)) {
                 $where[] = "r.{$column} = :{$input}";
                 $params[$input] = $filters[$input];
             }
         }
-        if (!empty($filters['search'])) {
-            $where[] = '(r.user_name LIKE :search OR r.bib_number LIKE :search)';
-            $params['search'] = '%' . $filters['search'] . '%';
+        if ($scalar($filters['search'] ?? null)) {
+            // PP.76: native prepares (ATTR_EMULATE_PREPARES=false) reject a repeated named placeholder (HY093).
+            $where[] = '(r.user_name LIKE :searchName OR r.bib_number LIKE :searchBib)';
+            $params['searchName'] = $params['searchBib'] = '%' . $filters['search'] . '%';
         }
         $whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';
         $pagination = $this->pagination($filters);

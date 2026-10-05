@@ -40,6 +40,8 @@ interface CentralMailerClientInterface
      *         strong signal the caller's HTML rendering was not deterministic.
      * @throws RecipientSuppressedException the recipient is on Central Mailer's
      *         suppression list (HTTP 422, §1.2) — undocumented in its own OpenAPI.
+     * @throws RateLimitedException HTTP 429; carries the Retry-After seconds when sent.
+     * @throws CentralMailerRejectedException HTTP 400/413: a permanent rejection.
      */
     public function enqueue(array $email, ?string $idempotencyKey = null): array;
 

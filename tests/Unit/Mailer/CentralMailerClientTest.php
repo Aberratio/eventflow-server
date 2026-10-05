@@ -7,7 +7,9 @@ namespace ZmierzymyCzas\Tests\Unit\Mailer;
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerClient;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerRejectedException;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\IdempotencyConflictException;
+use ZmierzymyCzas\Domain\Mailer\CentralMailer\RateLimitedException;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\RecipientSuppressedException;
 use ZmierzymyCzas\Domain\Mailer\Http\HttpResponse;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
@@ -98,6 +100,66 @@ final class CentralMailerClientTest extends TestCase
 
         $this->expectException(RecipientSuppressedException::class);
         $this->client->enqueue(['to' => 'blocked@example.test', 'subject' => 's', 'html' => '<p>x</p>']);
+    }
+
+    public function testRateLimitedResponseThrowsWithRetryAfter(): void
+    {
+        $email = ['to' => 'a@b.test', 'subject' => 's', 'html' => '<p>x</p>'];
+
+        $this->http->queueResponse(new HttpResponse(429, '{"error":"rate_limited"}', ['retry-after' => '120']));
+        try {
+            $this->client->enqueue($email);
+            self::fail('Expected RateLimitedException');
+        } catch (RateLimitedException $e) {
+            self::assertSame(120, $e->retryAfterSeconds);
+        }
+
+        $this->http->queueResponse(new HttpResponse(429, '{}', ['Retry-After' => '45']));
+        try {
+            $this->client->enqueue($email);
+            self::fail('Expected RateLimitedException');
+        } catch (RateLimitedException $e) {
+            self::assertSame(45, $e->retryAfterSeconds, 'header lookup is case-insensitive');
+        }
+
+        $this->http->queueResponse(new HttpResponse(429, '{}'));
+        try {
+            $this->client->enqueue($email);
+            self::fail('Expected RateLimitedException');
+        } catch (RateLimitedException $e) {
+            self::assertNull($e->retryAfterSeconds);
+        }
+
+        $this->http->queueResponse(new HttpResponse(429, '{}', ['Retry-After' => gmdate('D, d M Y H:i:s', time() + 90) . ' GMT']));
+        try {
+            $this->client->enqueue($email);
+            self::fail('Expected RateLimitedException');
+        } catch (RateLimitedException $e) {
+            self::assertGreaterThanOrEqual(85, $e->retryAfterSeconds);
+            self::assertLessThanOrEqual(90, $e->retryAfterSeconds);
+        }
+
+        $this->http->queueResponse(new HttpResponse(429, '{}', ['Retry-After' => 'soon']));
+        try {
+            $this->client->enqueue($email);
+            self::fail('Expected RateLimitedException');
+        } catch (RateLimitedException $e) {
+            self::assertNull($e->retryAfterSeconds);
+        }
+    }
+
+    public function testBadRequestIsAPermanentRejection(): void
+    {
+        $this->http->queueResponse(new HttpResponse(400, json_encode(['error' => 'validation_error'])));
+        $this->expectException(CentralMailerRejectedException::class);
+        $this->client->enqueue(['to' => 'a@b.test', 'subject' => 's', 'html' => '<p>x</p>']);
+    }
+
+    public function testPayloadTooLargeIsAPermanentRejection(): void
+    {
+        $this->http->queueResponse(new HttpResponse(413, 'too large'));
+        $this->expectException(CentralMailerRejectedException::class);
+        $this->client->enqueue(['to' => 'a@b.test', 'subject' => 's', 'html' => '<p>x</p>']);
     }
 
     public function testEnqueueThrowsOnOtherFailureStatus(): void

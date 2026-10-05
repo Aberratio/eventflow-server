@@ -140,5 +140,37 @@ final class CentralMailerClient implements CentralMailerClientInterface
         if ($response->status === 422) {
             throw new RecipientSuppressedException('central_mailer_recipient_suppressed: ' . $response->body);
         }
+        if ($response->status === 429) {
+            throw new RateLimitedException('central_mailer_rate_limited: HTTP 429', self::retryAfterSeconds($response->headers));
+        }
+        if ($response->status === 400 || $response->status === 413) {
+            throw new CentralMailerRejectedException('central_mailer_rejected: HTTP ' . $response->status . ' ' . mb_substr($response->body, 0, 300));
+        }
+    }
+
+    /**
+     * Seconds from a Retry-After header (delta-seconds or HTTP-date); header names are
+     * matched case-insensitively. Null when missing or unparseable.
+     *
+     * @param array<string, string> $headers
+     */
+    private static function retryAfterSeconds(array $headers): ?int
+    {
+        $value = null;
+        foreach ($headers as $name => $headerValue) {
+            if (strtolower((string) $name) === 'retry-after') {
+                $value = trim((string) $headerValue);
+                break;
+            }
+        }
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (ctype_digit($value)) {
+            return (int) $value;
+        }
+        $timestamp = strtotime($value);
+
+        return $timestamp === false ? null : max(0, $timestamp - time());
     }
 }

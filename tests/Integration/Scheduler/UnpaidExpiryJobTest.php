@@ -141,7 +141,7 @@ final class UnpaidExpiryJobTest extends TestCase
     #[DataProvider('moneyArrivedStatuses')]
     public function testKeepsPendingWithAmountMismatchOrPaidTransaction(string $transactionStatus): void
     {
-        [$id, $distanceId] = $this->pendingRegistration('tx-' . $transactionStatus);
+        [$id, $distanceId] = $this->pendingRegistration('tx-' . substr($transactionStatus, 0, 3));
         $now = new \DateTimeImmutable();
         $this->setExpiry($id, $now->modify('-2 hours'));
         $this->insertTransaction($id, 'TX-' . $this->slugPrefix . '-' . $transactionStatus, $transactionStatus);

@@ -81,7 +81,12 @@ final class BzOutboxRetryTest extends TestCase
         self::assertCount($callsBefore + 1, $this->http->calls);
         $retry = $this->http->calls[$callsBefore];
         $first = $this->http->calls[0];
-        self::assertSame($first['body'], $retry['body'], 'the payload is resent verbatim');
+        // The stored JSON column may reorder keys (MySQL normalises them), so compare the decoded payloads.
+        self::assertEquals(
+            self::sortedRecursively(json_decode((string) $first['body'], true)),
+            self::sortedRecursively(json_decode((string) $retry['body'], true)),
+            'the same JSON payload is resent'
+        );
         self::assertSame($first['headers']['Idempotency-Key'] ?? null, $retry['headers']['Idempotency-Key'] ?? null);
         self::assertSame($key, $retry['headers']['Idempotency-Key'] ?? null);
         $after = $this->repo->findByIdempotencyKey($key);
@@ -144,6 +149,18 @@ final class BzOutboxRetryTest extends TestCase
         $job = new BzOutboxRetryJob($this->pdo, null, new BzWebhookConfig(baseUrl: ''));
 
         self::assertSame(['skipped' => 1], $job->run(new \DateTimeImmutable()));
+    }
+
+    /** @param mixed $value */
+    private static function sortedRecursively(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+        $value = array_map([self::class, 'sortedRecursively'], $value);
+        ksort($value);
+
+        return $value;
     }
 
     private function job(): BzOutboxRetryJob

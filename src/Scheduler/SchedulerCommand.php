@@ -22,7 +22,7 @@ final class SchedulerCommand
     public const EXIT_USAGE = 64;
 
     /** @param list<string> $args */
-    public static function main(array $args, LoggerInterface $logger, ?PDO $pdo = null): int
+    public static function main(array $args, LoggerInterface $logger, ?PDO $pdo = null, ?callable $jobsFactory = null): int
     {
         $only = null;
         $status = false;
@@ -71,11 +71,20 @@ final class SchedulerCommand
             return self::EXIT_OK;
         }
 
+        // Wiring errors (bad env, missing class) get a defined exit code instead of an uncaught fatal.
+        try {
+            $jobs = $jobsFactory !== null ? $jobsFactory($pdo, $logger) : SchedulerJobs::build($pdo, $logger);
+        } catch (\Throwable $e) {
+            $logger->critical('Scheduler could not build its jobs', ['exception' => $e, 'alert' => 'scheduler.job_failed']);
+
+            return self::EXIT_BOOTSTRAP;
+        }
+
         $runner = new SchedulerRunner(
             new MysqlAdvisoryLock($pdo),
             new SchedulerRunLog($pdo, $logger),
             $logger,
-            SchedulerJobs::build($pdo, $logger),
+            $jobs,
             $pdo,
             static function (string $line): void {
                 echo $line . "\n";

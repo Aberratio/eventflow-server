@@ -90,7 +90,7 @@ final class BzWebhookOutboxService
     /**
      * PP.18 (scheduler job bz.outbox_retry): retries `failed` pushes after their backoff and `queued`
      * ones older than STALE_QUEUED_MINUTES (the sending process died). The payload (with its original
-     * `occurredAt`) and the Idempotency-Key are resent verbatim; BZ dedups on the key. Never logs the
+     * `occurredAt`) and the Idempotency-Key are resent (the same JSON content; the JSON column may reorder keys); BZ dedups on the key. Never logs the
      * token or the payload.
      *
      * @param callable(string): ?string $organizationTokenFor null = BZ integration off / no token for that Event

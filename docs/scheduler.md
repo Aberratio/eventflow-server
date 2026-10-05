@@ -58,7 +58,7 @@ grep 'Scheduled job' storage/logs/app-$(date +%F).log
 php -r 'echo date_default_timezone_get();'   # must match the web runtime (phpinfo)
 ```
 
-Exit codes: 0 ok / skipped / another run holds the lock; 1 a job threw; 2 database unreachable;
+Exit codes: 0 ok / skipped / another run holds the lock; 1 a job threw; 2 database unreachable or the jobs could not be built;
 64 usage error. A timezone mismatch between CLI and web can only delay processing, never expire
 or remind early.
 

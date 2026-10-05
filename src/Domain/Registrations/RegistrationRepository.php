@@ -2193,7 +2193,9 @@ SQL;
      * The claim happens before the send (at most once); the outbox row is durable even when the
      * HTTP call fails (PP.19 retries failed outbox rows).
      *
-     * @return array{checked: int, sent: int}|array{skipped: int}
+     * `failed` counts reminders whose send threw (the outbox row is normally kept as `failed`; PP.19 retries it).
+     *
+     * @return array{checked: int, sent: int, failed: int}|array{skipped: int}
      */
     public function sendDuePaymentReminders(\DateTimeImmutable $now, int $limit = self::REMINDER_BATCH_LIMIT): array
     {
@@ -2221,6 +2223,7 @@ SQL;
         $rows = $stmt->fetchAll();
 
         $sent = 0;
+        $failed = 0;
         foreach ($rows as $row) {
             $raw = (string) $row['paymentExpiresAt'];
             try {
@@ -2266,11 +2269,12 @@ SQL;
                 );
                 $sent++;
             } catch (\Throwable $e) {
-                $this->logger->warning('Payment reminder could not be enqueued', ['registrationId' => (string) $row['id'], 'exception' => $e]);
+                $failed++;
+                $this->logger->warning('Payment reminder send failed; the outbox row is kept as failed', ['registrationId' => (string) $row['id'], 'exception' => $e]);
             }
         }
 
-        return ['checked' => count($rows), 'sent' => $sent];
+        return ['checked' => count($rows), 'sent' => $sent, 'failed' => $failed];
     }
 
     /** `payment_config.type` of an event row's raw JSON ('' when unset), same decoding as paymentExpiryDeadline(). */

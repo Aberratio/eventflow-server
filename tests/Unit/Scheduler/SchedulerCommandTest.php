@@ -31,6 +31,26 @@ final class SchedulerCommandTest extends TestCase
         self::assertSame(64, $this->mainQuietly(['--job=nope.nothing']));
     }
 
+    public function testJobWiringErrorExitsWithBootstrapCodeAndLogsAlert(): void
+    {
+        $handler = new \Monolog\Handler\TestHandler();
+        $logger = new \Monolog\Logger('test', [$handler]);
+
+        ob_start();
+        $exit = SchedulerCommand::main(
+            [],
+            $logger,
+            new \PDO('sqlite::memory:'),
+            static function (): array {
+                throw new \RuntimeException('bad wiring');
+            }
+        );
+        ob_end_clean();
+
+        self::assertSame(SchedulerCommand::EXIT_BOOTSTRAP, $exit);
+        self::assertTrue($handler->hasCriticalThatContains('could not build its jobs'));
+    }
+
     public function testHelpExitsZero(): void
     {
         ob_start();

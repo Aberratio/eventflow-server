@@ -277,4 +277,26 @@ storage); Q3 release dirs plus symlink (not before launch).
 
 ## 13. Scheduler cron
 
-Added by PP.18 (`bin/scheduler.php`); this line is a placeholder that PP.18 fills in.
+Added by PP.18. Registration expiry, payment reminders, form snapshots, BZ push retries and mail
+status reconciliation run from `bin/scheduler.php`, not from web requests. Without this cron nothing
+expires and no reminders go out, on staging as well as production. Full runbook:
+[scheduler.md](scheduler.md).
+
+- **Cron line** (hosting panel "Zadania cron" or `crontab -e`; use the same PHP binary as `bin/migrate.php`):
+
+  ```
+  */5 * * * * /usr/local/bin/php /ABSOLUTE/BACKEND_REMOTE_DIR/bin/scheduler.php >/dev/null 2>&1
+  ```
+
+  `BACKEND_REMOTE_DIR` is the path from the deploy secret; the script reads the `.env` there.
+- **Frequency:** every 5 minutes (required: the gateway window is 45 min with a 15 min reminder lead).
+- **Overlap lock:** a MySQL advisory lock (`GET_LOCK`, per database). A run that finds it held logs the
+  WARNING `Scheduler run skipped: another run holds the lock` and exits 0. The lock is freed when the
+  holding process dies.
+- **Exit codes:** 0 ok / skipped / lock held; 1 a job threw; 2 database unreachable or job wiring failed;
+  64 usage error.
+- **Run by hand:** `php bin/scheduler.php` (one line per job), `--status`, `--list`,
+  `--job=registrations.expire_unpaid`.
+- **Alerts:** `scheduler.job_failed` (a job threw or the jobs could not be built; the other jobs still ran)
+  and `payments.paid_after_expiry` (money arrived for a Zapis that could not be confirmed: refund it or
+  admit the participant manually). Both need an admin to look at the log.

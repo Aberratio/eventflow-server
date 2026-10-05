@@ -566,6 +566,29 @@ final class ResultsContractTest extends HttpTestCase
         self::assertSame($this->participant['name'], $stmt->fetchColumn());
     }
 
+    /** PP.76: the search used :search twice in one native prepare -> HY093 -> 500 for every search. */
+    public function testResultsSearchFindsByName(): void
+    {
+        $name = $this->prefix . ' Searchable';
+        $created = $this->request('POST', '/api/v1/results', $this->resultPayload(['userName' => $name]), $this->organizerHeaders());
+        self::assertSame(201, $created->getStatusCode());
+
+        $response = $this->request('GET', '/api/v1/results?search=' . urlencode($this->prefix));
+        $payload = $this->json($response);
+
+        self::assertSame(200, $response->getStatusCode(), json_encode($payload));
+        self::assertCount(1, $payload['data']);
+        self::assertSame($name, $payload['data'][0]['userName']);
+    }
+
+    /** PP.76: array-valued query params are ignored (public read), not a 500. */
+    public function testResultsListIgnoresArrayValuedFilters(): void
+    {
+        $response = $this->request('GET', '/api/v1/results?search[]=x&eventId[]=y');
+
+        self::assertSame(200, $response->getStatusCode(), (string) $response->getBody());
+    }
+
     private function resultPayload(array $overrides = []): array
     {
         return array_merge([

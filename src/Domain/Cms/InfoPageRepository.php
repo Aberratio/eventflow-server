@@ -5,9 +5,22 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Cms;
 
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Support\InputRules;
 
 final class InfoPageRepository extends Repository
 {
+    /** PP.76: request-body rules for POST/PATCH /info-pages (see InputRules). */
+    private const INPUT_RULES = [
+        'title' => [InputRules::TEXT_REQUIRED, 'Tytuł strony'],
+        'slug' => [InputRules::TEXT_REQUIRED, 'Adres URL (slug) strony'],
+        'icon' => [InputRules::TEXT, 'Ikona strony'],
+        'description' => [InputRules::TEXT, 'Opis strony'],
+        'published' => [InputRules::BOOL, 'Opublikowana'],
+        'showInFooter' => [InputRules::BOOL, 'Pokaż w stopce'],
+        'showInHeader' => [InputRules::BOOL, 'Pokaż w nagłówku'],
+        'order' => [InputRules::INT, 'Kolejność'],
+    ];
+
     private const COLUMNS = 'id, title, slug, icon, description, content, published, show_in_footer AS showInFooter, show_in_header AS showInHeader, sort_order AS `order`, created_at AS createdAt, updated_at AS updatedAt';
 
     /** @return array<int, array<string, mixed>> */
@@ -36,13 +49,14 @@ final class InfoPageRepository extends Repository
     /** @param array<string, mixed> $data */
     public function create(array $data): array
     {
+        InputRules::check($data, self::INPUT_RULES, true);
         $id = $this->id();
         $this->insert('info_pages', [
             'id' => $id,
             'title' => $data['title'],
             'slug' => $data['slug'],
-            'icon' => $data['icon'],
-            'description' => $data['description'],
+            'icon' => $data['icon'] ?? 'FileText',
+            'description' => $data['description'] ?? '',
             'content' => json_encode($data['content'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             'published' => (int) ($data['published'] ?? false),
             'show_in_footer' => (int) ($data['showInFooter'] ?? false),
@@ -57,6 +71,7 @@ final class InfoPageRepository extends Repository
     /** @param array<string, mixed> $data */
     public function update(string $id, array $data): ?array
     {
+        InputRules::check($data, self::INPUT_RULES, false);
         $mapped = [];
         foreach ([
             'title' => 'title',

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Mailer\CriticalMails;
 
 /**
- * The full 14-item mail catalog from 17-katalog-maili-i-kontrakt-z-mailerem.md
+ * The full 15-item mail catalog from 17-katalog-maili-i-kontrakt-z-mailerem.md
  * §1, as a static lookup: which Central Mailer priority a mail type uses (§2 —
  * `technical` only for authentication, 1-3), whether an organizer may override
  * its template per Wydarzenie (§5 — 4-11 and 13-14 are overridable, 1-3 and 12
@@ -28,6 +28,7 @@ final class MailCatalog
     public const EMAIL_VERIFICATION = 'email_verification';
     public const PASSWORD_RESET = 'password_reset';
     public const ACCOUNT_LOCKED = 'account_locked';
+    public const ACCOUNT_SETUP = 'account_setup';
     public const REGISTRATION_CREATED = 'registration_created';
     public const PAYMENT_CONFIRMED = 'payment_confirmed';
     public const IDENTITY_CODE = 'identity_code';
@@ -77,6 +78,18 @@ final class MailCatalog
                 'defaultSubject' => 'Twoje konto zostało zablokowane',
                 'defaultBodyHtml' => '<p>Twoje konto zostało zablokowane. Powód: {{reason}}.</p>'
                     . '<p>W razie pytań skontaktuj się z nami: {{supportContact}}.</p>',
+            ],
+            // PP.82: password-set link for an account an admin created (systemic, technical queue).
+            self::ACCOUNT_SETUP => [
+                'priority' => self::PRIORITY_TECHNICAL,
+                'overridable' => false,
+                'variables' => ['setupLink', 'expiresInHours'],
+                'defaultSubject' => 'Ustaw hasło do swojego konta w Zmierzymy Czas',
+                'defaultBodyHtml' => '<p>Administrator założył dla Ciebie konto w serwisie Zmierzymy Czas. '
+                    . 'Aby się zalogować, ustaw hasło: <a href="{{setupLink}}">{{setupLink}}</a>.</p>'
+                    . '<p>Link jest ważny przez {{expiresInHours}} godz. Później możesz ustawić hasło przez '
+                    . '„Nie pamiętam hasła” na stronie logowania.</p>'
+                    . '<p>Jeśli nie spodziewasz się tej wiadomości, zignoruj ją.</p>',
             ],
             // 4-11, 13-14: nadpisywalne per Wydarzenie (§5), `normal` queue (§2).
             self::REGISTRATION_CREATED => [

@@ -87,6 +87,22 @@ final class CriticalMailerTest extends TestCase
         self::assertSame('technical', $row['priority']);
     }
 
+    public function testAccountSetupMailUsesTechnicalPriorityAndRendersTheLink(): void
+    {
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-setup', 'status' => 'pending'])));
+        $mailer = $this->mailer();
+        $tokenId = $this->prefix . '-token';
+
+        $row = $mailer->sendAccountSetup($tokenId, 'user@example.test', 'https://app.example.test/reset-password?token=abc', 72);
+
+        self::assertNotNull($row);
+        self::assertSame('technical', $row['priority']);
+        self::assertSame($tokenId . ':' . MailCatalog::ACCOUNT_SETUP . ':v1', $row['idempotencyKey']);
+        $sent = json_decode((string) $this->http->calls[0]['body'], true);
+        self::assertStringContainsString('https://app.example.test/reset-password?token=abc', $sent['html']);
+        self::assertStringContainsString('72 godz.', $sent['html']);
+    }
+
     public function testStandardMailUsesNormalPriority(): void
     {
         $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-2', 'status' => 'pending'])));

@@ -179,15 +179,30 @@ final class UserRepository extends Repository
         $this->updateById('users', $id, ['password_hash' => password_hash($plainPassword, PASSWORD_DEFAULT)]);
     }
 
+    /**
+     * PP.82: an account nobody can sign in to until the owner sets a password through a link.
+     * A real bcrypt hash (same algorithm and cost as every other account) of 32 random bytes that
+     * are discarded: password_verify() never matches, and it takes as long as for any other account,
+     * so the login response time does not reveal accounts without a password.
+     */
+    private static function unusablePasswordHash(): string
+    {
+        return password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT);
+    }
+
     /** @param array<string, mixed> $data */
     public function create(array $data): array
     {
         $id = $this->id();
+        $password = $data['password'] ?? null;
+        $passwordHash = is_string($password) && $password !== ''
+            ? password_hash($password, PASSWORD_DEFAULT)
+            : self::unusablePasswordHash();
         $this->insert('users', [
             'id' => $id,
             'name' => $data['name'],
             'email' => $data['email'],
-            'password_hash' => password_hash((string) ($data['password'] ?? 'demo1234'), PASSWORD_DEFAULT),
+            'password_hash' => $passwordHash,
             'role' => $data['role'] ?? 'participant',
             'phone' => $data['phone'] ?? null,
             'birth_year' => $data['birthYear'] ?? null,

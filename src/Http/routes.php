@@ -927,19 +927,52 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
             return JsonResponder::ok($response, $users->find((string) $args['id']));
         })->add(new AuthMiddleware($jwt));
-        $api->post('/users', function (Request $request, Response $response) use ($users, $body, $isSuperAdmin, $logActivity) {
+        $api->post('/users', function (Request $request, Response $response) use ($users, $pdo, $body, $isSuperAdmin, $logActivity, $mailer, $logger) {
             $payload = $body($request);
             if (in_array((string) ($payload['role'] ?? ''), ['admin', 'superadmin'], true) && !$isSuperAdmin($request)) {
                 return JsonResponder::error($response, 'forbidden', 'Only superadmin can create admin accounts', 403);
+            }
+            // PP.82: the admin never sets or learns a user's password; the owner sets it from the e-mailed link.
+            if (array_key_exists('password', $payload)) {
+                return JsonResponder::error(
+                    $response,
+                    'field_not_editable',
+                    'Hasła nie ustawia administrator. Po utworzeniu konta wyślemy użytkownikowi link do ustawienia hasła.',
+                    422,
+                    ['fields' => ['password']]
+                );
             }
             $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::USER);
             if ($urlCheck['error'] !== null) {
                 return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
             }
             $payload = $urlCheck['payload'];
-            $created = $users->create($payload);
+            $tokens = new ActionTokenRepository($pdo);
+            $pdo->beginTransaction();
+            try {
+                $created = $users->create($payload); // no 'password' key -> unusable hash
+                $setupToken = $tokens->issue((string) $created['id'], ActionTokenPurpose::PASSWORD_RESET, ActionTokenPurpose::ACCOUNT_SETUP_TTL);
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
+            }
+            $setupHours = intdiv(ActionTokenPurpose::ACCOUNT_SETUP_TTL, 3600);
+            $setupLink = rtrim((string) Env::get('APP_URL', ''), '/') . '/reset-password?token=' . $setupToken['raw'];
+            $mailQueued = false;
+            try {
+                $mailQueued = $mailer->sendAccountSetup($setupToken['id'], (string) ($created['email'] ?? ''), $setupLink, $setupHours) !== null;
+            } catch (Throwable $e) {
+                // Ids and the error class only, never the link, the token or the address.
+                $logger->error('Account setup mail could not be queued', ['userId' => (string) $created['id'], 'errorClass' => $e::class]);
+            }
             $logActivity((array) $request->getAttribute('auth'), 'user_created', 'Utworzono konto użytkownika', 'user', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
-            return JsonResponder::ok($response, $created, 'User created', 201);
+            $message = $mailQueued
+                ? 'Konto zostało utworzone. Wysłaliśmy na adres ' . $created['email'] . ' link do ustawienia hasła (ważny ' . $setupHours . ' godz.).'
+                : 'Konto zostało utworzone, ale nie udało się wysłać linku do ustawienia hasła. Użytkownik może ustawić hasło przez „Nie pamiętam hasła” na stronie logowania.';
+            return JsonResponder::ok($response, $created, $message, 201);
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));
         // PP.1: self or an account manager (admin/superadmin) editing someone else.

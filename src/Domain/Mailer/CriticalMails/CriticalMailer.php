@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
 
 /**
- * The full 14-item critical mail catalog (17-katalog-maili-i-kontrakt-z-mailerem.md
+ * The full 15-item critical mail catalog (17-katalog-maili-i-kontrakt-z-mailerem.md
  * §1), one typed method per mail type, built on top of E1.9's
  * CentralMailerOutboxService. This is the only class in the codebase that
  * knows how to turn "registration X just got paid" into an actual outbox row:
@@ -73,6 +73,18 @@ final class CriticalMailer
         return $this->send(MailCatalog::ACCOUNT_LOCKED, $userId, null, $email, [
             'reason' => $reason,
             'supportContact' => $supportContact,
+        ]);
+    }
+
+    /**
+     * PP.82: the password-set link for an account an admin created.
+     * @param string $sourceEntityId the action-token id (unique per mail instance, see sendEmailVerification)
+     */
+    public function sendAccountSetup(string $sourceEntityId, string $email, string $setupLink, int $expiresInHours): ?array
+    {
+        return $this->send(MailCatalog::ACCOUNT_SETUP, $sourceEntityId, null, $email, [
+            'setupLink' => $setupLink,
+            'expiresInHours' => (string) $expiresInHours,
         ]);
     }
 

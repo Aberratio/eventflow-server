@@ -8,16 +8,16 @@ use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailCatalog;
 
 /**
- * Pure data assertions on the 17-katalog-maili §1/§2/§5 catalog: all 14 mail
+ * Pure data assertions on the 17-katalog-maili §1/§2/§5 catalog: all 15 mail
  * types are present, the `technical` queue is scoped to authentication only,
  * and the overridable/systemic split matches §5 exactly (1-3 and 12 systemic;
  * everything else overridable).
  */
 final class MailCatalogTest extends TestCase
 {
-    public function testCatalogHasExactlyFourteenMailTypes(): void
+    public function testCatalogHasExactlyFifteenMailTypes(): void
     {
-        self::assertCount(14, MailCatalog::all());
+        self::assertCount(15, MailCatalog::all());
     }
 
     public function testOnlyAuthenticationMailsUseTheTechnicalQueue(): void
@@ -26,6 +26,7 @@ final class MailCatalogTest extends TestCase
             MailCatalog::EMAIL_VERIFICATION,
             MailCatalog::PASSWORD_RESET,
             MailCatalog::ACCOUNT_LOCKED,
+            MailCatalog::ACCOUNT_SETUP,
         ];
 
         foreach (MailCatalog::all() as $mailType => $definition) {
@@ -43,6 +44,7 @@ final class MailCatalogTest extends TestCase
             MailCatalog::EMAIL_VERIFICATION,
             MailCatalog::PASSWORD_RESET,
             MailCatalog::ACCOUNT_LOCKED,
+            MailCatalog::ACCOUNT_SETUP,
             MailCatalog::SHOP_ORDER_STATUS,
         ];
 

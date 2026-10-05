@@ -348,16 +348,17 @@ final class AccountSessionContractTest extends HttpTestCase
         $response = $this->request(
             'POST',
             '/api/v1/users',
-            ['name' => 'Created By Staff', 'email' => $email, 'password' => 'demo1234', 'role' => 'participant'],
+            ['name' => 'Created By Staff', 'email' => $email, 'role' => 'participant'],
             $this->auth($adminToken)
         );
 
         self::assertSame(201, $response->getStatusCode());
-        self::assertFalse($this->json($response)['data']['emailVerified']);
-        $login = $this->loginResponse($email);
-        self::assertSame(200, $login->getStatusCode());
-        $me = $this->me((string) $this->json($login)['data']['token']);
-        self::assertFalse($this->json($me)['data']['emailVerified']);
+        $created = $this->json($response)['data'];
+        self::assertFalse($created['emailVerified']);
+        $fetched = $this->request('GET', '/api/v1/users/' . $created['id'], [], $this->auth($adminToken));
+        self::assertFalse($this->json($fetched)['data']['emailVerified']);
+        // PP.82: no known default password; the owner sets one from the e-mailed link.
+        self::assertSame(401, $this->loginResponse($email)->getStatusCode());
     }
 
     public function testDeletedAccountAndSelfEscalationRegressions(): void

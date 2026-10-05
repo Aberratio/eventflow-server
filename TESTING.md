@@ -41,6 +41,20 @@ process environment for that one command's lifetime (`ZmierzymyCzas\Support\Env:
 applied once in `tests/bootstrap.php`, before anything under test can call `Env::load()`
 again).
 
+## Strict sql_mode in tests
+
+Local XAMPP MariaDB is not strict; production, staging and CI (MySQL 8.4) are. So every test
+database connection (`Connection::fromEnv()` and the PDO test doubles) runs
+`SET SESSION sql_mode` with MySQL 8.4's defaults (`TestDatabase::TEST_SQL_MODE`), set from
+`tests/bootstrap.php` and `tests/bin/test-db.php` through the `DB_SESSION_SQL_MODE` env key
+(read only by `Connection`; production never sets it). A missing NOT NULL column or a bad
+ENUM value therefore fails locally the way it fails in production.
+
+- `ZC_TEST_DB_SQL_MODE=<mode>` uses another mode; `ZC_TEST_DB_SQL_MODE=server` keeps the
+  server's own (opt-out, e.g. to bisect).
+- A new PDO test double must call `Connection::applySessionSqlMode($this)` right after
+  `parent::__construct(...)`; `StrictSessionTest` guards the existing ones.
+
 ## MySQL 8.4 portability check with docker
 
 Production and staging run MySQL 8.4; the local MariaDB most developers have does not

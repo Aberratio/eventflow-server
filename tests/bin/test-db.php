@@ -40,6 +40,7 @@ if (getenv('ZC_TEST_DB_DATABASE') === false) {
 
 TestDatabase::applyOverrides();
 TestDatabase::assertIsTestDatabase();
+TestDatabase::applySessionSqlMode();
 
 if ($mode === 'prepare') {
     // Drop, migrate, seed — the same sequence CI runs, against the test database.

@@ -83,6 +83,7 @@ final class RegistrationRepository extends Repository
     private const EXPIRY_PER_DISTANCE_LIMIT = 50;
     public const GATEWAY_IN_FLIGHT_GRACE_MINUTES = 15;
     public const REMINDER_BATCH_LIMIT = 200;
+    public const SNAPSHOT_BATCH_LIMIT = 500;
     private const REMINDER_LEAD_GATEWAY_MINUTES = 15;
     private const REMINDER_LEAD_TRANSFER_HOURS = 24;
 
@@ -801,8 +802,8 @@ SQL;
      * consulted, so a post-registration typo fix on the Competitor keeps
      * showing up here exactly as before this ticket); once `finished`, every
      * Zapis instead serves its snapshot (see attachFrozenFormFields()'s own
-     * docblock for why "first read after finish" stands in for "the moment of
-     * finish" in this no-cron codebase).
+     * docblock: the scheduler captures it shortly after the finish, the first
+     * read after finish is the fallback).
      *
      * @param array<int, array<string, mixed>> $registrations
      * @return array<int, array<string, mixed>>
@@ -887,22 +888,23 @@ SQL;
 
     /**
      * Freezes and serves the finished-Event snapshot (spec 10 pkt 2, "przy
-     * przejściu Wydarzenia w stan zakończony Zapis utrwala snapshot"). This
-     * codebase has no cron (see EventRepository::lazilyFinishPastEvents()'s own
-     * docblock) — the Event's row already flips to `finished` lazily, on the
-     * first read after its date passes, before this ever runs (every caller of
-     * publicStartList() reads the Event first — see routes.php's start-list
-     * handler, which calls `$events->find()` before `$registrations->
-     * publicStartList()`). This mirrors that same lazy-on-read shape one level
-     * down: the FIRST read of a given Registration's form fields after its
-     * Event is `finished` computes the payload once (resolveLiveFormFields(),
-     * shared with the pre-finish path) and freezes it
+     * przejściu Wydarzenia w stan zakończony Zapis utrwala snapshot").
+     * PP.18: the scheduler (registrations.form_snapshots, captureMissingFormSnapshots())
+     * captures it shortly after the Event finishes; this read-time capture stays as the
+     * fallback for a Zapis the job has not reached yet. Either way the payload is computed
+     * once (resolveLiveFormFields(), shared with the pre-finish path) and frozen
      * (captureFormSnapshotIfMissing() — guarded so it can never overwrite an
-     * already-captured snapshot, "stamped once" per the ticket); every later
-     * read — including one where the underlying Competitor was edited
-     * afterward — serves that same frozen JSON, never recomputed. The only
-     * thing that can ever change a captured snapshot afterward is the explicit,
-     * audited correction endpoint (correctFormSnapshot()).
+     * already-captured snapshot, "stamped once" per the ticket); every later read —
+     * including one where the underlying Competitor was edited afterward — serves that
+     * same frozen JSON, never recomputed. The only thing that can ever change a captured
+     * snapshot afterward is the explicit, audited correction endpoint (correctFormSnapshot()).
+     *
+     * The snapshot is captured with the SUPERSET column set
+     * (FormFieldRepository::snapshotColumns()), not with the calling reader's `$columns`, and
+     * it is always served FILTERED down to `$columns`. Otherwise whichever reader happened to
+     * capture first (BZ pull, export, public list) would freeze its own set and every later
+     * reader would be served it whole, including fields it must not see (e.g. contact_email on
+     * the public start list).
      *
      * @param array<int, array<string, mixed>> $registrations
      * @param array<int, array<string, mixed>> $columns
@@ -917,17 +919,95 @@ SQL;
             $registrations,
             static fn (array $r): bool => !array_key_exists($r['id'], $snapshots)
         ));
-        if ($uncaptured !== []) {
-            foreach ($this->resolveLiveFormFields($uncaptured, $columns) as $resolved) {
+        foreach ($this->captureSnapshotsFor($uncaptured) as $registrationId => $formFields) {
+            $snapshots[$registrationId] = $formFields;
+        }
+
+        $wanted = array_map(static fn (array $c): string => (string) $c['fieldKey'], $columns);
+
+        return array_map(function (array $r) use ($snapshots, $wanted): array {
+            $byKey = [];
+            foreach ($snapshots[$r['id']] ?? [] as $entry) {
+                if (isset($entry['fieldKey'])) {
+                    $byKey[(string) $entry['fieldKey']] = $entry;
+                }
+            }
+            $served = [];
+            foreach ($wanted as $key) {
+                if (isset($byKey[$key])) {
+                    $served[] = $byKey[$key];
+                }
+            }
+
+            return [...$r, 'formFields' => $served];
+        }, $registrations);
+    }
+
+    /**
+     * Resolves and freezes the superset snapshot for Zapisy that have none yet (grouped per
+     * Event, the superset being per-Event).
+     *
+     * @param array<int, array<string, mixed>> $registrations rows with `id`, `eventId` and the COLUMNS aliases
+     * @return array<string, array<int, array<string, mixed>>> registration id => the captured (superset) formFields
+     */
+    private function captureSnapshotsFor(array $registrations): array
+    {
+        $byEvent = [];
+        foreach ($registrations as $registration) {
+            $byEvent[(string) $registration['eventId']][] = $registration;
+        }
+
+        $captured = [];
+        $fieldRepository = new FormFieldRepository($this->pdo);
+        foreach ($byEvent as $eventId => $group) {
+            $columns = $fieldRepository->snapshotColumns((string) $eventId);
+            foreach ($this->resolveLiveFormFields($group, $columns) as $resolved) {
                 $this->captureFormSnapshotIfMissing((string) $resolved['id'], $resolved['formFields']);
-                $snapshots[$resolved['id']] = $resolved['formFields'];
+                $captured[(string) $resolved['id']] = $resolved['formFields'];
             }
         }
 
-        return array_map(
-            static fn (array $r): array => [...$r, 'formFields' => $snapshots[$r['id']] ?? []],
-            $registrations
+        return $captured;
+    }
+
+    /**
+     * PP.18: scheduler entry point (registrations.form_snapshots) — freezes the E1.14 form
+     * snapshot for every non-removed Zapis of a finished Event that has none yet, so the
+     * snapshot is taken shortly after the finish rather than at "the first read". Idempotent:
+     * a captured (or corrected) snapshot is never touched (captureFormSnapshotIfMissing()'s
+     * guard), and an Event with no snapshot columns captures `[]`, so its Zapisy are not
+     * re-selected forever. Batch-limited; a first run on a database with historical finished
+     * Events simply takes several ticks. `$onlyEventId` restricts the batch to one Event (tests, ad-hoc runs).
+     *
+     * @return int number of Zapisy captured
+     */
+    public function captureMissingFormSnapshots(int $limit = self::SNAPSHOT_BATCH_LIMIT, ?string $onlyEventId = null): int
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT r.id, r.event_id AS eventId FROM registrations r INNER JOIN events e ON e.id = r.event_id
+             WHERE e.publication_status = 'finished' AND r.status <> 'removed' AND r.form_snapshot_captured_at IS NULL"
+            . ($onlyEventId !== null ? ' AND r.event_id = :onlyEventId' : '')
+            . ' ORDER BY r.event_id, r.id LIMIT :limit'
         );
+        if ($onlyEventId !== null) {
+            $stmt->bindValue('onlyEventId', $onlyEventId);
+        }
+        $stmt->bindValue('limit', $limit, \PDO::PARAM_INT);
+        $stmt->execute();
+        $byEvent = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $byEvent[(string) $row['eventId']][] = (string) $row['id'];
+        }
+
+        $captured = 0;
+        foreach ($byEvent as $ids) {
+            $placeholders = implode(', ', array_fill(0, count($ids), '?'));
+            $rows = $this->pdo->prepare('SELECT ' . self::COLUMNS . " FROM registrations WHERE id IN ({$placeholders})");
+            $rows->execute($ids);
+            $captured += count($this->captureSnapshotsFor($rows->fetchAll()));
+        }
+
+        return $captured;
     }
 
     /**

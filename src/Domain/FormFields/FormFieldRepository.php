@@ -394,6 +394,24 @@ final class FormFieldRepository extends Repository
     }
 
     /**
+     * PP.18: the superset the E1.14 form snapshot is captured with — every non-confidential
+     * field in form order, including the 13 system positions (ensureSystemCatalog(), so the BZ
+     * identity fields always exist). A superset of publicListColumns(), exportColumns() and the
+     * BZ identity + bzVisibleColumns() sets: whichever reader (or the scheduler) captures first,
+     * every other reader can be served from it by filtering down to its own column set. Never
+     * serve it unfiltered.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function snapshotColumns(string $eventId): array
+    {
+        return array_values(array_filter(
+            $this->ensureSystemCatalog($eventId),
+            static fn (array $field): bool => empty($field['isConfidential'])
+        ));
+    }
+
+    /**
      * E2.5: automatic answer-count aggregation for every choice-type custom
      * field (single_choice/multi_choice/consent) of an event — no organizer
      * opt-in flag (model answer §1: "bez osobnej flagi 'zestawialne'"). Only

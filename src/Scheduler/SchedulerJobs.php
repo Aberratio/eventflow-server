@@ -15,6 +15,7 @@ use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
 use ZmierzymyCzas\Domain\Mailer\Http\CurlHttpClient as MailerCurlHttpClient;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
+use ZmierzymyCzas\Scheduler\Jobs\CaptureFormSnapshotsJob;
 use ZmierzymyCzas\Scheduler\Jobs\ExpireUnpaidRegistrationsJob;
 use ZmierzymyCzas\Scheduler\Jobs\FinishPastEventsJob;
 use ZmierzymyCzas\Scheduler\Jobs\PaymentRemindersJob;
@@ -28,6 +29,7 @@ final class SchedulerJobs
 {
     public const NAMES = [
         'events.finish_past',
+        'registrations.form_snapshots',
         'registrations.expire_unpaid',
         'registrations.payment_reminders',
     ];
@@ -45,6 +47,7 @@ final class SchedulerJobs
 
         return [
             new FinishPastEventsJob(new EventRepository($pdo)),
+            new CaptureFormSnapshotsJob($registrations),
             new ExpireUnpaidRegistrationsJob($registrations),
             new PaymentRemindersJob($registrations),
         ];

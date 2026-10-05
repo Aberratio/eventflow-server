@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Tests\Support;
 
 use PDO;
+use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Support\Env;
 
 /**
@@ -45,6 +46,7 @@ final class FaultInjectingRefundPdo extends PDO
                 PDO::ATTR_EMULATE_PREPARES => false,
             ]
         );
+        Connection::applySessionSqlMode($this);
     }
 
     /** @param array<int|string, mixed> $options */

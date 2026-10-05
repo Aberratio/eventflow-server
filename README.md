@@ -275,7 +275,8 @@ Alerts: records at ERROR or above that carry an alert key are e-mailed through t
 Mailer (`priority: technical`) when `ALERT_EMAIL` is set, Central Mailer is configured and
 the log directory is writable. Alert keys: `payments.amount_mismatch`,
 `payments.refund_failed`, `payments.session_failed`, `payments.webhook_error`,
-`http.server_error`, `db.unavailable`, `boot.misconfigured`. Each key is throttled
+`payments.paid_after_expiry`, `scheduler.job_failed`, `http.server_error`, `db.unavailable`,
+`boot.misconfigured`. Each key is throttled
 (`ALERT_THROTTLE_SECONDS`); the next mail after a window reports how many were suppressed.
 Alerts do not use the database or the mail outbox, so they still work when the DB is down.
 
@@ -284,6 +285,19 @@ Alerts do not use the database or the mail outbox, so they still work when the D
 unreachable it answers 503 `service_unavailable` with a generic message and no details
 (and logs an ERROR with alert key `db.unavailable`). If the connection cannot be opened at
 boot, every request gets the same 503 (the PDO connect timeout is 5 s).
+
+## Scheduler (cron)
+
+Registration expiry, payment reminders, form snapshots, BZ push retries and mail status
+reconciliation run from `bin/scheduler.php`, not from GET requests. It must be installed as a
+cron job on every environment (staging too), every 5 minutes, or nothing expires and no
+reminders go out:
+
+```
+*/5 * * * * /usr/local/bin/php /ABSOLUTE/BACKEND_REMOTE_DIR/bin/scheduler.php >/dev/null 2>&1
+```
+
+Runbook (jobs, verification, troubleshooting): [docs/scheduler.md](docs/scheduler.md).
 
 ## Security headers
 

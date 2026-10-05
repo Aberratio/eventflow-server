@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Tests\Support;
 
 use PDO;
+use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Support\Env;
 
 /**
@@ -46,6 +47,7 @@ final class SavepointPdo extends PDO
                 PDO::ATTR_TIMEOUT => 5,
             ]
         );
+        Connection::applySessionSqlMode($this);
         // A conflict inside the isolated world must fail fast, not after the 50 s default.
         $this->exec('SET SESSION innodb_lock_wait_timeout = 5');
     }

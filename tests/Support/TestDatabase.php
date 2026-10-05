@@ -56,6 +56,24 @@ final class TestDatabase
         return $applied;
     }
 
+    /** MySQL 8.4's default sql_mode, which production, staging and CI run with. */
+    public const TEST_SQL_MODE = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';
+
+    /**
+     * PP.76: every test connection runs with production's strict sql_mode, so a missing NOT NULL
+     * column (1364), NULL into NOT NULL (1048), bad ENUM (1265) or non-numeric number (1366)
+     * fails on a developer's non-strict MariaDB exactly as on MySQL 8.4.
+     * ZC_TEST_DB_SQL_MODE overrides the mode; ZC_TEST_DB_SQL_MODE=server keeps the server's own.
+     */
+    public static function applySessionSqlMode(): void
+    {
+        $override = getenv('ZC_TEST_DB_SQL_MODE');
+        if ($override === 'server') {
+            return;
+        }
+        Env::set('DB_SESSION_SQL_MODE', $override !== false && $override !== '' ? $override : self::TEST_SQL_MODE);
+    }
+
     /** @throws \RuntimeException unless Env's DB_DATABASE ends with "_test" */
     public static function assertIsTestDatabase(): void
     {

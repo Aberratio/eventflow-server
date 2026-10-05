@@ -13,3 +13,4 @@ Env::load(__DIR__ . '/../.env');
 // Env::load() again (HttpTestCase::setUp does) — see TestDatabase's docblock for why
 // Env::set() is the only override that survives that.
 TestDatabase::applyOverrides();
+TestDatabase::applySessionSqlMode();

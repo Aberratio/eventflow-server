@@ -17,6 +17,8 @@ use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailCatalog;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
 use ZmierzymyCzas\Domain\Mailer\Http\HttpResponse;
 use ZmierzymyCzas\Support\Env;
+use ZmierzymyCzas\Support\QrCode;
+use ZmierzymyCzas\Support\QrPng;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
 /**
@@ -191,5 +193,96 @@ final class CriticalMailerTest extends TestCase
         self::assertStringContainsString('Nadpisana tresc dla Bieg Testowy', $sent['html']);
 
         $this->pdo->prepare('DELETE FROM mail_templates WHERE event_id = :eventId')->execute(['eventId' => $eventId]);
+    }
+
+    public function testPaymentConfirmedCarriesInlineQrAttachment(): void
+    {
+        $code = QrCode::startCode();
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-qr5', 'status' => 'pending'])));
+
+        $row = $this->mailer()->sendPaymentConfirmed($this->prefix . '-reg-qr', 'evt-qr', 'user@example.test', 'Bieg', '10 km', 'https://app.example.test/my-starts', $code);
+
+        self::assertNotNull($row);
+        $sent = json_decode((string) $this->http->calls[0]['body'], true);
+        self::assertCount(1, $sent['attachments']);
+        $attachment = $sent['attachments'][0];
+        self::assertSame('kod-startowy.png', $attachment['filename']);
+        self::assertSame('qr-kod-startowy', $attachment['contentId']);
+        self::assertTrue($attachment['inline']);
+        $png = base64_decode($attachment['contentBase64'], true);
+        self::assertIsString($png);
+        self::assertSame("\x89PNG\r\n\x1a\n", substr($png, 0, 8));
+        self::assertSame('image/png', (new \finfo(FILEINFO_MIME_TYPE))->buffer($png));
+        self::assertSame(QrPng::render($code), $png, 'the image encodes exactly the Zapis start code');
+        self::assertStringContainsString('src="cid:qr-kod-startowy"', $sent['html']);
+        self::assertStringContainsString($code, $sent['html']);
+
+        $stored = $this->outboxRepo->find($row['id']);
+        self::assertCount(1, $stored['attachments']);
+        self::assertSame($attachment['contentBase64'], $stored['attachments'][0]['contentBase64']);
+    }
+
+    public function testIdentityCodeCarriesInlineQrAttachment(): void
+    {
+        $code = QrCode::identityCode();
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-qr6', 'status' => 'pending'])));
+
+        $row = $this->mailer()->sendIdentityCode($this->prefix . '-comp-qr', 'guardian@example.test', 'Zosia Test', $code);
+
+        self::assertNotNull($row);
+        $sent = json_decode((string) $this->http->calls[0]['body'], true);
+        self::assertCount(1, $sent['attachments']);
+        self::assertSame('kod-tozsamosci.png', $sent['attachments'][0]['filename']);
+        self::assertSame('qr-kod-tozsamosci', $sent['attachments'][0]['contentId']);
+        self::assertTrue($sent['attachments'][0]['inline']);
+        self::assertSame(QrPng::render($code), base64_decode($sent['attachments'][0]['contentBase64'], true));
+        self::assertStringContainsString('src="cid:qr-kod-tozsamosci"', $sent['html']);
+        self::assertStringContainsString($code, $sent['html']);
+    }
+
+    public function testPaymentConfirmedWithoutCodeHasNoAttachment(): void
+    {
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-noqr', 'status' => 'pending'])));
+
+        $row = $this->mailer()->sendPaymentConfirmed($this->prefix . '-reg-noqr', 'evt-qr', 'user@example.test', 'Bieg', '10 km', 'https://app.example.test/my-starts');
+
+        self::assertNotNull($row);
+        $sent = json_decode((string) $this->http->calls[0]['body'], true);
+        self::assertArrayNotHasKey('attachments', $sent);
+        self::assertStringNotContainsString('cid:', $sent['html']);
+        self::assertNull($this->outboxRepo->find($row['id'])['attachments']);
+    }
+
+    public function testQrBlockSurvivesEventTemplateOverride(): void
+    {
+        $eventId = $this->prefix . '-evt-qr';
+        $templates = new MailTemplateRepository($this->pdo);
+        $templates->saveEventOverride(MailCatalog::PAYMENT_CONFIRMED, $eventId, 'Bilet: {{eventName}}', '<p>Wlasna tresc {{eventName}}</p>', 'organizer-1');
+        $code = QrCode::startCode();
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-qr-ovr', 'status' => 'pending'])));
+
+        $this->mailer()->sendPaymentConfirmed($this->prefix . '-reg-ovr', $eventId, 'user@example.test', 'Bieg Testowy', '10 km', 'https://app.example.test/my-starts', $code);
+
+        $sent = json_decode((string) $this->http->calls[0]['body'], true);
+        self::assertStringContainsString('Wlasna tresc Bieg Testowy', $sent['html']);
+        self::assertStringContainsString('src="cid:qr-kod-startowy"', $sent['html']);
+        self::assertCount(1, $sent['attachments']);
+
+        $this->pdo->prepare('DELETE FROM mail_templates WHERE event_id = :eventId')->execute(['eventId' => $eventId]);
+    }
+
+    public function testEventChangedWithTwoUuidsIsStored(): void
+    {
+        // Two 36-char ids give a 73-char source_entity_id; VARCHAR(36) overflowed on strict MySQL 8.4.
+        $eventId = $this->prefix . '-' . str_repeat('a', 16);
+        $recipientId = $this->prefix . '-' . str_repeat('b', 16);
+        self::assertSame(36, strlen($eventId));
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-evt-changed', 'status' => 'pending'])));
+
+        $row = $this->mailer()->sendEventChanged($eventId, $recipientId, 'user@example.test', 'Bieg', 'Zmiana terminu', 'brak');
+
+        self::assertNotNull($row);
+        self::assertSame($eventId . ':' . $recipientId, $this->outboxRepo->find($row['id'])['sourceEntityId']);
+        self::assertSame(73, strlen((string) $row['sourceEntityId']));
     }
 }

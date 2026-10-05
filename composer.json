@@ -9,7 +9,8 @@
         "slim/psr7": "^1.7",
         "firebase/php-jwt": "^7.0",
         "ezyang/htmlpurifier": "^4.18",
-        "monolog/monolog": "^3.7"
+        "monolog/monolog": "^3.7",
+        "bacon/bacon-qr-code": "^3.0"
     },
     "require-dev": {
         "phpunit/phpunit": "^10.5",
@@ -82,6 +83,11 @@
             "php -l src/Domain/Mailer/CriticalMails/CriticalMailer.php",
             "php -l src/Domain/Mailer/CentralMailer/CentralMailerOutboxRepository.php",
             "php -l src/Domain/Mailer/CentralMailer/CentralMailerOutboxService.php",
+            "php -l src/Domain/Mailer/CentralMailer/RateLimitedException.php",
+            "php -l src/Domain/Mailer/CentralMailer/CentralMailerRejectedException.php",
+            "php -l src/Domain/Mailer/CriticalMails/MailQrCode.php",
+            "php -l src/Support/QrPng.php",
+            "php -l src/Scheduler/Jobs/MailOutboxRetryJob.php",
             "php -l src/Domain/Bz/Http/HttpClientInterface.php",
             "php -l src/Domain/Bz/Http/HttpResponse.php",
             "php -l src/Domain/Bz/Http/CurlHttpClient.php",

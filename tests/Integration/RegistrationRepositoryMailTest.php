@@ -93,6 +93,23 @@ final class RegistrationRepositoryMailTest extends TestCase
         self::assertNotNull($row);
     }
 
+    public function testPaymentConfirmedMailCarriesTheRegistrationStartCodeAsInlineQr(): void
+    {
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-qr-a', 'status' => 'pending']))); // mail #4
+        $event = $this->events->create($this->payload(['paymentConfig' => ['type' => 'organizer_bank']]));
+        $registration = $this->registrations->create($this->registrationPayload($event));
+        $code = (string) $this->pdo->query("SELECT qr_code FROM registrations WHERE id = '" . $registration['id'] . "'")->fetchColumn();
+        self::assertStringStartsWith('pqr_', $code);
+
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-qr-b', 'status' => 'pending']))); // mail #5
+        $this->registrations->markManualPaymentPaid($registration['id']);
+
+        $sent = json_decode((string) $this->http->calls[1]['body'], true);
+        self::assertSame('qr-kod-startowy', $sent['attachments'][0]['contentId']);
+        self::assertSame(\ZmierzymyCzas\Support\QrPng::render($code), base64_decode($sent['attachments'][0]['contentBase64'], true));
+        self::assertStringContainsString($code, $sent['html']);
+    }
+
     public function testApproveRefundEnqueuesRefundApprovedMail(): void
     {
         $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-4', 'status' => 'pending']))); // mail #4

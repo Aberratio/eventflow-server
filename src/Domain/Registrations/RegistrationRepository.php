@@ -3479,7 +3479,8 @@ SQL;
             return;
         }
         $stmt = $this->pdo->prepare(
-            'SELECT event_id AS eventId, event_name AS eventName, distance_name AS distanceName, user_email AS userEmail
+            'SELECT event_id AS eventId, event_name AS eventName, distance_name AS distanceName, user_email AS userEmail,
+                    qr_code AS qrCode
              FROM registrations WHERE id = :id'
         );
         $stmt->execute(['id' => $registrationId]);
@@ -3494,7 +3495,8 @@ SQL;
             (string) $row['userEmail'],
             (string) $row['eventName'],
             (string) $row['distanceName'],
-            rtrim((string) \ZmierzymyCzas\Support\Env::get('APP_URL', ''), '/') . '/my-starts'
+            rtrim((string) \ZmierzymyCzas\Support\Env::get('APP_URL', ''), '/') . '/my-starts',
+            isset($row['qrCode']) && $row['qrCode'] !== '' ? (string) $row['qrCode'] : null
         );
     }
 

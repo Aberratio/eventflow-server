@@ -4051,10 +4051,15 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             // the actual moment of Zawodnik creation, to the Opiekun's (this
             // $kontoId's) own Konto e-mail — a child Zawodnik created this way
             // has no e-mail of its own. See CriticalMailer::sendIdentityCode()'s
-            // doc comment for the QR seam this leaves for E1.12.
+            // doc comment for the QR attachment (PP.19).
             $guardian = $users->find($kontoId);
             if ($guardian !== null) {
-                $mailer->sendIdentityCode((string) $competitor['id'], (string) $guardian['email'], trim($firstName . ' ' . $lastName));
+                $mailer->sendIdentityCode(
+                    (string) $competitor['id'],
+                    (string) $guardian['email'],
+                    trim($firstName . ' ' . $lastName),
+                    isset($competitor['identityCode']) ? (string) $competitor['identityCode'] : null
+                );
             }
 
             return JsonResponder::ok($response, $record, 'Zawodnik dodany, opieka nadana.', 201);

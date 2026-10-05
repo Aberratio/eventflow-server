@@ -60,7 +60,7 @@ final class CareCreateMailFailureContractTest extends HttpTestCase
         $competitorId = $this->json($response)['data']['competitor']['id'];
 
         $stmt = $this->pdo->prepare(
-            "SELECT status, attempts, next_attempt_at, central_mailer_email_id FROM central_mailer_outbox
+            "SELECT status, attempts, next_attempt_at, central_mailer_email_id, attachments FROM central_mailer_outbox
              WHERE source_entity_type = 'identity_code' AND source_entity_id = :id"
         );
         $stmt->execute(['id' => $competitorId]);
@@ -70,5 +70,7 @@ final class CareCreateMailFailureContractTest extends HttpTestCase
         self::assertSame(1, (int) $rows[0]['attempts']);
         self::assertNotNull($rows[0]['next_attempt_at'], 'and scheduled for a retry');
         self::assertNull($rows[0]['central_mailer_email_id']);
+        $attachments = json_decode((string) $rows[0]['attachments'], true);
+        self::assertSame('kod-tozsamosci.png', $attachments[0]['filename'], 'the QR attachment is stored with the row');
     }
 }

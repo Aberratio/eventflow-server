@@ -285,4 +285,20 @@ final class CriticalMailerTest extends TestCase
         self::assertSame($eventId . ':' . $recipientId, $this->outboxRepo->find($row['id'])['sourceEntityId']);
         self::assertSame(73, strlen((string) $row['sourceEntityId']));
     }
+
+    public function testResultsPublishedIsDeferredAndFitsSourceColumn(): void
+    {
+        $eventId = $this->prefix . '-' . str_repeat('c', 16);
+        $recipientKey = substr(hash('sha256', 'user@example.test'), 0, 16);
+
+        $row = $this->mailer()->sendResultsPublished($eventId, $recipientKey, 'user@example.test', 'Bieg', 'https://app.example.test/events/bieg/results');
+
+        self::assertCount(0, $this->http->calls, 'a deferred row makes no HTTP call');
+        self::assertNotNull($row);
+        self::assertSame('queued', $row['status']);
+        self::assertSame(0, $row['attempts']);
+        self::assertNull($row['centralMailerEmailId']);
+        self::assertSame($eventId . ':' . $recipientKey, $this->outboxRepo->find($row['id'])['sourceEntityId']);
+        self::assertSame(53, strlen((string) $row['sourceEntityId']));
+    }
 }

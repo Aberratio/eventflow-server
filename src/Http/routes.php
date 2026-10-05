@@ -59,6 +59,7 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
 use ZmierzymyCzas\Domain\Mailer\Http\CurlHttpClient as MailerCurlHttpClient;
+use ZmierzymyCzas\Domain\Mailer\ResultsPublication\ResultsPublicationMailRequests;
 use ZmierzymyCzas\Domain\Shop\OrderRepository;
 use ZmierzymyCzas\Domain\Shop\OwnOrderPresenter;
 use ZmierzymyCzas\Domain\Shop\ShopRepository;
@@ -166,6 +167,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     };
     $competitors = new CompetitorRepository($pdo);
     $results = new ResultRepository($pdo);
+    $resultsMailRequests = new ResultsPublicationMailRequests($pdo);
     // E2.1: needs Registrations/Competitors to force-create a Zapis (Wariant
     // "biuro zawodow", ticket 07 pkt 13) for a participant the CSV names but
     // who has no existing Zapis - see createRegistrationForRow()'s docblock.
@@ -448,7 +450,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // PP.20: a cheap round trip on the connection index.php already opened.
             try {
@@ -2680,13 +2682,18 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // $canUploadResults co reszta mutacji /results/* (organizator/
         // admin/moderator danego wydarzenia, tylko dla published/finished
         // eventow), nie surowe $canManageEvent.
-        $api->post('/events/{eventId}/distances/{distanceId}/results/publish-official', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults, $logActivity) {
+        $api->post('/events/{eventId}/distances/{distanceId}/results/publish-official', function (Request $request, Response $response, array $args) use ($events, $results, $resultsMailRequests, $canUploadResults, $logActivity) {
             $event = $events->find((string) $args['eventId']);
             $auth = (array) $request->getAttribute('auth');
             if (!$canUploadResults($event, $auth)) {
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be published only for active or past events you manage.', 403);
             }
             $updatedCount = $results->markOfficial((string) $args['eventId'], (string) $args['distanceId']);
+            if ($updatedCount > 0) {
+                // PP.19: only records the request (O(1), no mail inline); the scheduler's mail.results_published
+                // job fans out to the participants.
+                $resultsMailRequests->request((string) $args['eventId'], (string) $args['distanceId'], new \DateTimeImmutable());
+            }
             $logActivity(
                 $auth,
                 'results_published_official',

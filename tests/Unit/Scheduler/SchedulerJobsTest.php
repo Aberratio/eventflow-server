@@ -9,7 +9,7 @@ use ZmierzymyCzas\Scheduler\SchedulerJobs;
 
 final class SchedulerJobsTest extends TestCase
 {
-    /** The registry order is a contract: PP.19 appended 'mail.outbox_retry' after 'mail.outbox_reconcile'. */
+    /** The registry order is a contract: PP.19 appended 'mail.results_published' and 'mail.outbox_retry' after 'mail.outbox_reconcile'. */
     public function testJobNamesAndOrderArePinned(): void
     {
         self::assertSame([
@@ -19,6 +19,7 @@ final class SchedulerJobsTest extends TestCase
             'registrations.payment_reminders',
             'bz.outbox_retry',
             'mail.outbox_reconcile',
+            'mail.results_published',
             'mail.outbox_retry',
         ], SchedulerJobs::NAMES);
     }

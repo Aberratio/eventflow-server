@@ -13,7 +13,12 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxRepository;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
 use ZmierzymyCzas\Domain\Mailer\Http\HttpResponse;
+use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
+use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
+use ZmierzymyCzas\Domain\Mailer\ResultsPublication\ResultsPublicationMailRequests;
+use ZmierzymyCzas\Domain\Mailer\ResultsPublication\ResultsPublicationNotifier;
 use ZmierzymyCzas\Scheduler\Jobs\MailOutboxRetryJob;
+use ZmierzymyCzas\Scheduler\Jobs\ResultsPublishedMailJob;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
@@ -67,6 +72,39 @@ final class MailJobsTest extends TestCase
         self::assertSame(['checked' => 1, 'sent' => 1, 'failed' => 0, 'abandoned' => 0, 'rateLimited' => 0], $counters);
         self::assertSame('cm-job', (new CentralMailerOutboxRepository($this->pdo))->find($row['id'])['centralMailerEmailId']);
         self::assertSame('mail.outbox_retry', (new MailOutboxRetryJob($service, $config))->name());
+    }
+
+    public function testResultsJobDrainsRequestsEvenWhenUnconfigured(): void
+    {
+        $unconfigured = new CentralMailerConfig(apiKey: '', baseUrl: '');
+        $repo = new CentralMailerOutboxRepository($this->pdo);
+        $service = new CentralMailerOutboxService(new CentralMailerClient(new FakeCentralMailerHttpClient(), $unconfigured), $repo);
+        $requests = new ResultsPublicationMailRequests($this->pdo);
+        $eventId = 'phpunit-nonexistent-event';
+        $this->pdo->prepare('DELETE FROM results_publication_mail_requests WHERE event_id = :id')->execute(['id' => $eventId]);
+        $requests->request($eventId, 'phpunit-nonexistent-dist', new \DateTimeImmutable());
+        $notifier = new ResultsPublicationNotifier(
+            $this->pdo,
+            $requests,
+            new CriticalMailer($unconfigured, $service, new MailTemplateRepository($this->pdo)),
+            $repo,
+            'https://app.example.test'
+        );
+
+        try {
+            $job = new ResultsPublishedMailJob($notifier);
+            $counters = $job->run(new \DateTimeImmutable());
+
+            self::assertSame('mail.results_published', $job->name());
+            self::assertGreaterThanOrEqual(1, $counters['requests']);
+            $stmt = $this->pdo->prepare('SELECT processed_at, recipients_queued FROM results_publication_mail_requests WHERE event_id = :id');
+            $stmt->execute(['id' => $eventId]);
+            $row = $stmt->fetch();
+            self::assertNotNull($row['processed_at'], 'the request is drained although Central Mailer is not configured');
+            self::assertSame(0, (int) $row['recipients_queued']);
+        } finally {
+            $this->pdo->prepare('DELETE FROM results_publication_mail_requests WHERE event_id = :id')->execute(['id' => $eventId]);
+        }
     }
 
     private function clearUndeliveredRows(): void

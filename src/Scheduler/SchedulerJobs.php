@@ -19,6 +19,8 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
 use ZmierzymyCzas\Domain\Mailer\Http\CurlHttpClient as MailerCurlHttpClient;
+use ZmierzymyCzas\Domain\Mailer\ResultsPublication\ResultsPublicationMailRequests;
+use ZmierzymyCzas\Domain\Mailer\ResultsPublication\ResultsPublicationNotifier;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Scheduler\Jobs\BzOutboxRetryJob;
 use ZmierzymyCzas\Scheduler\Jobs\CaptureFormSnapshotsJob;
@@ -27,11 +29,13 @@ use ZmierzymyCzas\Scheduler\Jobs\FinishPastEventsJob;
 use ZmierzymyCzas\Scheduler\Jobs\MailOutboxReconcileJob;
 use ZmierzymyCzas\Scheduler\Jobs\MailOutboxRetryJob;
 use ZmierzymyCzas\Scheduler\Jobs\PaymentRemindersJob;
+use ZmierzymyCzas\Scheduler\Jobs\ResultsPublishedMailJob;
+use ZmierzymyCzas\Support\Env;
 
 /**
  * PP.18: the job registry and the single plug-in point for new jobs (PP.19 added
- * 'mail.outbox_retry' after 'mail.outbox_reconcile'). Order matters: expiry runs before
- * reminders so an already-lapsed Zapis never gets a "you are about to expire" mail.
+ * 'mail.results_published' and 'mail.outbox_retry' after 'mail.outbox_reconcile'). Order matters: expiry runs
+ * before reminders so an already-lapsed Zapis never gets a "you are about to expire" mail.
  */
 final class SchedulerJobs
 {
@@ -42,6 +46,7 @@ final class SchedulerJobs
         'registrations.payment_reminders',
         'bz.outbox_retry',
         'mail.outbox_reconcile',
+        'mail.results_published',   // PP.19: fan-out first, so the new deferred rows go out in the same tick
         'mail.outbox_retry',        // PP.19: dispatch deferred / failed / stale rows (429-aware)
     ];
 
@@ -52,7 +57,7 @@ final class SchedulerJobs
         // no job starts a payment session.
         $mailerConfig = CentralMailerConfig::fromEnv();
         $mailerClient = new CentralMailerClient(new MailerCurlHttpClient(), $mailerConfig);
-        $outbox = new CentralMailerOutboxService($mailerClient, new CentralMailerOutboxRepository($pdo), $logger);
+        $outbox = new CentralMailerOutboxService($mailerClient, $outboxRepo = new CentralMailerOutboxRepository($pdo), $logger);
         $mailer = new CriticalMailer($mailerConfig, $outbox, new MailTemplateRepository($pdo));
         $bzConfig = BzWebhookConfig::fromEnv();
         $bzOutbox = $bzConfig->isConfigured()
@@ -71,6 +76,14 @@ final class SchedulerJobs
             new PaymentRemindersJob($registrations),
             new BzOutboxRetryJob($pdo, $bzOutbox, $bzConfig),
             new MailOutboxReconcileJob($outbox, $mailerConfig),
+            new ResultsPublishedMailJob(new ResultsPublicationNotifier(
+                $pdo,
+                new ResultsPublicationMailRequests($pdo),
+                $mailer,
+                $outboxRepo,
+                rtrim((string) Env::get('APP_URL', ''), '/'),
+                $logger
+            )),
             new MailOutboxRetryJob($outbox, $mailerConfig),
         ];
     }

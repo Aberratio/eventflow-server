@@ -275,8 +275,8 @@ Alerts: records at ERROR or above that carry an alert key are e-mailed through t
 Mailer (`priority: technical`) when `ALERT_EMAIL` is set, Central Mailer is configured and
 the log directory is writable. Alert keys: `payments.amount_mismatch`,
 `payments.refund_failed`, `payments.session_failed`, `payments.webhook_error`,
-`payments.paid_after_expiry`, `scheduler.job_failed`, `http.server_error`, `db.unavailable`,
-`boot.misconfigured`. Each key is throttled
+`payments.paid_after_expiry`, `scheduler.job_failed`, `mail.outbox_abandoned`, `http.server_error`,
+`db.unavailable`, `boot.misconfigured`. Each key is throttled
 (`ALERT_THROTTLE_SECONDS`); the next mail after a window reports how many were suppressed.
 Alerts do not use the database or the mail outbox, so they still work when the DB is down.
 

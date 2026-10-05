@@ -117,7 +117,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     // unset (local dev, CI, this repo's own test suite).
     $centralMailerConfig = CentralMailerConfig::fromEnv();
     $centralMailerClient = new CentralMailerClient(new MailerCurlHttpClient(), $centralMailerConfig);
-    $centralMailerOutbox = new CentralMailerOutboxService($centralMailerClient, new CentralMailerOutboxRepository($pdo));
+    $centralMailerOutbox = new CentralMailerOutboxService($centralMailerClient, new CentralMailerOutboxRepository($pdo), $logger);
     $mailTemplates = new MailTemplateRepository($pdo);
     $mailer = new CriticalMailer($centralMailerConfig, $centralMailerOutbox, $mailTemplates);
     // E3.4: outbound "push zmian krytycznych" to Biuro Zawodów — same

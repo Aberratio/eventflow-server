@@ -40,6 +40,7 @@ final class CentralMailerOutboxServiceTest extends TestCase
         try {
             $this->pdo = Connection::fromEnv();
             Migrator::applyFile($this->pdo, __DIR__ . '/../../database/migrations/037_e19_central_mailer_outbox.sql');
+            Migrator::applyFile($this->pdo, __DIR__ . '/../../database/migrations/066_pp19_mail_outbox_retry.sql');
             $this->deletePhpUnitRows();
 
             $this->http = new FakeCentralMailerHttpClient();
@@ -90,22 +91,24 @@ final class CentralMailerOutboxServiceTest extends TestCase
         self::assertCount(1, $this->http->calls);
     }
 
-    public function testEnqueueRecordsFailureWhenCentralMailerCallThrows(): void
+    public function testEnqueueRecordsFailureAndDoesNotThrowWhenCentralMailerCallFails(): void
     {
         $this->http->queueResponse(new HttpResponse(500, 'server error'));
 
-        try {
-            $this->service->enqueue($this->message());
-            self::fail('Expected enqueue() to rethrow the HTTP failure.');
-        } catch (\RuntimeException) {
-            // expected
-        }
+        $row = $this->service->enqueue($this->message());
+
+        self::assertSame('failed', $row['status']);
+        self::assertSame(1, $row['attempts']);
+        self::assertNull($row['centralMailerEmailId']);
+        self::assertSame(\RuntimeException::class, $row['lastError'], 'only the exception class is stored, never the message');
+        self::assertNotNull($row['nextAttemptAt'], 'a failed row is scheduled for a retry');
+        $expected = (new \DateTimeImmutable('+2 minutes', new \DateTimeZone('UTC')))->getTimestamp();
+        $actual = (new \DateTimeImmutable((string) $row['nextAttemptAt'], new \DateTimeZone('UTC')))->getTimestamp();
+        self::assertEqualsWithDelta($expected, $actual, 5);
 
         $stored = $this->outbox->findByIdempotencyKey($this->prefix . '-key-1');
         self::assertNotNull($stored, 'Outbox row must exist even though the HTTP call failed — it was written before the call.');
         self::assertSame('failed', $stored['status']);
-        self::assertNotNull($stored['lastError']);
-        self::assertNull($stored['centralMailerEmailId']);
     }
 
     public function testTechnicalPriorityIsAcceptedAsAFirstClassOption(): void

@@ -25,10 +25,11 @@ use ZmierzymyCzas\Scheduler\Jobs\CaptureFormSnapshotsJob;
 use ZmierzymyCzas\Scheduler\Jobs\ExpireUnpaidRegistrationsJob;
 use ZmierzymyCzas\Scheduler\Jobs\FinishPastEventsJob;
 use ZmierzymyCzas\Scheduler\Jobs\MailOutboxReconcileJob;
+use ZmierzymyCzas\Scheduler\Jobs\MailOutboxRetryJob;
 use ZmierzymyCzas\Scheduler\Jobs\PaymentRemindersJob;
 
 /**
- * PP.18: the job registry and the single plug-in point for new jobs (PP.19 adds
+ * PP.18: the job registry and the single plug-in point for new jobs (PP.19 added
  * 'mail.outbox_retry' after 'mail.outbox_reconcile'). Order matters: expiry runs before
  * reminders so an already-lapsed Zapis never gets a "you are about to expire" mail.
  */
@@ -41,6 +42,7 @@ final class SchedulerJobs
         'registrations.payment_reminders',
         'bz.outbox_retry',
         'mail.outbox_reconcile',
+        'mail.outbox_retry',        // PP.19: dispatch deferred / failed / stale rows (429-aware)
     ];
 
     /** @return list<ScheduledJob> in NAMES order */
@@ -50,7 +52,7 @@ final class SchedulerJobs
         // no job starts a payment session.
         $mailerConfig = CentralMailerConfig::fromEnv();
         $mailerClient = new CentralMailerClient(new MailerCurlHttpClient(), $mailerConfig);
-        $outbox = new CentralMailerOutboxService($mailerClient, new CentralMailerOutboxRepository($pdo));
+        $outbox = new CentralMailerOutboxService($mailerClient, new CentralMailerOutboxRepository($pdo), $logger);
         $mailer = new CriticalMailer($mailerConfig, $outbox, new MailTemplateRepository($pdo));
         $bzConfig = BzWebhookConfig::fromEnv();
         $bzOutbox = $bzConfig->isConfigured()
@@ -69,6 +71,7 @@ final class SchedulerJobs
             new PaymentRemindersJob($registrations),
             new BzOutboxRetryJob($pdo, $bzOutbox, $bzConfig),
             new MailOutboxReconcileJob($outbox, $mailerConfig),
+            new MailOutboxRetryJob($outbox, $mailerConfig),
         ];
     }
 }

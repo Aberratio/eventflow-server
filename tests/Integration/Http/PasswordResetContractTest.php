@@ -316,7 +316,10 @@ final class PasswordResetContractTest extends HttpTestCase
         }
 
         $log = (string) file_get_contents($this->errorLogFile);
-        self::assertStringContainsString('Password reset mail could not be queued', $log, 'The swallowed mailer failure is logged.');
+        // PP.19: a mailer failure no longer throws; the durable outbox row waits for mail.outbox_retry.
+        $statuses = array_column($this->outboxRows(), 'status');
+        self::assertNotSame([], $statuses);
+        self::assertSame(['failed'], array_values(array_unique($statuses)), 'The undelivered mail stays in the outbox for the retry job.');
         self::assertStringNotContainsString($raw, $log);
         self::assertStringNotContainsString('token=', $log);
         self::assertStringNotContainsString((string) $this->user['email'], $log);

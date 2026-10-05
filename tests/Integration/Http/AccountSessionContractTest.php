@@ -327,17 +327,25 @@ final class AccountSessionContractTest extends HttpTestCase
 
     public function testAccountLockedMailIsAttemptedOnlyOnTheActiveToBlockedEdge(): void
     {
-        // (setUp configures an unusable mailer for this test.) So an attempted send surfaces as 500 after the status
-        // was already written (pre-existing behaviour, reported as out-of-scope). That makes the
-        // mail edge observable without a fake transport: 500 = mail attempted, 200 = no mail.
+        // (setUp configures an unusable mailer for this test.) PP.19: a failed send no longer turns the
+        // request into a 500; the attempt is observable as a durable outbox row (status failed, retried later).
         $modToken = $this->login($this->moderator);
+        $userId = (string) $this->user['id'];
+        $count = function () use ($userId): int {
+            $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM central_mailer_outbox WHERE source_entity_type = 'account_locked' AND source_entity_id = :id");
+            $stmt->execute(['id' => $userId]);
 
-        $first = $this->patch($this->user['id'] . '/status', ['status' => 'blocked'], $modToken);
-        self::assertSame(500, $first->getStatusCode(), 'active -> blocked attempts the mail.');
-        self::assertSame('blocked', $this->users->find((string) $this->user['id'])['status']);
+            return (int) $stmt->fetchColumn();
+        };
 
-        $again = $this->patch($this->user['id'] . '/status', ['status' => 'blocked'], $modToken);
-        self::assertSame(200, $again->getStatusCode(), 'Re-blocking a blocked account attempts no mail.');
+        $first = $this->patch($userId . '/status', ['status' => 'blocked'], $modToken);
+        self::assertSame(200, $first->getStatusCode());
+        self::assertSame('blocked', $this->users->find($userId)['status']);
+        self::assertSame(1, $count(), 'active -> blocked attempts the mail.');
+
+        $again = $this->patch($userId . '/status', ['status' => 'blocked'], $modToken);
+        self::assertSame(200, $again->getStatusCode());
+        self::assertSame(1, $count(), 'Re-blocking a blocked account attempts no mail.');
     }
 
     public function testAdminCreatedAccountStartsUnverified(): void

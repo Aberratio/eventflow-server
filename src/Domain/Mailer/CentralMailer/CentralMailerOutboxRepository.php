@@ -16,7 +16,8 @@ final class CentralMailerOutboxRepository extends Repository
 {
     private const COLUMNS = 'id, source_entity_type AS sourceEntityType, source_entity_id AS sourceEntityId, '
         . 'idempotency_key AS idempotencyKey, priority, recipient, subject, html, context_id AS contextId, '
-        . 'metadata, central_mailer_email_id AS centralMailerEmailId, status, last_error AS lastError, '
+        . 'metadata, attachments, central_mailer_email_id AS centralMailerEmailId, status, attempts, '
+        . 'next_attempt_at AS nextAttemptAt, last_error AS lastError, '
         . 'created_at AS createdAt, sent_to_mailer_at AS sentToMailerAt, last_checked_at AS lastCheckedAt';
 
     /**
@@ -37,12 +38,16 @@ final class CentralMailerOutboxRepository extends Repository
      *   html: string,
      *   contextId?: ?string,
      *   metadata?: ?array<string, mixed>,
+     *   attachments?: ?list<array<string, mixed>>,
+     *   attempts?: int,
+     *   nextAttemptAt?: ?string,
      * } $data
      * @return array<string, mixed>
      */
     public function create(array $data): array
     {
         $id = $this->id();
+        $attachments = $data['attachments'] ?? null;
         $this->insert('central_mailer_outbox', $this->encode([
             'id' => $id,
             'source_entity_type' => $data['sourceEntityType'],
@@ -54,7 +59,13 @@ final class CentralMailerOutboxRepository extends Repository
             'html' => $data['html'],
             'context_id' => $data['contextId'] ?? null,
             'metadata' => $data['metadata'] ?? null,
+            // LONGTEXT on purpose: stored byte-for-byte so a retry resends identical attachments.
+            'attachments' => $attachments !== null && $attachments !== []
+                ? json_encode($attachments, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)
+                : null,
             'status' => 'queued',
+            'attempts' => $data['attempts'] ?? 0,
+            'next_attempt_at' => $data['nextAttemptAt'] ?? null,
             'created_at' => date(DATE_ATOM),
         ], ['metadata']));
 
@@ -65,7 +76,7 @@ final class CentralMailerOutboxRepository extends Repository
     {
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM central_mailer_outbox WHERE id = :id');
         $stmt->execute(['id' => $id]);
-        return $this->decode($stmt->fetch(), ['metadata']);
+        return $this->decodeRow($stmt->fetch());
     }
 
     /**
@@ -78,7 +89,7 @@ final class CentralMailerOutboxRepository extends Repository
     {
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM central_mailer_outbox WHERE idempotency_key = :key');
         $stmt->execute(['key' => $idempotencyKey]);
-        return $this->decode($stmt->fetch(), ['metadata']);
+        return $this->decodeRow($stmt->fetch());
     }
 
     /** Central Mailer accepted the message: record its id and the status it returned. */
@@ -88,16 +99,89 @@ final class CentralMailerOutboxRepository extends Repository
             'central_mailer_email_id' => $centralMailerEmailId,
             'status' => $status !== '' ? $status : 'pending',
             'sent_to_mailer_at' => date(DATE_ATOM),
+            'next_attempt_at' => null,
+            'last_error' => null,
         ]);
     }
 
-    /** The `POST /emails` call itself failed (network error, non-2xx, thrown exception). */
-    public function markFailed(string $id, string $error): void
+    /**
+     * Due rows Central Mailer never accepted. The due filter and ordering run in SQL before
+     * LIMIT (PP.18 D3 lesson): a PHP-side filter after LIMIT would starve due rows behind
+     * not-yet-due ones. Technical-priority mail (auth links) goes first.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listDueForDispatch(string $nowUtc, int $limit): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::COLUMNS . ' FROM central_mailer_outbox '
+            . "WHERE central_mailer_email_id IS NULL AND status IN ('queued', 'failed') "
+            . 'AND next_attempt_at IS NOT NULL AND next_attempt_at <= :nowUtc '
+            . "ORDER BY (priority = 'technical') DESC, next_attempt_at ASC, id ASC LIMIT :limit"
+        );
+        $stmt->bindValue('nowUtc', $nowUtc);
+        $stmt->bindValue('limit', max(1, min(500, $limit)), \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return array_map(fn (array $row): array => (array) $this->decodeRow($row), $stmt->fetchAll());
+    }
+
+    /**
+     * Optimistic claim: counts the attempt and leases the row until $leaseUntilUtc, so a process
+     * that dies mid-send leaves it due again after the lease. False when another worker (or a
+     * newer state) got there first.
+     */
+    public function claimDispatch(string $id, int $seenAttempts, string $leaseUntilUtc): bool
+    {
+        $stmt = $this->pdo->prepare(
+            'UPDATE central_mailer_outbox SET attempts = attempts + 1, next_attempt_at = :leaseUntil '
+            . "WHERE id = :id AND attempts = :seenAttempts AND central_mailer_email_id IS NULL "
+            . "AND status IN ('queued', 'failed') AND next_attempt_at IS NOT NULL"
+        );
+        $stmt->execute(['leaseUntil' => $leaseUntilUtc, 'id' => $id, 'seenAttempts' => $seenAttempts]);
+
+        return $stmt->rowCount() === 1;
+    }
+
+    /** HTTP 429: the attempt is given back and the row waits for the Retry-After window. */
+    public function releaseRateLimited(string $id, int $attempts, string $nextAttemptAtUtc): void
     {
         $this->updateById('central_mailer_outbox', $id, [
             'status' => 'failed',
-            'last_error' => mb_substr($error, 0, 1024),
+            'attempts' => max(0, $attempts),
+            'next_attempt_at' => $nextAttemptAtUtc,
+            'last_error' => 'rate_limited',
         ]);
+    }
+
+    /** Transient failure: exception class only (CM error bodies can echo the address). NULL next = exhausted. */
+    public function markRetryFailed(string $id, string $errorClass, ?string $nextAttemptAtUtc): void
+    {
+        $this->updateById('central_mailer_outbox', $id, [
+            'status' => 'failed',
+            'next_attempt_at' => $nextAttemptAtUtc,
+            'last_error' => mb_substr($errorClass, 0, 1024),
+        ]);
+    }
+
+    /** Permanent failure: never dispatched again (a manual requeue is a runbook SQL statement). */
+    public function markTerminal(string $id, string $reason): void
+    {
+        $this->updateById('central_mailer_outbox', $id, [
+            'status' => 'failed',
+            'next_attempt_at' => null,
+            'last_error' => mb_substr($reason, 0, 1024),
+        ]);
+    }
+
+    public function existsForSource(string $sourceEntityType, string $sourceEntityId): bool
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT 1 FROM central_mailer_outbox WHERE source_entity_type = :type AND source_entity_id = :id LIMIT 1'
+        );
+        $stmt->execute(['type' => $sourceEntityType, 'id' => $sourceEntityId]);
+
+        return $stmt->fetchColumn() !== false;
     }
 
     /** Reconciliation writes back whatever status Central Mailer reports for an already-accepted row. */
@@ -162,6 +246,23 @@ final class CentralMailerOutboxRepository extends Repository
         $stmt->bindValue('limit', max(1, min(1000, $limit)), \PDO::PARAM_INT);
         $stmt->execute();
 
-        return array_map(fn (array $row): array => $this->decode($row, ['metadata']), $stmt->fetchAll());
+        return array_map(fn (array $row): array => (array) $this->decodeRow($row), $stmt->fetchAll());
+    }
+
+    /**
+     * @param array<string, mixed>|false|null $row
+     * @return array<string, mixed>|null
+     */
+    private function decodeRow(array|false|null $row): ?array
+    {
+        $decoded = $this->decode($row, ['metadata', 'attachments']);
+        if ($decoded !== null) {
+            $decoded['attempts'] = (int) $decoded['attempts'];
+            if (!is_array($decoded['attachments'])) {
+                $decoded['attachments'] = null;
+            }
+        }
+
+        return $decoded;
     }
 }

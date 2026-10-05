@@ -12,6 +12,7 @@ use Psr\Log\LoggerInterface;
 use Slim\Exception\HttpException;
 use Slim\Psr7\Response as SlimResponse;
 use Throwable;
+use ZmierzymyCzas\Support\InputValidationException;
 use ZmierzymyCzas\Support\JsonResponder;
 use ZmierzymyCzas\Support\Log\LoggerFactory;
 
@@ -32,6 +33,11 @@ final class JsonErrorMiddleware implements MiddlewareInterface
         try {
             return $handler->handle($request);
         } catch (Throwable $exception) {
+            if ($exception instanceof InputValidationException) {
+                // PP.76: expected client error, not a server fault, so not logged and never 500.
+                return JsonResponder::error(new SlimResponse(), 'validation_error', $exception->getMessage(), 422, ['field' => $exception->field]);
+            }
+
             $status = $exception instanceof HttpException ? $exception->getCode() : 500;
             if ($status < 400 || $status > 599) {
                 $status = 500;

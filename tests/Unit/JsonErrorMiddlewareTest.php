@@ -15,6 +15,7 @@ use Slim\Exception\HttpNotFoundException;
 use Slim\Psr7\Factory\ServerRequestFactory;
 use Throwable;
 use ZmierzymyCzas\Http\Middleware\JsonErrorMiddleware;
+use ZmierzymyCzas\Support\InputValidationException;
 use ZmierzymyCzas\Support\Log\PiiRedactingProcessor;
 
 final class JsonErrorMiddlewareTest extends TestCase
@@ -199,5 +200,25 @@ final class JsonErrorMiddlewareTest extends TestCase
 
         self::assertSame(500, $response->getStatusCode());
         self::assertSame(JsonErrorMiddleware::GENERIC_SERVER_ERROR_MESSAGE, $body['error']['message']);
+    }
+
+    public function testInputValidationExceptionBecomes422WithField(): void
+    {
+        foreach ([false, true] as $debug) {
+            [$logger, $handler] = $this->testLogger();
+            $middleware = new JsonErrorMiddleware($debug, $logger);
+            $exception = new InputValidationException('Pole „Nazwa serii” jest wymagane.', 'name');
+
+            $response = $middleware->process($this->request(), $this->throwingHandler($exception));
+            $body = (array) json_decode((string) $response->getBody(), true);
+
+            self::assertSame(422, $response->getStatusCode());
+            self::assertFalse($body['success']);
+            self::assertSame('validation_error', $body['error']['code']);
+            self::assertSame('Pole „Nazwa serii” jest wymagane.', $body['error']['message']);
+            self::assertSame(['field' => 'name'], $body['error']['details']);
+            self::assertFalse($response->hasHeader('X-Request-Id'));
+            self::assertCount(0, $handler->getRecords());
+        }
     }
 }

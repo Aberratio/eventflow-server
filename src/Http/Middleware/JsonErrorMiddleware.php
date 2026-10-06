@@ -35,7 +35,7 @@ final class JsonErrorMiddleware implements MiddlewareInterface
         } catch (Throwable $exception) {
             if ($exception instanceof InputValidationException) {
                 // PP.76: expected client error, not a server fault, so not logged and never 500.
-                return JsonResponder::error(new SlimResponse(), 'validation_error', $exception->getMessage(), 422, ['field' => $exception->field]);
+                return JsonResponder::error(new SlimResponse(), $exception->errorCode, $exception->getMessage(), 422, ['field' => $exception->field]);
             }
 
             $status = $exception instanceof HttpException ? $exception->getCode() : 500;

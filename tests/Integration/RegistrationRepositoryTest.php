@@ -10,6 +10,7 @@ use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\Env;
+use ZmierzymyCzas\Support\InputValidationException;
 
 final class RegistrationRepositoryTest extends TestCase
 {
@@ -1005,14 +1006,17 @@ final class RegistrationRepositoryTest extends TestCase
             'distances' => [['id' => 'd-insurance-uo-1'], ['id' => 'd-insurance-uo-2']],
         ]));
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('insurance_variant_invalid');
-
-        $this->registrations->create([
-            ...$this->registrationPayload($event, ''),
-            'insuranceVariantId' => $insuranceId,
-            'birthDate' => '1984-12-01',
-        ]);
+        try {
+            $this->registrations->create([
+                ...$this->registrationPayload($event, ''),
+                'insuranceVariantId' => $insuranceId,
+                'birthDate' => '1984-12-01',
+            ]);
+            self::fail('Expected InputValidationException');
+        } catch (InputValidationException $e) {
+            self::assertSame('insurance_variant_invalid', $e->errorCode);
+            self::assertSame('insuranceVariantId', $e->field);
+        }
     }
 
     /**

@@ -16,6 +16,7 @@ use ZmierzymyCzas\Domain\Payments\GatewayAmount;
 use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
 use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Domain\Teams\TeamRepository;
+use ZmierzymyCzas\Support\InputValidationException;
 use ZmierzymyCzas\Support\Log\LoggerFactory;
 use ZmierzymyCzas\Support\QrCode;
 
@@ -4201,12 +4202,20 @@ SQL;
         $stmt->execute(['eventId' => (string) $data['eventId'], 'variantId' => $variantId]);
         $variant = $stmt->fetch();
         if (!$variant) {
-            throw new \RuntimeException('insurance_variant_invalid');
+            throw new InputValidationException(
+                'Wybrany wariant ubezpieczenia NNW nie jest dostępny na tym wydarzeniu.',
+                'insuranceVariantId',
+                'insurance_variant_invalid'
+            );
         }
 
         $birthDate = $this->resolveBirthDate($data);
         if ($birthDate === null) {
-            throw new \RuntimeException('insurance_birth_date_missing');
+            throw new InputValidationException(
+                'Aby wykupić ubezpieczenie NNW, uzupełnij pełną datę urodzenia zawodnika (w profilu albo w danych podopiecznego).',
+                'insuranceVariantId',
+                'insurance_birth_date_missing'
+            );
         }
 
         $age = $this->ageAsOf($birthDate, $eventDate);
@@ -4218,28 +4227,89 @@ SQL;
     }
 
     /**
-     * Zawodnik's birth date, looked up via competitorId when this Zapis carries one
-     * (the normal path — see routes.php's competitorId resolution) — falling back
-     * to a directly-sent `birthDate` on $data for callers that don't have a
-     * Competitor row (older integrations, tests). Only used for the NNW age
-     * formula; never trusted as a money-affecting field.
+     * Zawodnik's FULL birth date (Y-m-d), for the NNW age formula. Sources, first valid wins:
+     * the Zawodnik's own `birth_date`, then that Zawodnik's own Konto `users.birth_date`
+     * (profile edits write only to the Konto, see competitorFacts()), then a directly-sent
+     * `birthDate` on $data for internal callers without a Competitor row (the HTTP path drops
+     * it, see RegistrationCreatePolicy). A year-only or malformed value counts as missing:
+     * `new DateTimeImmutable('2010')` means "today at 20:10" and would price NNW for age 0.
+     * Never the caller's or the guardian's data.
      *
      * @param array<string, mixed> $data
      */
     private function resolveBirthDate(array $data): ?string
     {
-        $competitorId = (string) ($data['competitorId'] ?? '');
-        if ($competitorId !== '') {
-            $stmt = $this->pdo->prepare('SELECT birth_date FROM competitors WHERE id = :id');
-            $stmt->execute(['id' => $competitorId]);
-            $birthDate = $stmt->fetchColumn();
-            if ($birthDate !== false && $birthDate !== null && $birthDate !== '') {
-                return (string) $birthDate;
+        $facts = $this->competitorFacts((string) ($data['competitorId'] ?? ''));
+        if ($facts['birthDate'] !== null) {
+            return $facts['birthDate'];
+        }
+
+        return self::validFullDate((string) ($data['birthDate'] ?? ''));
+    }
+
+    /** `Y-m-d` that is a real calendar date, else null. */
+    private static function validFullDate(string $value): ?string
+    {
+        $value = trim($value);
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $m) !== 1) {
+            return null;
+        }
+
+        return checkdate((int) $m[2], (int) $m[3], (int) $m[1]) ? $value : null;
+    }
+
+    /**
+     * What the server knows about a Zawodnik for age rules: the full birth date (NNW), the birth
+     * year (Kategoria wiekowa) and the gender. `competitors` is filled once, when the Konto is
+     * created, while the profile editor writes `users.birth_year/birth_date/gender` only, so the
+     * Zawodnik's OWN Konto (competitors.user_id) is the fallback. A Zawodnik without a Konto (a
+     * child) has none: the caller's or the guardian's data must never classify somebody else.
+     *
+     * @return array{birthDate: ?string, birthYear: ?int, gender: ?string}
+     */
+    private function competitorFacts(string $competitorId): array
+    {
+        $facts = ['birthDate' => null, 'birthYear' => null, 'gender' => null];
+        if ($competitorId === '') {
+            return $facts;
+        }
+
+        $stmt = $this->pdo->prepare(
+            'SELECT c.birth_date AS birthDate, c.gender AS gender,
+                    u.birth_date AS kontoBirthDate, u.birth_year AS kontoBirthYear, u.gender AS kontoGender
+             FROM competitors c LEFT JOIN users u ON u.id = c.user_id
+             WHERE c.id = :id'
+        );
+        $stmt->execute(['id' => $competitorId]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            return $facts;
+        }
+
+        $facts['birthDate'] = self::validFullDate((string) ($row['birthDate'] ?? ''))
+            ?? self::validFullDate((string) ($row['kontoBirthDate'] ?? ''));
+
+        foreach ([(string) ($row['birthDate'] ?? ''), (string) ($row['kontoBirthDate'] ?? '')] as $candidate) {
+            if (preg_match('/^(\d{4})/', trim($candidate), $m) === 1 && (int) $m[1] >= 1900) {
+                $facts['birthYear'] = (int) $m[1];
+                break;
+            }
+        }
+        if ($facts['birthYear'] === null) {
+            $kontoYear = (int) ($row['kontoBirthYear'] ?? 0);
+            if ($kontoYear >= 1900 && $kontoYear <= (int) date('Y')) {
+                $facts['birthYear'] = $kontoYear;
             }
         }
 
-        $fallback = (string) ($data['birthDate'] ?? '');
-        return $fallback !== '' ? $fallback : null;
+        foreach ([$row['gender'] ?? null, $row['kontoGender'] ?? null] as $gender) {
+            if ($gender === 'M' || $gender === 'K') {
+                $facts['gender'] = $gender;
+                break;
+            }
+        }
+
+        return $facts;
     }
 
     private function ageAsOf(string $birthDate, string $asOfDate): int

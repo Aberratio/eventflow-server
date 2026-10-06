@@ -221,4 +221,33 @@ final class JsonErrorMiddlewareTest extends TestCase
             self::assertCount(0, $handler->getRecords());
         }
     }
+
+    public function testInputValidationExceptionDefaultsToValidationErrorCode(): void
+    {
+        $middleware = new JsonErrorMiddleware(false, $this->testLogger()[0]);
+
+        $response = $middleware->process($this->request(), $this->throwingHandler(new InputValidationException('Brak pola.', 'name')));
+        $body = (array) json_decode((string) $response->getBody(), true);
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('validation_error', $body['error']['code']);
+    }
+
+    public function testInputValidationExceptionCarriesCustomErrorCode(): void
+    {
+        [$logger, $handler] = $this->testLogger();
+        $middleware = new JsonErrorMiddleware(false, $logger);
+        $exception = new InputValidationException('Ten wariant opłaty nie jest dostępny.', 'pricingVariantId', 'pricing_variant_unavailable');
+
+        $response = $middleware->process($this->request(), $this->throwingHandler($exception));
+        $body = (array) json_decode((string) $response->getBody(), true);
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertFalse($body['success']);
+        self::assertSame('pricing_variant_unavailable', $body['error']['code']);
+        self::assertSame('Ten wariant opłaty nie jest dostępny.', $body['error']['message']);
+        self::assertSame(['field' => 'pricingVariantId'], $body['error']['details']);
+        self::assertFalse($response->hasHeader('X-Request-Id'));
+        self::assertCount(0, $handler->getRecords());
+    }
 }

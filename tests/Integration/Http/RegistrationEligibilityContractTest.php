@@ -177,6 +177,148 @@ final class RegistrationEligibilityContractTest extends HttpTestCase
         $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')->execute(['email' => $this->prefix . '-%@example.test']);
     }
 
+    // ── PP.65 ────────────────────────────────────────────────────────────
+
+    public function testAc1ParticipantCannotPickOfficeOnlyVariant(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+        $before = $this->snapshot();
+
+        $response = $this->selfPost($p, ['pricingVariantId' => $this->vid('biuro')]);
+
+        $this->assert422($response, 'pricing_variant_unavailable', 'pricingVariantId');
+        $this->assertNothingWritten($before);
+    }
+
+    public function testAc2ParticipantCannotPickHiddenVariant(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+        $before = $this->snapshot();
+
+        $response = $this->selfPost($p, ['pricingVariantId' => $this->vid('ukryty')]);
+
+        $this->assert422($response, 'pricing_variant_unavailable', 'pricingVariantId');
+        $this->assertNothingWritten($before);
+    }
+
+    public function testAc3ParticipantPicksPublicVariant(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+
+        $response = $this->selfPost($p, ['pricingVariantId' => $this->vid('std')]);
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame(100.0, $this->distancePriceLine($this->json($response)['data']['id']));
+    }
+
+    /** @dataProvider staffRoles */
+    public function testAc4StaffMayPickOfficeOnlyVariant(string $role): void
+    {
+        $staff = $this->person('staff', $role, '1990-05-05', 'M');
+
+        $response = $this->selfPost($staff, ['pricingVariantId' => $this->vid('biuro')]);
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame(20.0, $this->distancePriceLine($this->json($response)['data']['id']));
+    }
+
+    public static function staffRoles(): array
+    {
+        return ['admin' => ['admin'], 'superadmin' => ['superadmin'], 'moderator' => ['moderator']];
+    }
+
+    public function testAc5OwningOrganizerMayAndForeignOrganizerMayNot(): void
+    {
+        $this->setCompetitor($this->organizer['id'], '1990-05-05', 'M');
+        $this->setCompetitor($this->otherOrganizer['id'], '1990-05-05', 'M');
+
+        $own = $this->selfPost($this->organizer, ['pricingVariantId' => $this->vid('biuro')]);
+        self::assertSame(201, $own->getStatusCode());
+        self::assertSame(20.0, $this->distancePriceLine($this->json($own)['data']['id']));
+
+        $before = $this->snapshot();
+        $foreign = $this->selfPost($this->otherOrganizer, ['pricingVariantId' => $this->vid('biuro')]);
+        $this->assert422($foreign, 'pricing_variant_unavailable', 'pricingVariantId');
+        $this->assertNothingWritten($before);
+    }
+
+    public function testAc6GuardianCannotPickOfficeVariantForWard(): void
+    {
+        $g = $this->person('g', 'participant', '1980-01-01', 'M');
+        $ward = $this->ward('2015-03-01', 'K', $g);
+        $before = $this->snapshot();
+
+        $response = $this->post($g, ['competitorId' => $ward, 'pricingVariantId' => $this->vid('biuro')]);
+
+        $this->assert422($response, 'pricing_variant_unavailable', 'pricingVariantId');
+        $this->assertNothingWritten($before);
+    }
+
+    public function testAc7UnknownOrForeignDistanceVariantIsInvalid(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+        $before = $this->snapshot();
+
+        $unknown = $this->selfPost($p, ['pricingVariantId' => $this->prefix . '-v-nope']);
+        $this->assert422($unknown, 'pricing_variant_invalid', 'pricingVariantId');
+        $foreign = $this->selfPost($p, ['pricingVariantId' => $this->vid('other')]);
+        $this->assert422($foreign, 'pricing_variant_invalid', 'pricingVariantId');
+        $this->assertNothingWritten($before);
+    }
+
+    public function testAc8HiddenZeroPriceVariantIsRejectedNotBornConfirmed(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+        $before = $this->snapshot();
+
+        $response = $this->selfPost($p, ['pricingVariantId' => $this->vid('zero')]);
+
+        $this->assert422($response, 'pricing_variant_unavailable', 'pricingVariantId');
+        $this->assertNothingWritten($before);
+        self::assertSame(0, $this->countWhere('registrations', 'status = \'confirmed\' AND event_id = :e', ['e' => $this->event['id']]));
+    }
+
+    public function testAc9HiddenVariantWithFullDiscountCodeIsRejected(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+        $before = $this->snapshot();
+
+        $response = $this->selfPost($p, ['pricingVariantId' => $this->vid('biuro'), 'discountCode' => 'ELIGFULL']);
+
+        $this->assert422($response, 'pricing_variant_unavailable', 'pricingVariantId');
+        $this->assertNothingWritten($before);
+        $used = $this->pdo->prepare('SELECT used_by FROM event_discount_codes WHERE event_id = :e');
+        $used->execute(['e' => $this->event['id']]);
+        $raw = $used->fetchColumn();
+        self::assertSame([], $raw === null || $raw === '' ? [] : (json_decode((string) $raw, true) ?: []));
+    }
+
+    public function testAc10RelayJoinUnderPerTeamIgnoresVariant(): void
+    {
+        $captain = $this->person('cap', 'participant', '1990-05-05', 'M');
+        $joiner = $this->person('join', 'participant', '1991-05-05', 'M');
+        $relay = $this->prefix . '-event-relay';
+        $this->pdo->prepare(
+            "INSERT INTO event_distances (id, event_id, name, length, unit, price, participant_limit, registered_count, start_type, relay_min_team_size, relay_max_team_size, team_pricing_mode, sort_order)
+             VALUES (:id, :e, 'Sztafeta', 10, 'km', 80, 100, 0, 'relay', 2, 4, 'per_team', 9)"
+        )->execute(['id' => $relay, 'e' => $this->event['id']]);
+        $this->pdo->prepare(
+            "INSERT INTO event_distance_pricing_variants (id, distance_id, name, price, office_only, visible_in_public_form, sort_order)
+             VALUES (:id, :d, 'REL', 80, 0, 1, 0)"
+        )->execute(['id' => $this->prefix . '-v-rel', 'd' => $relay]);
+
+        $created = $this->selfPost($captain, ['distanceId' => $relay, 'createTeam' => true, 'teamName' => 'Drużyna R', 'pricingVariantId' => $this->prefix . '-v-rel']);
+        self::assertSame(201, $created->getStatusCode());
+        $teamId = (string) $this->json($created)['data']['teamId'];
+        $tokenRow = $this->pdo->prepare('SELECT invite_token FROM teams WHERE id = :id');
+        $tokenRow->execute(['id' => $teamId]);
+        $token = (string) $tokenRow->fetchColumn();
+
+        $join = $this->selfPost($joiner, ['distanceId' => $relay, 'teamId' => $teamId, 'teamInviteToken' => $token, 'pricingVariantId' => $this->prefix . '-v-rel']);
+        self::assertSame(201, $join->getStatusCode(), (string) $join->getBody());
+        self::assertSame(0.0, $this->distancePriceLine($this->json($join)['data']['id'], true));
+    }
+
     // ── PP.80 ────────────────────────────────────────────────────────────
 
     public function testAc25NnwWithoutBirthDateIsRejected(): void

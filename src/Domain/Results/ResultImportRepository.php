@@ -1132,6 +1132,9 @@ SQL);
             'distanceId' => $batch['distanceId'],
             'category' => $category,
             'pricingVariantId' => $variant['id'],
+            // PP.65: this office action picks the office-only variant on purpose; the HTTP route
+            // behind it already restricts it to event managers.
+            'trustedOfficeRegistration' => true,
             'registeredById' => $actorId,
             'merchandiseOrders' => [],
             // Uczestnik juz przebiegl dystans (pojawil sie w pliku wynikow) -

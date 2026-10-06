@@ -912,13 +912,16 @@ final class RegistrationRepositoryTest extends TestCase
     {
         $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-variant-invalid']));
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('pricing_variant_invalid');
-
-        $this->registrations->create([
-            ...$this->registrationPayload($event, ''),
-            'pricingVariantId' => 'does-not-exist',
-        ]);
+        try {
+            $this->registrations->create([
+                ...$this->registrationPayload($event, ''),
+                'pricingVariantId' => 'does-not-exist',
+            ]);
+            self::fail('Expected InputValidationException');
+        } catch (InputValidationException $e) {
+            self::assertSame('pricing_variant_invalid', $e->errorCode);
+            self::assertSame('pricingVariantId', $e->field);
+        }
     }
 
     /**

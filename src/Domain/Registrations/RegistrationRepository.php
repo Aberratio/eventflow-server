@@ -1890,6 +1890,7 @@ SQL;
     {
         $stmt = $this->pdo->prepare(
             'SELECT e.name AS eventName, e.date AS eventDate, e.payment_config AS paymentConfig,
+                    e.organizer_id AS organizerId,
                     d.id AS distanceId, d.name AS distanceName,
                     d.price AS distancePrice, d.registered_count AS registeredCount,
                     d.participant_limit AS participantLimit, d.price_tiers AS priceTiers,
@@ -3693,7 +3694,7 @@ SQL;
             $usedBy = [];
         } else {
             // ── Kroki 1+2: Wariant opłaty + jego własny Próg ────────────────
-            $base = $this->startFeeBaseItems($row, isset($data['pricingVariantId']) && $data['pricingVariantId'] !== null && $data['pricingVariantId'] !== '' ? (string) $data['pricingVariantId'] : null);
+            $base = $this->startFeeBaseItems($row, isset($data['pricingVariantId']) && $data['pricingVariantId'] !== null && $data['pricingVariantId'] !== '' ? (string) $data['pricingVariantId'] : null, $data);
             $items = $base['items'];
             $runningTotal = $base['resolvedPrice'];
 
@@ -3766,16 +3767,36 @@ SQL;
      * line relative to the base (matching the spec's worked example, which shows
      * "Wariant STANDARDOWA 110,00" and "próg „Early bird" −60,00" as two lines).
      *
+     * PP.65: a Wariant marked `office_only` or hidden from the public form may only be picked by
+     * staff or the Event's own organizer (see actorMaySelectRestrictedVariants()); anyone else
+     * gets 422, so a participant cannot reach a cheaper hidden price by sending its id.
+     *
      * @param array<string, mixed> $distanceRow
+     * @param array<string, mixed> $data the create() payload (carries the authenticated `actorUserId`)
      * @return array{items: array<int, array{name: string, basis: string, amount: float}>, resolvedPrice: float}
      */
-    private function startFeeBaseItems(array $distanceRow, ?string $pricingVariantId): array
+    private function startFeeBaseItems(array $distanceRow, ?string $pricingVariantId, array $data = []): array
     {
         $variant = $pricingVariantId !== null
             ? $this->pricingVariant((string) $distanceRow['distanceId'], $pricingVariantId)
             : null;
         if ($pricingVariantId !== null && $variant === null) {
-            throw new \RuntimeException('pricing_variant_invalid');
+            throw new InputValidationException(
+                'Wybrany wariant opłaty nie istnieje dla tego dystansu.',
+                'pricingVariantId',
+                'pricing_variant_invalid'
+            );
+        }
+        if (
+            $variant !== null
+            && ((int) $variant['officeOnly'] === 1 || (int) $variant['visibleInPublicForm'] === 0)
+            && !$this->actorMaySelectRestrictedVariants($data, $distanceRow)
+        ) {
+            throw new InputValidationException(
+                'Ten wariant opłaty nie jest dostępny w zapisach online. Wybierz inny wariant.',
+                'pricingVariantId',
+                'pricing_variant_unavailable'
+            );
         }
 
         if ($variant !== null) {
@@ -3812,10 +3833,48 @@ SQL;
     /** @return array<string, mixed>|null */
     private function pricingVariant(string $distanceId, string $variantId): ?array
     {
-        $stmt = $this->pdo->prepare('SELECT id, name, price, price_tiers AS priceTiers FROM event_distance_pricing_variants WHERE id = :id AND distance_id = :distanceId');
+        $stmt = $this->pdo->prepare('SELECT id, name, price, price_tiers AS priceTiers, office_only AS officeOnly, visible_in_public_form AS visibleInPublicForm FROM event_distance_pricing_variants WHERE id = :id AND distance_id = :distanceId');
         $stmt->execute(['id' => $variantId, 'distanceId' => $distanceId]);
         $row = $stmt->fetch();
         return $row ?: null;
+    }
+
+    /**
+     * PP.65 (decision Q9): who may pick an office-only / hidden Wariant. Looks at the ACTOR (the
+     * authenticated caller, `actorUserId` set by the HTTP layer), not at the Zawodnik being
+     * registered, so a guardian registering a ward gets no more than the guardian has. The role
+     * is read from the database, not from the token. Fails closed: no actor means public.
+     *
+     * The one exception is an internal office caller that already authorised the user as an event
+     * manager and passes `trustedOfficeRegistration => true` (the results-import "create office
+     * Zapis" action, ResultImportRepository). POST /registrations can never set that key:
+     * RegistrationCreatePolicy forwards only its SELECTION_FIELDS.
+     *
+     * @param array<string, mixed> $data
+     * @param array<string, mixed> $distanceRow
+     */
+    private function actorMaySelectRestrictedVariants(array $data, array $distanceRow): bool
+    {
+        if (($data['trustedOfficeRegistration'] ?? false) === true) {
+            return true;
+        }
+
+        $actorUserId = trim((string) ($data['actorUserId'] ?? ''));
+        if ($actorUserId === '') {
+            return false;
+        }
+
+        $stmt = $this->pdo->prepare('SELECT role FROM users WHERE id = :id');
+        $stmt->execute(['id' => $actorUserId]);
+        $role = $stmt->fetchColumn();
+        if ($role === false) {
+            return false;
+        }
+        if (in_array($role, ['admin', 'superadmin', 'moderator'], true)) {
+            return true;
+        }
+
+        return $role === 'organizer' && (string) ($distanceRow['organizerId'] ?? '') === $actorUserId;
     }
 
     /**

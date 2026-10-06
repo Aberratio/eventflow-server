@@ -20,7 +20,13 @@ final class AdminCreatedAccountContractTest extends HttpTestCase
     private const MAILER_TESTS = [
         'testSetupLinkIsIssuedAndTheMailAttempted',
         'testSetupLinkSetsThePasswordThroughResetConfirm',
+        'testPermanentMailerRejectionGetsTheHonestFallbackMessage',
+        'testTransientMailerFailureAnnouncesAScheduledSend',
     ];
+
+    /** @var resource|null */
+    private $stubProcess = null;
+    private ?string $stubScript = null;
 
     private UserRepository $users;
     private string $prefix;
@@ -32,7 +38,9 @@ final class AdminCreatedAccountContractTest extends HttpTestCase
         if (in_array($this->name(), self::MAILER_TESTS, true)) {
             // Must be set before the app is built: the mailer config is read at route registration.
             Env::set('CENTRAL_MAILER_API_KEY', 'phpunit-key');
-            Env::set('CENTRAL_MAILER_BASE_URL', 'unusable://mailer.invalid');
+            Env::set('CENTRAL_MAILER_BASE_URL', $this->name() === 'testPermanentMailerRejectionGetsTheHonestFallbackMessage'
+                ? $this->startStubMailer(422)
+                : 'unusable://mailer.invalid');
             Env::set('APP_URL', 'https://app.example.test');
         } else {
             Env::set('CENTRAL_MAILER_API_KEY', '');
@@ -52,6 +60,14 @@ final class AdminCreatedAccountContractTest extends HttpTestCase
 
     protected function tearDown(): void
     {
+        if ($this->stubProcess !== null) {
+            proc_terminate($this->stubProcess);
+            proc_close($this->stubProcess);
+            $this->stubProcess = null;
+        }
+        if ($this->stubScript !== null) {
+            @unlink($this->stubScript);
+        }
         Env::restore('CENTRAL_MAILER_API_KEY');
         Env::restore('CENTRAL_MAILER_BASE_URL');
         Env::restore('APP_URL');
@@ -217,6 +233,62 @@ final class AdminCreatedAccountContractTest extends HttpTestCase
         $again = $this->request('POST', '/api/v1/auth/password/reset/confirm', ['token' => $token, 'newPassword' => 'InneHaslo456']);
         self::assertSame(400, $again->getStatusCode());
         self::assertSame('invalid_token', $this->json($again)['error']['code']);
+    }
+
+    /** Starts a throwaway PHP built-in server that answers every request with the given status; returns its base URL. */
+    private function startStubMailer(int $status): string
+    {
+        $probe = stream_socket_server('tcp://127.0.0.1:0');
+        self::assertNotFalse($probe);
+        $port = (int) substr((string) stream_socket_get_name($probe, false), strrpos((string) stream_socket_get_name($probe, false), ':') + 1);
+        fclose($probe);
+
+        $this->stubScript = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'zc-stub-mailer-' . bin2hex(random_bytes(4)) . '.php';
+        file_put_contents($this->stubScript, '<?php http_response_code(' . $status . '); header("Content-Type: application/json"); echo "{}";');
+        $this->stubProcess = proc_open(
+            [PHP_BINARY, '-S', '127.0.0.1:' . $port, $this->stubScript],
+            [0 => ['pipe', 'r'], 1 => ['file', sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'zc-stub-mailer.log', 'a'], 2 => ['file', sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'zc-stub-mailer.log', 'a']],
+            $pipes
+        );
+        self::assertIsResource($this->stubProcess);
+        for ($i = 0; $i < 50; $i++) {
+            $conn = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.2);
+            if ($conn !== false) {
+                fclose($conn);
+                return 'http://127.0.0.1:' . $port;
+            }
+            usleep(100000);
+        }
+        self::fail('stub mailer did not start');
+    }
+
+    public function testPermanentMailerRejectionGetsTheHonestFallbackMessage(): void
+    {
+        $email = $this->prefix . '-perm@example.test';
+        $response = $this->createViaApi('perm');
+
+        self::assertSame(201, $response->getStatusCode());
+        $message = (string) $this->json($response)['message'];
+        self::assertStringNotContainsString('Wysłaliśmy', $message);
+        self::assertStringContainsString('nie udało się wysłać linku', $message);
+
+        $stmt = $this->pdo->prepare('SELECT status, next_attempt_at, central_mailer_email_id FROM central_mailer_outbox WHERE recipient = :email');
+        $stmt->execute(['email' => $email]);
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        self::assertIsArray($row);
+        self::assertSame('failed', $row['status']);
+        self::assertNull($row['next_attempt_at']);
+        self::assertNull($row['central_mailer_email_id']);
+    }
+
+    public function testTransientMailerFailureAnnouncesAScheduledSend(): void
+    {
+        $response = $this->createViaApi('trans');
+
+        self::assertSame(201, $response->getStatusCode());
+        $message = (string) $this->json($response)['message'];
+        self::assertStringNotContainsString('Wysłaliśmy', $message);
+        self::assertStringContainsString('zostanie wysłany', $message);
     }
 
     public function testMailerNotConfiguredStillCreatesAccountAndToken(): void

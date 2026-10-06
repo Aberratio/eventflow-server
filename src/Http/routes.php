@@ -963,17 +963,28 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
             $setupHours = intdiv(ActionTokenPurpose::ACCOUNT_SETUP_TTL, 3600);
             $setupLink = rtrim((string) Env::get('APP_URL', ''), '/') . '/reset-password?token=' . $setupToken['raw'];
-            $mailQueued = false;
+            // 'sent' = Central Mailer accepted it; 'pending' = a retry is scheduled; 'lost' = nothing will be sent
+            // (mailer unconfigured, permanent rejection such as a suppressed recipient, or retries exhausted).
+            $mailState = 'lost';
             try {
-                $mailQueued = $mailer->sendAccountSetup($setupToken['id'], (string) ($created['email'] ?? ''), $setupLink, $setupHours) !== null;
+                $mailRow = $mailer->sendAccountSetup($setupToken['id'], (string) ($created['email'] ?? ''), $setupLink, $setupHours);
+                if ($mailRow !== null) {
+                    if (($mailRow['centralMailerEmailId'] ?? null) !== null) {
+                        $mailState = 'sent';
+                    } elseif (($mailRow['nextAttemptAt'] ?? null) !== null) {
+                        $mailState = 'pending';
+                    }
+                }
             } catch (Throwable $e) {
                 // Ids and the error class only, never the link, the token or the address.
                 $logger->error('Account setup mail could not be queued', ['userId' => (string) $created['id'], 'errorClass' => $e::class]);
             }
             $logActivity((array) $request->getAttribute('auth'), 'user_created', 'Utworzono konto użytkownika', 'user', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
-            $message = $mailQueued
+            $message = $mailState === 'sent'
                 ? 'Konto zostało utworzone. Wysłaliśmy na adres ' . $created['email'] . ' link do ustawienia hasła (ważny ' . $setupHours . ' godz.).'
-                : 'Konto zostało utworzone, ale nie udało się wysłać linku do ustawienia hasła. Użytkownik może ustawić hasło przez „Nie pamiętam hasła” na stronie logowania.';
+                : ($mailState === 'pending'
+                    ? 'Konto zostało utworzone. Link do ustawienia hasła (ważny ' . $setupHours . ' godz.) zostanie wysłany na adres ' . $created['email'] . ' w ciągu kilku minut.'
+                    : 'Konto zostało utworzone, ale nie udało się wysłać linku do ustawienia hasła. Użytkownik może ustawić hasło przez „Nie pamiętam hasła” na stronie logowania.');
             return JsonResponder::ok($response, $created, $message, 201);
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));

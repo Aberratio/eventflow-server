@@ -140,7 +140,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     // PP.20: one record per payment webhook delivery. Context is ids only, never the
     // signature, the raw body or anything else the (unauthenticated) caller controls.
     $logWebhook = static function (string $gateway, string $outcome, array $context = []) use ($logger): void {
-        $level = in_array($outcome, ['applied', 'duplicate', 'amount_mismatch'], true) ? LogLevel::INFO : LogLevel::WARNING;
+        $level = in_array($outcome, ['applied', 'duplicate', 'amount_mismatch', 'registration_mismatch'], true) ? LogLevel::INFO : LogLevel::WARNING;
         $logger->log($level, 'Payment webhook ' . $outcome, ['gateway' => $gateway, 'outcome' => $outcome] + $context);
     };
     $teams = new TeamRepository($pdo);
@@ -2441,7 +2441,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $result = $registrations->applyGatewayNotification(
                     $notification->transactionId,
                     $notification->paid,
-                    $notification->paidAmountGrosze
+                    $notification->paidAmountGrosze,
+                    $notification->registrationId
                 );
             } catch (RuntimeException $e) {
                 if ($e->getMessage() === 'gateway_transaction_unknown') {
@@ -2457,7 +2458,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 throw $e;
             }
 
-            $logWebhook('tpay', $result['amountMismatch'] ? 'amount_mismatch' : ($result['applied'] ? 'applied' : 'duplicate'), [
+            $logWebhook('tpay', $result['registrationMismatch'] ? 'registration_mismatch' : ($result['amountMismatch'] ? 'amount_mismatch' : ($result['applied'] ? 'applied' : 'duplicate')), [
                 'transactionId' => $notification->transactionId,
                 'registrationId' => $result['registrationId'],
                 'paid' => $notification->paid,
@@ -2510,7 +2511,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $result = $registrations->applyGatewayNotification(
                     $notification->transactionId,
                     $notification->paid,
-                    null
+                    null,
+                    $notification->registrationId
                 );
             } catch (RuntimeException $e) {
                 if ($e->getMessage() === 'gateway_transaction_unknown') {
@@ -2521,7 +2523,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 throw $e;
             }
 
-            $logWebhook('paynow', $result['amountMismatch'] ? 'amount_mismatch' : ($result['applied'] ? 'applied' : 'duplicate'), [
+            $logWebhook('paynow', $result['registrationMismatch'] ? 'registration_mismatch' : ($result['amountMismatch'] ? 'amount_mismatch' : ($result['applied'] ? 'applied' : 'duplicate')), [
                 'transactionId' => $notification->transactionId,
                 'registrationId' => $result['registrationId'],
                 'paid' => $notification->paid,

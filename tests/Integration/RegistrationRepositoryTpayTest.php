@@ -19,6 +19,7 @@ use ZmierzymyCzas\Domain\Mailer\Http\HttpResponse;
 use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\Env;
+use ZmierzymyCzas\Support\Uuid;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
 /**
@@ -302,6 +303,209 @@ final class RegistrationRepositoryTpayTest extends TestCase
         self::assertStringContainsString('registrationId=' . $registration['id'], $logged);
         self::assertStringNotContainsString('phpunit-participant@example.test', $logged);
         self::assertStringNotContainsString('PHPUnit User', $logged);
+    }
+
+    // ---- PP.63: notified registration id cross-check ------------------------------------
+
+    /** @return array<int, \Monolog\LogRecord> */
+    private function recordsWithAlert(\Monolog\Handler\TestHandler $logs, string $alert): array
+    {
+        return array_values(array_filter(
+            $logs->getRecords(),
+            static fn ($r): bool => ($r->context['alert'] ?? null) === $alert
+        ));
+    }
+
+    /** @return array<int, \Monolog\LogRecord> */
+    private function unverifiableWarnings(\Monolog\Handler\TestHandler $logs): array
+    {
+        return array_values(array_filter(
+            $logs->getRecords(),
+            static fn ($r): bool => ($r->context['check'] ?? null) === 'payments.registration_id_unverifiable'
+        ));
+    }
+
+    public function testPaidNotificationWithAForeignRegistrationIdDoesNotConfirm(): void
+    {
+        [, $registrations] = $this->mailingRepository();
+        $registration = $this->registrationWithTransaction('TX-swap', $registrations);
+
+        $result = $registrations->applyGatewayNotification('TX-swap', true, 8000, Uuid::v4());
+
+        self::assertFalse($result['applied']);
+        self::assertTrue($result['registrationMismatch'] ?? false);
+        self::assertSame($registration['id'], $result['registrationId']);
+        self::assertSame('pending', $this->rawStatus($registration['id']));
+        self::assertSame('amount_mismatch', $this->rawGatewayTransaction('TX-swap')['status']);
+        self::assertFalse($registrations->find($registration['id'])['paymentDetails']['startFeePaid'] ?? false);
+        self::assertSame(0, $this->outboxRows($registration['id'], 'payment_confirmed'));
+    }
+
+    public function testRegistrationMismatchLogsOnceWithoutPiiAndWithoutTheNotifiedId(): void
+    {
+        [$logs, $registrations] = $this->mailingRepository();
+        $registration = $this->registrationWithTransaction('TX-swap-log', $registrations);
+        $foreign = Uuid::v4();
+
+        $registrations->applyGatewayNotification('TX-swap-log', true, 8000, $foreign);
+        $registrations->applyGatewayNotification('TX-swap-log', true, 8000, $foreign);
+
+        $alerts = $this->recordsWithAlert($logs, 'payments.registration_mismatch');
+        self::assertCount(1, $alerts);
+        self::assertSame(\Monolog\Level::Error, $alerts[0]->level);
+        self::assertSame('TX-swap-log', $alerts[0]->context['transactionId']);
+        self::assertSame($registration['id'], $alerts[0]->context['registrationId']);
+        self::assertSame('tpay', $alerts[0]->context['gateway']);
+        $encoded = $alerts[0]->message . json_encode($alerts[0]->context);
+        self::assertStringNotContainsString($foreign, $encoded);
+        self::assertStringNotContainsString('phpunit-participant@example.test', $encoded);
+        self::assertStringNotContainsString('PHPUnit User', $encoded);
+        self::assertSame(0, $this->outboxRows($registration['id'], 'payment_confirmed'));
+    }
+
+    public function testMismatchedNotPaidNotificationDoesNotCloseTheRow(): void
+    {
+        $this->registrationWithTransaction('TX-swap-np');
+
+        $result = $this->registrations->applyGatewayNotification('TX-swap-np', false, null, Uuid::v4());
+
+        self::assertFalse($result['applied']);
+        self::assertTrue($result['registrationMismatch'] ?? false);
+        self::assertSame('created', $this->rawGatewayTransaction('TX-swap-np')['status']);
+    }
+
+    public function testLaterMatchingNotificationAfterRegistrationMismatchConfirms(): void
+    {
+        [, $registrations] = $this->mailingRepository();
+        $registration = $this->registrationWithTransaction('TX-swap-fix', $registrations);
+
+        $registrations->applyGatewayNotification('TX-swap-fix', true, 8000, Uuid::v4());
+        self::assertSame('amount_mismatch', $this->rawGatewayTransaction('TX-swap-fix')['status']);
+        self::assertSame('pending', $this->rawStatus($registration['id']));
+
+        $result = $registrations->applyGatewayNotification('TX-swap-fix', true, 8000, $registration['id']);
+
+        self::assertTrue($result['applied']);
+        self::assertSame('paid', $this->rawGatewayTransaction('TX-swap-fix')['status']);
+        self::assertSame('confirmed', $this->rawStatus($registration['id']));
+        self::assertSame(1, $this->outboxRows($registration['id'], 'payment_confirmed'));
+    }
+
+    public function testRegistrationMismatchOnExpiredRegistrationDoesNotRevive(): void
+    {
+        [$logs, $registrations] = $this->mailingRepository();
+        $registration = $this->registrationWithTransaction('TX-swap-exp', $registrations);
+        $this->backdateExpiry($registration['id']);
+        $registrations->expireOverdueRegistrations(new \DateTimeImmutable());
+        self::assertSame('expired', $this->rawStatus($registration['id']));
+        $countBefore = $this->rawRegisteredCount((string) $registration['distanceId']);
+
+        $registrations->applyGatewayNotification('TX-swap-exp', true, 8000, Uuid::v4());
+
+        self::assertSame('expired', $this->rawStatus($registration['id']));
+        self::assertSame($countBefore, $this->rawRegisteredCount((string) $registration['distanceId']));
+        self::assertSame([], $this->recordsWithAlert($logs, 'payments.paid_after_expiry'));
+        self::assertCount(1, $this->recordsWithAlert($logs, 'payments.registration_mismatch'));
+    }
+
+    public function testSchedulerKeepsPendingRegistrationAfterRegistrationMismatch(): void
+    {
+        $registration = $this->registrationWithTransaction('TX-swap-sched');
+        $this->registrations->applyGatewayNotification('TX-swap-sched', true, 8000, Uuid::v4());
+        $this->pdo->prepare('UPDATE registrations SET payment_expires_at = :when WHERE id = :id')->execute([
+            'when' => (new \DateTimeImmutable('-' . (RegistrationRepository::GATEWAY_IN_FLIGHT_GRACE_MINUTES + 60) . ' minutes'))->format(DATE_ATOM),
+            'id' => $registration['id'],
+        ]);
+
+        $this->registrations->expireOverdueRegistrations(new \DateTimeImmutable());
+
+        self::assertSame('pending', $this->rawStatus($registration['id']));
+    }
+
+    public function testMatchingRegistrationIdStillConfirmsOnce(): void
+    {
+        [$logs, $registrations] = $this->mailingRepository();
+        $registration = $this->registrationWithTransaction('TX-swap-ok', $registrations);
+
+        $result = $registrations->applyGatewayNotification('TX-swap-ok', true, 8000, $registration['id']);
+
+        self::assertTrue($result['applied']);
+        self::assertFalse($result['registrationMismatch'] ?? true);
+        self::assertSame('confirmed', $this->rawStatus($registration['id']));
+        self::assertSame(1, $this->outboxRows($registration['id'], 'payment_confirmed'));
+        self::assertSame([], $this->unverifiableWarnings($logs));
+    }
+
+    public function testAbsentRegistrationIdIsToleratedWithAnUnverifiableWarning(): void
+    {
+        [$logs, $registrations] = $this->mailingRepository();
+        $registration = $this->registrationWithTransaction('TX-swap-null', $registrations);
+
+        $result = $registrations->applyGatewayNotification('TX-swap-null', true, 8000, null);
+
+        self::assertTrue($result['applied']);
+        self::assertSame('confirmed', $this->rawStatus($registration['id']));
+        $warnings = $this->unverifiableWarnings($logs);
+        self::assertCount(1, $warnings);
+        self::assertSame(\Monolog\Level::Warning, $warnings[0]->level);
+        self::assertArrayNotHasKey('alert', $warnings[0]->context);
+        self::assertSame([], $this->recordsWithAlert($logs, 'payments.registration_mismatch'));
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function unverifiableRegistrationIds(): array
+    {
+        return [
+            'empty' => [''],
+            'numeric crc' => ['98765'],
+            'short crc' => ['CRC-abc123'],
+            'uuid with trailer' => ['0b5d3c1e-2f4a-4b6c-8d7e-9f0a1b2c3d4e-x'],
+            'uuid v1 shape' => ['0b5d3c1e-2f4a-1b6c-8d7e-9f0a1b2c3d4e'],
+        ];
+    }
+
+    #[DataProvider('unverifiableRegistrationIds')]
+    public function testMalformedRegistrationIdIsNotBlockedAndWarns(string $notified): void
+    {
+        [$logs, $registrations] = $this->mailingRepository();
+        $registration = $this->registrationWithTransaction('TX-swap-fmt', $registrations);
+
+        $result = $registrations->applyGatewayNotification('TX-swap-fmt', true, 8000, $notified);
+
+        self::assertTrue($result['applied']);
+        self::assertFalse($result['registrationMismatch'] ?? true);
+        self::assertSame('confirmed', $this->rawStatus($registration['id']));
+        $warnings = $this->unverifiableWarnings($logs);
+        self::assertCount(1, $warnings);
+        if ($notified !== '') {
+            self::assertStringNotContainsString($notified, $warnings[0]->message . json_encode($warnings[0]->context));
+        }
+        self::assertSame([], $this->recordsWithAlert($logs, 'payments.registration_mismatch'));
+    }
+
+    public function testMalformedIdWithAWrongAmountStillTakesTheAmountMismatchPath(): void
+    {
+        [$logs, $registrations] = $this->mailingRepository();
+        $registration = $this->registrationWithTransaction('TX-swap-amt', $registrations);
+
+        $result = $registrations->applyGatewayNotification('TX-swap-amt', true, 7999, '98765');
+
+        self::assertTrue($result['amountMismatch']);
+        self::assertSame('pending', $this->rawStatus($registration['id']));
+        self::assertCount(1, $this->recordsWithAlert($logs, 'payments.amount_mismatch'));
+    }
+
+    public function testTerminalRowIgnoresALaterMismatchedNotificationSilently(): void
+    {
+        [$logs, $registrations] = $this->mailingRepository();
+        $registration = $this->registrationWithTransaction('TX-swap-term', $registrations);
+        $registrations->applyGatewayNotification('TX-swap-term', true, 8000, $registration['id']);
+
+        $result = $registrations->applyGatewayNotification('TX-swap-term', true, 8000, Uuid::v4());
+
+        self::assertFalse($result['applied']);
+        self::assertSame('paid', $this->rawGatewayTransaction('TX-swap-term')['status']);
+        self::assertSame([], $this->recordsWithAlert($logs, 'payments.registration_mismatch'));
     }
 
     public function testPaidNotificationAfterExpiryRevivesWhenCapacityAllows(): void

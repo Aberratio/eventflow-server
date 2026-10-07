@@ -388,6 +388,7 @@ final class EventChildMassAssignmentContractTest extends HttpTestCase
         $e = $this->createEvent('admin', false, $this->fullChildren('a') + [
             'insuranceVariantIds' => [],
         ]);
+        $this->publish($e);
         $before = $this->dump($e);
         $get = $this->request('GET', '/api/v1/events/' . $e, [], $this->adminAuth());
         self::assertSame(200, $get->getStatusCode());
@@ -430,7 +431,8 @@ final class EventChildMassAssignmentContractTest extends HttpTestCase
     {
         $e = $this->createEvent('rbac', false, ['paymentMethods' => [['name' => 'Przelew']]]);
 
-        $foreign = $this->request('PATCH', '/api/v1/events/' . $e, ['distances' => [['name' => 'x', 'unit' => 'km']]], true);
+        $this->publish($e);
+        $foreign = $this->request('PATCH', '/api/v1/events/' . $e, ['distances' => [['name' => 'x', 'unit' => 'km']]], $this->otherAuth());
         self::assertSame(403, $foreign->getStatusCode());
 
         $mod = $this->request('PATCH', '/api/v1/events/' . $e, [
@@ -539,6 +541,12 @@ final class EventChildMassAssignmentContractTest extends HttpTestCase
         self::assertSame(201, $response->getStatusCode(), (string) $response->getBody());
 
         return (string) $this->json($response)['data']['id'];
+    }
+
+    /** Staff (admin/moderator) may only edit an event that has cleared moderation. */
+    private function publish(string $eventId): void
+    {
+        $this->pdo->prepare("UPDATE events SET publication_status = 'published' WHERE id = :id")->execute(['id' => $eventId]);
     }
 
     /** @return array<string, list<array<string, mixed>>> */

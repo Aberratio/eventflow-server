@@ -4,17 +4,29 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Events;
 
+use Psr\Log\LoggerInterface;
 use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Support\HtmlSanitizer;
+use ZmierzymyCzas\Support\InputRules;
+use ZmierzymyCzas\Support\InputValidationException;
+use ZmierzymyCzas\Support\Log\LoggerFactory;
 
 final class EventRepository extends Repository
 {
+    /** PP.59: PSR-3 logger for dropped child keys; defaults to the error_log-backed fallback. */
+    private readonly LoggerInterface $logger;
+
+    public function __construct(\PDO $pdo, ?LoggerInterface $logger = null)
+    {
+        parent::__construct($pdo);
+        $this->logger = $logger ?? LoggerFactory::fallback();
+    }
+
     private const CREDIT_KINDS = ['standard', 'virtual', 'timing'];
 
     // PP.5: rich-text columns sanitized on write via HtmlSanitizer (second line of
     // defence; the client also sanitizes on every render).
     private const RICH_TEXT_COLUMNS = ['description', 'rules_html', 'organizers_html', 'final_acceptance_html'];
-    private const RICH_TEXT_CHILD_COLUMNS = ['info_html', 'description_html']; // event_distances, event_merchandise
 
     /**
      * E1.4: the two payment-window durations (docs/20-... pkt 1) live as two more
@@ -258,8 +270,13 @@ SQL;
      */
     public function createWithId(string $id, array $data): array
     {
-        $this->insert('events', $this->eventData($id, $data, true));
-        $this->replaceChildren($id, $data);
+        // Trusted: the array is built on the server (seeder, dev seed route, tests), so fixture ids
+        // and the system counters survive. Validation runs before the first write.
+        $prepared = $this->prepareChildren($data, true);
+        $this->inOwnTransaction(function () use ($id, $data, $prepared): void {
+            $this->insert('events', $this->eventData($id, $data, true));
+            $this->syncChildren($id, $prepared);
+        });
         return $this->find($id);
     }
 
@@ -267,17 +284,19 @@ SQL;
     public function createForOrganizer(array $data, array $organizer, string $actorId): array
     {
         $id = $this->id();
+        $payload = $data;
+        $payload['organizerId'] = $organizer['id'];
+        $payload['organizerName'] = $organizer['companyName'] ?: $organizer['name'];
+        $payload['publicationStatus'] = 'draft';
+        $payload['createdBy'] = $actorId;
+        // PP.59: untrusted HTTP body, validated before the transaction (and any write) starts.
+        $prepared = $this->prepareChildren($payload, false);
         $this->pdo->beginTransaction();
         try {
-            $payload = $data;
-            $payload['organizerId'] = $organizer['id'];
-            $payload['organizerName'] = $organizer['companyName'] ?: $organizer['name'];
-            $payload['publicationStatus'] = 'draft';
-            $payload['createdBy'] = $actorId;
             $payload['eventCreditKind'] = $this->creditKindForEvent($payload);
             $this->assertOrganizerHasCapacity((string) $organizer['id']);
             $this->insert('events', $this->eventData($id, $payload, true));
-            $this->replaceChildren($id, $payload);
+            $this->syncChildren($id, $prepared);
             $this->pdo->commit();
         } catch (\Throwable $e) {
             $this->pdo->rollBack();
@@ -294,7 +313,7 @@ SQL;
      * pre-platform completion) can point at a real Event row instead of
      * free text. Deliberately minimal per the ticket's own scoping: no
      * `distances`/registration payload is ever accepted here (unlike
-     * create()/createForOrganizer(), which both call replaceChildren()), so
+     * create()/createForOrganizer(), which both call syncChildren()), so
      * an external Event can never accidentally grow Dystans or registration
      * machinery. Always created already `published` (there is no
      * organizer-submission workflow to run it through) and with
@@ -349,8 +368,11 @@ SQL;
     /** @param array<string, mixed> $data */
     public function update(string $id, array $data): ?array
     {
-        $this->updateById('events', $id, $this->eventData($id, $data, false));
-        $this->replaceChildren($id, $data);
+        $prepared = $this->prepareChildren($data, false);
+        $this->inOwnTransaction(function () use ($id, $data, $prepared): void {
+            $this->updateById('events', $id, $this->eventData($id, $data, false));
+            $this->syncChildren($id, $prepared);
+        });
         return $this->find($id);
     }
 
@@ -1105,83 +1127,293 @@ SQL;
         $this->pdo->prepare('DELETE FROM organizer_event_credit_usages WHERE event_id = :eventId')->execute(['eventId' => $eventId]);
     }
 
-    /** @param array<string, mixed> $data */
-    private function replaceChildren(string $eventId, array $data): void
+    /**
+     * PP.59: validate and normalize every child collection present in the request, with no database
+     * access, so a bad value rejects the whole request before the first write. Column names come only
+     * from EventChildSchema constants; client keys are only looked up there.
+     *
+     * @param array<string, mixed> $data
+     * @return array{collections: array<string, list<array<string, mixed>>>, unknown: array<string, list<string>>, insurance: list<string>|null}
+     */
+    private function prepareChildren(array $data, bool $trusted): array
     {
-        $children = [
-            'distances' => ['table' => 'event_distances', 'json' => self::DISTANCE_JSON],
-            'paymentMethods' => ['table' => 'event_payment_methods', 'json' => []],
-            'merchandise' => ['table' => 'event_merchandise', 'json' => ['sizes', 'colors', 'images', 'distanceIds', 'documents']],
-            'discountCodes' => ['table' => 'event_discount_codes', 'json' => ['distanceIds', 'usedBy']],
-            'galleryAlbums' => ['table' => 'event_gallery_albums', 'json' => []],
-        ];
+        $collections = [];
+        $unknown = [];
 
-        $children['documents'] = ['table' => 'event_documents', 'json' => []];
-
-        foreach ($children as $input => $meta) {
-            if (!array_key_exists($input, $data)) {
+        foreach (array_keys(EventChildSchema::COLLECTIONS) as $key) {
+            if (!array_key_exists($key, $data)) {
                 continue;
             }
-            $this->pdo->prepare("DELETE FROM {$meta['table']} WHERE event_id = :eventId")->execute(['eventId' => $eventId]);
-            foreach (array_values($data[$input] ?? []) as $index => $item) {
-                $pricingVariants = null;
-                if ($meta['table'] === 'event_distances' && array_key_exists('pricingVariants', $item)) {
-                    $pricingVariants = $item['pricingVariants'];
-                    unset($item['pricingVariants']);
+            $items = $this->listOrFail($data[$key], $key, EventChildSchema::COLLECTION_LABELS[$key]);
+            $prepared = [];
+            foreach ($items as $i => $item) {
+                $path = $key . '[' . $i . ']';
+                if (!is_array($item)) {
+                    throw InputRules::invalid($path, EventChildSchema::COLLECTION_LABELS[$key]);
                 }
-                $row = $this->snakeizeKeys($item);
-                foreach (self::RICH_TEXT_CHILD_COLUMNS as $column) {
-                    if (array_key_exists($column, $row)) {
-                        $row[$column] = HtmlSanitizer::cleanNullable($row[$column]);
+                $normalized = EventChildSchema::normalize($key, $item, $path, $trusted);
+                $this->collectUnknown($unknown, $key, $normalized['unknownKeys']);
+                $entry = $this->childEntry($item, $normalized['columns'], $path, $trusted);
+                if ($key === 'distances' && array_key_exists('pricingVariants', $item)) {
+                    $entry['variants'] = [];
+                    $variantItems = $this->listOrFail(
+                        $item['pricingVariants'],
+                        $path . '.pricingVariants',
+                        EventChildSchema::COLLECTION_LABELS[EventChildSchema::PRICING_VARIANTS]
+                    );
+                    foreach ($variantItems as $j => $variant) {
+                        $variantPath = $path . '.pricingVariants[' . $j . ']';
+                        if (!is_array($variant)) {
+                            throw InputRules::invalid($variantPath, EventChildSchema::COLLECTION_LABELS[EventChildSchema::PRICING_VARIANTS]);
+                        }
+                        $normalizedVariant = EventChildSchema::normalize(EventChildSchema::PRICING_VARIANTS, $variant, $variantPath, $trusted);
+                        $this->collectUnknown($unknown, EventChildSchema::PRICING_VARIANTS, $normalizedVariant['unknownKeys']);
+                        $entry['variants'][] = $this->childEntry($variant, $normalizedVariant['columns'], $variantPath, $trusted);
                     }
                 }
-                if ($meta['table'] === 'event_distances' && array_key_exists('limit', $row)) {
-                    $row['participant_limit'] = $row['limit'];
-                    unset($row['limit']);
-                }
-                $row['id'] = $row['id'] ?? $this->id();
-                $row['event_id'] = $eventId;
-                $row['sort_order'] = $index;
-                foreach ($meta['json'] as $jsonField) {
-                    $snake = $this->snake($jsonField);
-                    if (array_key_exists($snake, $row) && !is_string($row[$snake])) {
-                        $row[$snake] = json_encode($row[$snake], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-                    }
-                }
-                $this->insert($meta['table'], $row);
-                if ($pricingVariants !== null) {
-                    $this->replaceDistancePricingVariants((string) $row['id'], $pricingVariants);
-                }
+                $prepared[] = $entry;
             }
+            $collections[$key] = $prepared;
         }
 
+        $insurance = null;
         if (array_key_exists('insuranceVariantIds', $data)) {
-            $this->replaceEventInsuranceVariants($eventId, (array) ($data['insuranceVariantIds'] ?? []));
+            $insurance = [];
+            foreach ($this->listOrFail($data['insuranceVariantIds'], 'insuranceVariantIds', 'Warianty NNW') as $variantId) {
+                if (!is_string($variantId) || trim($variantId) === '' || mb_strlen($variantId) > 36) {
+                    throw InputRules::invalid('insuranceVariantIds', 'Warianty NNW');
+                }
+                $insurance[] = $variantId;
+            }
+            $insurance = array_values(array_unique($insurance));
+        }
+
+        return ['collections' => $collections, 'unknown' => $unknown, 'insurance' => $insurance];
+    }
+
+    /** @return array<mixed> null clears the collection (as before); anything but a list is a 422 */
+    private function listOrFail(mixed $value, string $field, string $label): array
+    {
+        if ($value === null) {
+            return [];
+        }
+        if (!is_array($value) || !array_is_list($value)) {
+            throw InputRules::invalid($field, $label);
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param array<mixed> $item
+     * @param array<string, mixed> $columns
+     * @return array{rawId: string|null, suppliedId: string|null, columns: array<string, mixed>, variants: list<array<string, mixed>>|null}
+     */
+    private function childEntry(array $item, array $columns, string $path, bool $trusted): array
+    {
+        $rawId = isset($item['id']) && (is_string($item['id']) || is_int($item['id'])) ? (string) $item['id'] : null;
+        $suppliedId = null;
+        if ($trusted && $rawId !== null && trim($rawId) !== '') {
+            if (mb_strlen($rawId) > 36) {
+                throw new InputValidationException('Pole „Identyfikator” może mieć najwyżej 36 znaków.', $path . '.id');
+            }
+            $suppliedId = $rawId;
+        } elseif ($trusted && isset($item['id']) && $rawId === null) {
+            throw InputRules::invalid($path . '.id', 'Identyfikator');
+        }
+
+        // $rawId is only ever used to MATCH an existing row of this event; it is never written
+        // unless the caller is trusted (seeder / dev seed route) and the id fits the column.
+        return ['rawId' => $rawId, 'suppliedId' => $suppliedId, 'columns' => $columns, 'variants' => null];
+    }
+
+    /**
+     * @param array<string, list<string>> $unknown
+     * @param list<string> $keys
+     */
+    private function collectUnknown(array &$unknown, string $collection, array $keys): void
+    {
+        foreach ($keys as $key) {
+            $clean = substr((string) preg_replace('/[^\x20-\x7E]/', '?', $key), 0, 64);
+            if (!in_array($clean, $unknown[$collection] ?? [], true) && count($unknown[$collection] ?? []) < 20) {
+                $unknown[$collection][] = $clean;
+            }
         }
     }
 
     /**
-     * Wariant opłaty (E0.3): a pricing variant belonging to a Dystans — e.g. the
-     * office-only "zapis w biurze zawodów" price that used to be the special-cased
-     * `event_distances.office_price` column. Full replace, mirroring how the other
-     * event children are persisted.
+     * PP.59: diff-sync the prepared children inside the caller's transaction: rows whose id already
+     * belongs to THIS event are updated in place (counters and FK children survive), everything else
+     * becomes a new row with a server-generated id, and rows missing from the request are deleted.
      *
-     * @param array<int, array<string, mixed>> $variants
+     * @param array{collections: array<string, list<array<string, mixed>>>, unknown: array<string, list<string>>, insurance: list<string>|null} $prepared
      */
-    private function replaceDistancePricingVariants(string $distanceId, array $variants): void
+    private function syncChildren(string $eventId, array $prepared): void
     {
-        $this->pdo->prepare('DELETE FROM event_distance_pricing_variants WHERE distance_id = :distanceId')->execute(['distanceId' => $distanceId]);
-        foreach (array_values($variants) as $index => $variant) {
-            $row = $this->snakeizeKeys($variant);
-            $row['id'] = $row['id'] ?? $this->id();
-            $row['distance_id'] = $distanceId;
-            $row['sort_order'] = $index;
-            // E1.2: Próg Wariantu (krok 2) niesie ten sam kształt JSON co
-            // event_distances.price_tiers — patrz replaceChildren()'s handling of that field.
-            if (array_key_exists('price_tiers', $row) && $row['price_tiers'] !== null && !is_string($row['price_tiers'])) {
-                $row['price_tiers'] = json_encode($row['price_tiers'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $distanceIdMap = [];
+
+        foreach ($prepared['collections'] as $collection => $items) {
+            $table = EventChildSchema::COLLECTIONS[$collection];
+            $existing = $this->existingChildIds($table, 'event_id', $eventId);
+            $claimed = [];
+            $variantWork = [];
+
+            foreach ($items as $index => $item) {
+                $columns = $item['columns'];
+                if ($collection === 'merchandise' || $collection === 'discountCodes') {
+                    $columns['distance_ids'] = $this->remapDistanceIds($columns['distance_ids'] ?? null, $distanceIdMap);
+                }
+                $rawId = $item['rawId'];
+                if ($rawId !== null && isset($existing[$rawId]) && !isset($claimed[$rawId])) {
+                    $claimed[$rawId] = true;
+                    $id = $rawId;
+                    $this->updateChild($table, 'event_id', $eventId, $id, $columns, $index);
+                } else {
+                    $id = $item['suppliedId'] ?? $this->id();
+                    $this->insertChild($table, 'event_id', $eventId, $id, $columns, $index);
+                    if ($collection === 'distances' && $rawId !== null && $rawId !== $id) {
+                        $distanceIdMap[$rawId] = $id;
+                    }
+                }
+                if ($collection === 'distances' && $item['variants'] !== null) {
+                    $variantWork[$id] = $item['variants'];
+                }
             }
-            $this->insert('event_distance_pricing_variants', $row);
+
+            foreach (array_keys($existing) as $oldId) {
+                if (isset($claimed[$oldId])) {
+                    continue;
+                }
+                if ($collection === 'distances') {
+                    $this->pdo->prepare('DELETE FROM event_distance_pricing_variants WHERE distance_id = ?')->execute([(string) $oldId]);
+                }
+                $this->pdo->prepare('DELETE FROM ' . $table . ' WHERE id = ? AND event_id = ?')->execute([(string) $oldId, $eventId]);
+            }
+
+            foreach ($variantWork as $distanceId => $variants) {
+                $this->syncPricingVariants((string) $distanceId, $variants);
+            }
+        }
+
+        if ($prepared['insurance'] !== null) {
+            $this->replaceEventInsuranceVariants($eventId, $prepared['insurance']);
+        }
+
+        foreach ($prepared['unknown'] as $collection => $keys) {
+            // Key NAMES only, never values: a request may carry personal data in those values.
+            $this->logger->notice('event_child_unknown_keys_dropped', [
+                'eventId' => $eventId,
+                'collection' => $collection,
+                'keys' => $keys,
+            ]);
+        }
+    }
+
+    /**
+     * Wariant opłaty (E0.3): same diff sync as the other children, scoped by distance_id.
+     *
+     * @param list<array<string, mixed>> $variants
+     */
+    private function syncPricingVariants(string $distanceId, array $variants): void
+    {
+        $table = EventChildSchema::PRICING_VARIANTS_TABLE;
+        $existing = $this->existingChildIds($table, 'distance_id', $distanceId);
+        $claimed = [];
+        foreach ($variants as $index => $variant) {
+            $rawId = $variant['rawId'];
+            if ($rawId !== null && isset($existing[$rawId]) && !isset($claimed[$rawId])) {
+                $claimed[$rawId] = true;
+                $this->updateChild($table, 'distance_id', $distanceId, $rawId, $variant['columns'], $index);
+            } else {
+                $this->insertChild($table, 'distance_id', $distanceId, $variant['suppliedId'] ?? $this->id(), $variant['columns'], $index);
+            }
+        }
+        foreach (array_keys($existing) as $oldId) {
+            if (!isset($claimed[$oldId])) {
+                $this->pdo->prepare('DELETE FROM ' . $table . ' WHERE id = ? AND distance_id = ?')->execute([(string) $oldId, $distanceId]);
+            }
+        }
+    }
+
+    /** @return array<string, true> */
+    private function existingChildIds(string $table, string $ownerColumn, string $ownerId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT id FROM ' . $table . ' WHERE ' . $ownerColumn . ' = ?');
+        $stmt->execute([$ownerId]);
+        $ids = [];
+        foreach ($stmt->fetchAll(\PDO::FETCH_COLUMN) as $id) {
+            $ids[(string) $id] = true;
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Table and column names reaching insertChild()/updateChild() come from EventChildSchema and
+     * this class's constants only; every value is bound positionally.
+     *
+     * @param array<string, mixed> $columns
+     */
+    private function insertChild(string $table, string $ownerColumn, string $ownerId, string $id, array $columns, int $sortOrder): void
+    {
+        $columns = ['id' => $id, $ownerColumn => $ownerId] + $columns + ['sort_order' => $sortOrder];
+        $sql = 'INSERT INTO ' . $table
+            . ' (' . implode(', ', array_map(static fn (string $c): string => '`' . $c . '`', array_keys($columns))) . ')'
+            . ' VALUES (' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+        $this->pdo->prepare($sql)->execute(array_values($columns));
+    }
+
+    /** @param array<string, mixed> $columns */
+    private function updateChild(string $table, string $ownerColumn, string $ownerId, string $id, array $columns, int $sortOrder): void
+    {
+        $columns += ['sort_order' => $sortOrder];
+        $sql = 'UPDATE ' . $table . ' SET '
+            . implode(', ', array_map(static fn (string $c): string => '`' . $c . '` = ?', array_keys($columns)))
+            . ' WHERE id = ? AND ' . $ownerColumn . ' = ?';
+        $this->pdo->prepare($sql)->execute([...array_values($columns), $id, $ownerId]);
+    }
+
+    /** @param array<string, string> $map temporary client distance id => server distance id */
+    private function remapDistanceIds(mixed $json, array $map): mixed
+    {
+        if (!is_string($json) || $map === []) {
+            return $json;
+        }
+        $ids = json_decode($json, true);
+        if (!is_array($ids)) {
+            return $json;
+        }
+        foreach ($ids as $key => $id) {
+            if (is_string($id) && isset($map[$id])) {
+                $ids[$key] = $map[$id];
+            }
+        }
+
+        return json_encode($ids, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * Runs $work inside a transaction unless the caller already opened one (the seeder and some
+     * tests do; PDO does not support nesting).
+     */
+    private function inOwnTransaction(callable $work): mixed
+    {
+        $own = !$this->pdo->inTransaction();
+        if ($own) {
+            $this->pdo->beginTransaction();
+        }
+        try {
+            $result = $work();
+            if ($own) {
+                $this->pdo->commit();
+            }
+
+            return $result;
+        } catch (\Throwable $e) {
+            if ($own && $this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $e;
         }
     }
 
@@ -1193,20 +1425,5 @@ SQL;
             $out[preg_replace_callback('/_([a-z])/', static fn ($m) => strtoupper($m[1]), $key)] = $value;
         }
         return $out;
-    }
-
-    /** @param array<string, mixed> $row */
-    private function snakeizeKeys(array $row): array
-    {
-        $out = [];
-        foreach ($row as $key => $value) {
-            $out[$this->snake((string) $key)] = $value;
-        }
-        return $out;
-    }
-
-    private function snake(string $key): string
-    {
-        return strtolower((string) preg_replace('/(?<!^)[A-Z]/', '_$0', $key));
     }
 }

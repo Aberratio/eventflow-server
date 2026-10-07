@@ -354,12 +354,13 @@ final class BzParticipantsContractTest extends HttpTestCase
             'lastName' => 'Testowy',
         ], skipDuplicateCheck: true);
 
-        $merchandiseId = $this->prefix . '-shirt';
-        $this->events->update((string) $event['id'], [
+        // PP.59: child ids sent through update() are replaced by server ids; read the stored id back.
+        $updated = $this->events->update((string) $event['id'], [
             'merchandise' => [
-                ['id' => $merchandiseId, 'name' => 'Koszulka techniczna', 'price' => 65, 'sizes' => ['M'], 'colors' => []],
+                ['name' => 'Koszulka techniczna', 'price' => 65, 'sizes' => ['M'], 'colors' => []],
             ],
         ]);
+        $merchandiseId = (string) $updated['merchandise'][0]['id'];
 
         $registration = $this->registrations->create([
             'eventId' => $event['id'],

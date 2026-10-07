@@ -83,6 +83,9 @@ final class RegistrationRepository extends Repository
     public const EXPIRY_BATCH_LIMIT = 500;
     private const EXPIRY_PER_DISTANCE_LIMIT = 50;
     public const GATEWAY_IN_FLIGHT_GRACE_MINUTES = 15;
+
+    /** PP.63: the format of the registration ids this platform generates (Uuid::v4()). */
+    private const REGISTRATION_ID_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i';
     public const REMINDER_BATCH_LIMIT = 200;
     public const SNAPSHOT_BATCH_LIMIT = 500;
     private const REMINDER_LEAD_GATEWAY_MINUTES = 15;
@@ -3181,9 +3184,21 @@ SQL;
      * call is the one that actually flipped the state to paid/failed). A repeated
      * mismatch is a no-op and is not logged again.
      *
-     * @return array{applied: bool, registrationId: ?string, amountMismatch: bool, paidAfterExpiry?: bool}
+     * Registration identity check (PP.63): `$notifiedRegistrationId` is the registration id the gateway
+     * echoed back in the notification (Tpay hiddenDescription/tr_crc, PayNow externalId). The locked
+     * transaction row stays the source of truth; the notified id is only compared against it. When the
+     * notified id is present AND has the format of the ids this platform generates (UUID v4) but differs
+     * from the row's `registration_id`, the notification takes the same path as an amount mismatch: the
+     * row becomes `amount_mismatch`, nothing is marked paid/failed/confirmed, one PII-free ERROR line
+     * (alert `payments.registration_mismatch`, the notified id is NOT logged) and the caller still acks
+     * the gateway. An absent, empty or differently-formatted id cannot be told apart from a gateway that
+     * does not echo our id verbatim (real field names are unverified until TD.4), so it never blocks: a
+     * WARNING (`check` = payments.registration_id_unverifiable, no alert) is logged and the normal flow
+     * continues. A row that is already `paid`/`failed` ignores the check (idempotency).
+     *
+     * @return array{applied: bool, registrationId: ?string, amountMismatch: bool, registrationMismatch: bool, paidAfterExpiry?: bool}
      */
-    public function applyGatewayNotification(string $transactionId, bool $paid, ?int $notifiedAmountGrosze): array
+    public function applyGatewayNotification(string $transactionId, bool $paid, ?int $notifiedAmountGrosze, ?string $notifiedRegistrationId = null): array
     {
         $mismatchLog = null;
         $this->pdo->beginTransaction();
@@ -3206,14 +3221,46 @@ SQL;
                 // notification (or a later one for the same transaction) — the
                 // idempotency guarantee itself. Nothing more to do.
                 $this->pdo->commit();
-                return ['applied' => false, 'registrationId' => $registrationId, 'amountMismatch' => false];
+                return ['applied' => false, 'registrationId' => $registrationId, 'amountMismatch' => false, 'registrationMismatch' => false];
+            }
+
+            // PP.63: identity check first — a wrong identity makes the amount meaningless, and a
+            // mismatched "not paid" must not close our row as `failed` either.
+            $registrationMismatch = false;
+            if ($notifiedRegistrationId !== null && preg_match(self::REGISTRATION_ID_PATTERN, $notifiedRegistrationId) === 1) {
+                $registrationMismatch = strtolower($notifiedRegistrationId) !== strtolower($registrationId);
+            } else {
+                $this->logger->warning(sprintf(
+                    '[RegistrationRepository::applyGatewayNotification] Notification registration id absent or not in platform format, identity not verified: transactionId=%s gateway=%s',
+                    $transactionId,
+                    (string) $transaction['gateway']
+                ), [
+                    'transactionId' => $transactionId,
+                    'gateway' => (string) $transaction['gateway'],
+                    'check' => 'payments.registration_id_unverifiable',
+                ]);
+            }
+
+            if ($registrationMismatch) {
+                // Log once per row transition (paid), or on every !paid delivery (no state to dedupe on).
+                $logMismatch = !$paid;
+                if ($paid && $currentStatus === 'created') {
+                    $this->markNeedsReconciliation($transactionId);
+                    $logMismatch = true;
+                }
+                $this->pdo->commit();
+                if ($logMismatch) {
+                    $this->logRegistrationMismatch($transactionId, $registrationId, (string) $transaction['gateway'], $paid);
+                }
+
+                return ['applied' => false, 'registrationId' => $registrationId, 'amountMismatch' => false, 'registrationMismatch' => true];
             }
 
             if (!$paid) {
                 // The amount is irrelevant when nothing was paid.
                 $this->closeGatewayTransaction($transactionId, 'failed');
                 $this->pdo->commit();
-                return ['applied' => true, 'registrationId' => $registrationId, 'amountMismatch' => false];
+                return ['applied' => true, 'registrationId' => $registrationId, 'amountMismatch' => false, 'registrationMismatch' => false];
             }
 
             $expectedGrosze = GatewayAmount::toGrosze((string) $transaction['amount']);
@@ -3224,14 +3271,7 @@ SQL;
 
             if ($mismatch) {
                 if ($currentStatus === 'created') {
-                    $this->pdo->prepare(
-                        "UPDATE registration_gateway_transactions
-                         SET status = 'amount_mismatch', processed_at = :processedAt
-                         WHERE transaction_id = :transactionId AND status = 'created'"
-                    )->execute([
-                        'processedAt' => date(DATE_ATOM),
-                        'transactionId' => $transactionId,
-                    ]);
+                    $this->markNeedsReconciliation($transactionId);
                     $mismatchLog = [(string) $transaction['gateway'], $expectedGrosze];
                 }
                 $this->pdo->commit();
@@ -3239,7 +3279,7 @@ SQL;
                     $this->logAmountMismatch($transactionId, $registrationId, $mismatchLog[0], $mismatchLog[1], $notifiedAmountGrosze);
                 }
 
-                return ['applied' => false, 'registrationId' => $registrationId, 'amountMismatch' => true];
+                return ['applied' => false, 'registrationId' => $registrationId, 'amountMismatch' => true, 'registrationMismatch' => false];
             }
 
             $this->closeGatewayTransaction($transactionId, 'paid');
@@ -3272,6 +3312,7 @@ SQL;
                 'applied' => true,
                 'registrationId' => $registrationId,
                 'amountMismatch' => false,
+                'registrationMismatch' => false,
                 'paidAfterExpiry' => $outcome === 'paid_after_expiry',
             ];
         }
@@ -3292,7 +3333,7 @@ SQL;
         // for an amount mismatch.
         $this->sendPaymentConfirmedMail($registrationId);
 
-        return ['applied' => true, 'registrationId' => $registrationId, 'amountMismatch' => false, 'paidAfterExpiry' => false];
+        return ['applied' => true, 'registrationId' => $registrationId, 'amountMismatch' => false, 'registrationMismatch' => false, 'paidAfterExpiry' => false];
     }
 
     /**
@@ -3343,6 +3384,41 @@ SQL;
             'status' => $status,
             'processedAt' => date(DATE_ATOM),
             'transactionId' => $transactionId,
+        ]);
+    }
+
+    /** `created` -> `amount_mismatch`: authentic notification, money NOT booked, a human has to look. */
+    private function markNeedsReconciliation(string $transactionId): void
+    {
+        $this->pdo->prepare(
+            "UPDATE registration_gateway_transactions
+             SET status = 'amount_mismatch', processed_at = :processedAt
+             WHERE transaction_id = :transactionId AND status = 'created'"
+        )->execute([
+            'processedAt' => date(DATE_ATOM),
+            'transactionId' => $transactionId,
+        ]);
+    }
+
+    /**
+     * PP.63: ids and gateway name only. The notified id is attacker-influenced body data and is
+     * deliberately never written; the line only says it differs from the row's.
+     */
+    private function logRegistrationMismatch(string $transactionId, string $registrationId, string $gateway, bool $paid): void
+    {
+        $this->logger->error(sprintf(
+            '[RegistrationRepository::applyGatewayNotification] Gateway registration id differs from the transaction row, payment NOT marked paid: '
+            . 'transactionId=%s registrationId=%s gateway=%s paid=%s',
+            $transactionId,
+            $registrationId,
+            $gateway,
+            $paid ? 'yes' : 'no'
+        ), [
+            'transactionId' => $transactionId,
+            'registrationId' => $registrationId,
+            'gateway' => $gateway,
+            'paid' => $paid,
+            'alert' => 'payments.registration_mismatch',
         ]);
     }
 

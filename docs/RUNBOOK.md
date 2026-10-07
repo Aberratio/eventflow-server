@@ -300,3 +300,14 @@ expires and no reminders go out, on staging as well as production. Full runbook:
 - **Alerts:** `scheduler.job_failed` (a job threw or the jobs could not be built; the other jobs still ran)
   and `payments.paid_after_expiry` (money arrived for a Zapis that could not be confirmed: refund it or
   admit the participant manually). Both need an admin to look at the log.
+- **Payment webhooks, registration id cross-check (PP.63):** a signed Tpay/PayNow notification carries the
+  registration id we sent (Tpay `transactionHiddenDescription` / `tr_crc`, PayNow `externalId`). If it is
+  present, has the format of our ids (UUID v4) and differs from the `registration_id` stored on the gateway
+  transaction row, nothing is booked: the row becomes `amount_mismatch` (same state as a wrong amount), the
+  gateway is acked (200) and one ERROR with alert `payments.registration_mismatch` is logged (transaction id,
+  the row's registration id and gateway only; the notified id is never logged). Check the gateway
+  configuration (mixed-up merchant account?) and reconcile by hand. A notification whose id is absent, empty
+  or not in our format is NOT blocked (the real Tpay field is unverified until TD.4): the normal flow
+  continues and a WARNING with `check` = `payments.registration_id_unverifiable` is logged (no alert key, so
+  no e-mail). TD.4 must confirm the real field name and format; if that WARNING shows up for real payments,
+  the field is not echoed as our id and the check is not protecting that gateway yet.

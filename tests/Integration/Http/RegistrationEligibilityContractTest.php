@@ -319,6 +319,183 @@ final class RegistrationEligibilityContractTest extends HttpTestCase
         self::assertSame(0.0, $this->distancePriceLine($this->json($join)['data']['id'], true));
     }
 
+    // ── PP.79 ────────────────────────────────────────────────────────────
+
+    public function testAc11ServerComputesCategoryIgnoringClient(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+
+        $response = $this->selfPost($p, ['category' => 'K50+']);
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('M30-39', $this->storedCategory($this->json($response)['data']['id']));
+    }
+
+    public function testAc12MissingOrEmptyCategoryIsComputed(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+        $q = $this->person('q', 'participant', '1990-05-05', 'M');
+
+        $omitted = $this->selfPost($p, ['category' => null], ['category']);
+        $empty = $this->selfPost($q, ['category' => '']);
+
+        self::assertSame(201, $omitted->getStatusCode());
+        self::assertSame('M30-39', $this->storedCategory($this->json($omitted)['data']['id']));
+        self::assertSame(201, $empty->getStatusCode());
+        self::assertSame('M30-39', $this->storedCategory($this->json($empty)['data']['id']));
+    }
+
+    public function testAc13GuardianDataNeverClassifiesWard(): void
+    {
+        $g = $this->person('g', 'participant', '1980-01-01', 'M');
+        $ward = $this->ward('2015-03-01', 'K', $g);
+
+        $response = $this->post($g, ['competitorId' => $ward, 'category' => 'M1976-1985']);
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('K2014-2016', $this->storedCategory($this->json($response)['data']['id']));
+    }
+
+    public function testAc14WardWithoutBirthDateIsRejectedEvenIfGuardianHasOne(): void
+    {
+        $g = $this->person('g', 'participant', '1980-01-01', 'M');
+        $ward = $this->ward(null, 'K', $g);
+        $before = $this->snapshot();
+
+        $response = $this->post($g, ['competitorId' => $ward, 'category' => 'M1976-1985']);
+
+        $this->assert422($response, 'registration_birth_date_required', 'category');
+        $this->assertNothingWritten($before);
+    }
+
+    public function testAc15NoMatchingCategoryForBirthYear(): void
+    {
+        $p = $this->person('p', 'participant', '2015-03-01', 'M');
+        $before = $this->snapshot();
+
+        $response = $this->selfPost($p, ['distanceId' => $this->dg]);
+
+        $this->assert422($response, 'registration_category_unavailable', 'category');
+        $this->assertNothingWritten($before);
+    }
+
+    public function testAc16NullGenderNeverMatchesGenderSpecificCategory(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', null);
+        $q = $this->person('q', 'participant', '1990-05-05', null);
+        $before = $this->snapshot();
+
+        $specific = $this->selfPost($p, ['distanceId' => $this->dg]);
+        $this->assert422($specific, 'registration_category_unavailable', 'category');
+        $this->assertNothingWritten($before);
+
+        $neutral = $this->selfPost($q, ['distanceId' => $this->do]);
+        self::assertSame(201, $neutral->getStatusCode());
+        self::assertSame('YOUNG', $this->storedCategory($this->json($neutral)['data']['id']));
+    }
+
+    public function testAc17FallsBackToOwnKontoBirthYearAndGender(): void
+    {
+        $p = $this->person('p', 'participant', null, null);
+        $this->pdo->prepare('UPDATE users SET birth_year = 1990, birth_date = NULL, gender = \'M\' WHERE id = :id')->execute(['id' => $p['id']]);
+
+        $response = $this->selfPost($p, ['category' => 'whatever']);
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('M30-39', $this->storedCategory($this->json($response)['data']['id']));
+    }
+
+    public function testAc18BoundariesAreInclusiveAndOpenEnded(): void
+    {
+        $cases = [
+            ['1986', 'M', $this->dv, 'M30-39'],
+            ['1995', 'M', $this->dv, 'M30-39'],
+            ['2000', null, $this->do, 'YOUNG'],
+            ['1950', null, $this->do, 'YOUNG'],
+            ['2001', null, $this->do, 'OPEN'],
+            ['2024', null, $this->do, 'OPEN'],
+        ];
+        foreach ($cases as $i => [$year, $gender, $distanceId, $expected]) {
+            $p = $this->person('b' . $i, 'participant', $year . '-06-15', $gender);
+            $response = $this->selfPost($p, ['distanceId' => $distanceId]);
+            self::assertSame(201, $response->getStatusCode(), $year . ' ' . (string) $response->getBody());
+            self::assertSame($expected, $this->storedCategory($this->json($response)['data']['id']), $year);
+        }
+    }
+
+    public function testAc19OverlappingCategoriesFirstInConfiguredOrderWins(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+
+        $response = $this->selfPost($p, ['distanceId' => $this->do]);
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('YOUNG', $this->storedCategory($this->json($response)['data']['id']));
+    }
+
+    public function testAc20SpecialCategoriesAreKeptOnlyWhenConfigured(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+        $q = $this->person('q', 'participant', '1990-05-05', 'M');
+        $before = $this->snapshot();
+
+        $fake = $this->selfPost($q, ['category' => 'M30-39, Fake']);
+        $this->assert422($fake, 'registration_category_invalid', 'category');
+        $this->assertNothingWritten($before);
+
+        $ok = $this->selfPost($p, ['category' => 'K50+, Weteran']);
+        self::assertSame(201, $ok->getStatusCode());
+        self::assertSame('M30-39, Weteran', $this->storedCategory($this->json($ok)['data']['id']));
+    }
+
+    public function testAc21LegacyCategoryListIsAnAllowlist(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+        $q = $this->person('q', 'participant', '1990-05-05', 'M');
+        $before = $this->snapshot();
+
+        $bad = $this->selfPost($q, ['distanceId' => $this->dl, 'category' => 'Hacker']);
+        $this->assert422($bad, 'registration_category_invalid', 'category');
+        $this->assertNothingWritten($before);
+
+        $ok = $this->selfPost($p, ['distanceId' => $this->dl, 'category' => 'Elite']);
+        self::assertSame(201, $ok->getStatusCode());
+        self::assertSame('Elite', $this->storedCategory($this->json($ok)['data']['id']));
+    }
+
+    public function testAc22DistanceWithoutCategoriesStoresEmptyCategory(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+
+        $response = $this->selfPost($p, ['distanceId' => $this->dn, 'category' => 'Anything']);
+
+        self::assertSame(201, $response->getStatusCode());
+        self::assertSame('', $this->storedCategory($this->json($response)['data']['id']));
+    }
+
+    public function testAc23ComposedCategoryOver80CharactersIsRejected(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+        $before = $this->snapshot();
+
+        $response = $this->selfPost($p, ['category' => 'Weteran, ' . str_repeat('W', 76)]);
+
+        $this->assert422($response, 'registration_category_invalid', 'category');
+        $this->assertNothingWritten($before);
+    }
+
+    public function testAc24ExistingRegistrationKeepsStoredCategory(): void
+    {
+        $p = $this->person('p', 'participant', '1990-05-05', 'M');
+        $response = $this->selfPost($p, ['distanceId' => $this->dn]);
+        $id = (string) $this->json($response)['data']['id'];
+        $this->pdo->prepare('UPDATE registrations SET category = \'Stara\' WHERE id = :id')->execute(['id' => $id]);
+
+        $patch = $this->request('PATCH', '/api/v1/registrations/' . $id, ['category' => 'Nowa'], $this->bearer($p['id'], 'participant', $p['email']));
+
+        self::assertSame('Stara', $this->storedCategory($id), 'PATCH ' . $patch->getStatusCode());
+    }
+
     // ── PP.80 ────────────────────────────────────────────────────────────
 
     public function testAc25NnwWithoutBirthDateIsRejected(): void

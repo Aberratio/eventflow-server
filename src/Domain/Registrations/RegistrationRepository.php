@@ -1717,6 +1717,8 @@ SQL;
             // there still catches an overrun even if isolation level ever changes).
             $distanceRow = $this->lockDistanceForRegistration((string) $data['eventId'], (string) $data['distanceId']);
             $this->enforceCapacity($distanceRow);
+            // PP.79: the Kategoria wiekowa comes from the Zawodnik's data, never from the client.
+            $category = $this->resolveRegistrationCategory($data, $distanceRow);
             $team = $this->resolveTeamForRegistration($data, $distanceRow);
 
             // TD.8 (spec 07 pkt 10 / spec 23 §3): "za drużynę" puts the whole
@@ -1741,7 +1743,7 @@ SQL;
                 'user_email' => $data['userEmail'],
                 'distance_id' => $data['distanceId'],
                 'distance_name' => $pricing['distanceName'],
-                'category' => $data['category'],
+                'category' => $category,
                 'registered_at' => date(DATE_ATOM),
                 'status' => $bornConfirmed ? 'confirmed' : 'pending',
                 // E1.11: kod startowy — generowany zawsze, tu, przez platformę (nigdy przez
@@ -1896,7 +1898,8 @@ SQL;
                     d.participant_limit AS participantLimit, d.price_tiers AS priceTiers,
                     d.start_type AS startType, d.relay_min_team_size AS relayMinTeamSize,
                     d.relay_max_team_size AS relayMaxTeamSize, d.special_categories AS specialCategories,
-                    d.team_pricing_mode AS teamPricingMode
+                    d.team_pricing_mode AS teamPricingMode,
+                    d.categories AS categories, d.age_categories AS ageCategories
              FROM events e INNER JOIN event_distances d ON d.event_id = e.id
              WHERE e.id = :eventId AND d.id = :distanceId
              FOR UPDATE'
@@ -3837,6 +3840,29 @@ SQL;
         $stmt->execute(['id' => $variantId, 'distanceId' => $distanceId]);
         $row = $stmt->fetch();
         return $row ?: null;
+    }
+
+    /**
+     * PP.79: the stored category for a new Zapis (see AgeCategoryResolver). The Zawodnik's facts
+     * come from `competitorId` (the ward / adult under care the route resolved), never from the
+     * caller. Thin glue: the rules live in the pure resolver.
+     *
+     * @param array<string, mixed> $data
+     * @param array<string, mixed> $distanceRow
+     */
+    private function resolveRegistrationCategory(array $data, array $distanceRow): string
+    {
+        $facts = $this->competitorFacts((string) ($data['competitorId'] ?? ''));
+        $client = $data['category'] ?? '';
+
+        return AgeCategoryResolver::resolve(
+            is_string($client) ? $client : '',
+            $facts['birthYear'],
+            $facts['gender'],
+            $distanceRow['ageCategories'] ?? null,
+            $distanceRow['categories'] ?? null,
+            $distanceRow['specialCategories'] ?? null
+        );
     }
 
     /**

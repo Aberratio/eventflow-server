@@ -1398,7 +1398,7 @@ SQL;
      */
     private function inOwnTransaction(callable $work): mixed
     {
-        $own = !$this->pdo->inTransaction();
+        $own = !$this->transactionOpen();
         if ($own) {
             $this->pdo->beginTransaction();
         }
@@ -1410,11 +1410,18 @@ SQL;
 
             return $result;
         } catch (\Throwable $e) {
-            if ($own && $this->pdo->inTransaction()) {
+            // a failed statement may already have ended the transaction (e.g. a DDL implicit commit)
+            if ($own && $this->transactionOpen()) {
                 $this->pdo->rollBack();
             }
             throw $e;
         }
+    }
+
+    /** @phpstan-impure the answer changes when the transaction ends */
+    private function transactionOpen(): bool
+    {
+        return $this->pdo->inTransaction();
     }
 
     /** @param array<string, mixed> $row */

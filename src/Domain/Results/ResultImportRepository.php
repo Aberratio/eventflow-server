@@ -1111,9 +1111,17 @@ SQL);
 
         [$firstName, $lastName] = $this->splitName($fullName);
         $genderRaw = strtoupper(trim((string) ($mapped['gender'] ?? '')));
+        // PP.79: the Kategoria wiekowa is derived from the Zawodnik's birth year and gender, so the
+        // file's own values go onto the new Zawodnik (only when they are usable).
+        $birthYearRaw = trim((string) ($mapped['birthYear'] ?? ''));
+        $birthYear = preg_match('/^\d{4}$/', $birthYearRaw) === 1
+            && (int) $birthYearRaw >= 1900 && (int) $birthYearRaw <= (int) date('Y')
+            ? $birthYearRaw
+            : null;
         $competitor = $this->competitorRepository->create([
             'firstName' => $firstName,
             'lastName' => $lastName,
+            'birthDate' => $birthYear,
             'gender' => in_array($genderRaw, ['M', 'K'], true) ? $genderRaw : null,
             'club' => ($mapped['club'] ?? '') !== '' ? $mapped['club'] : null,
         ], true);
@@ -1123,7 +1131,33 @@ SQL);
             $category = (string) ($distance['categories'][0] ?? 'Open');
         }
 
-        $registration = $this->registrationRepository->create([
+        try {
+            $registration = $this->createOfficeRegistration($batch, $competitor, $variant, $fullName, $category, $actorId);
+        } catch (\Throwable $e) {
+            // The Zawodnik was created just above, outside create()'s transaction: do not leave an
+            // orphan profile behind a rejected registration (nothing references it yet).
+            $this->pdo->prepare('DELETE FROM competitors WHERE id = :id')->execute(['id' => (string) $competitor['id']]);
+            throw $e;
+        }
+
+        $registrationUpdates = ['status' => 'confirmed'];
+        if (($mapped['bibNumber'] ?? '') !== '') {
+            $registrationUpdates['bibNumber'] = $mapped['bibNumber'];
+        }
+        $this->registrationRepository->update((string) $registration['id'], $registrationUpdates);
+
+        return $this->updateRow($rowId, ['selectedRegistrationId' => $registration['id']]);
+    }
+
+    /**
+     * @param array<string, mixed> $batch
+     * @param array<string, mixed> $competitor
+     * @param array<string, mixed> $variant
+     * @return array<string, mixed>
+     */
+    private function createOfficeRegistration(array $batch, array $competitor, array $variant, string $fullName, string $category, string $actorId): array
+    {
+        return $this->registrationRepository->create([
             'eventId' => $batch['eventId'],
             'userId' => $actorId,
             'competitorId' => $competitor['id'],
@@ -1142,14 +1176,6 @@ SQL);
             // zapis w biurze zawodow w dniu startu.
             'paymentDetails' => ['startFeePaid' => true],
         ]);
-
-        $registrationUpdates = ['status' => 'confirmed'];
-        if (($mapped['bibNumber'] ?? '') !== '') {
-            $registrationUpdates['bibNumber'] = $mapped['bibNumber'];
-        }
-        $this->registrationRepository->update((string) $registration['id'], $registrationUpdates);
-
-        return $this->updateRow($rowId, ['selectedRegistrationId' => $registration['id']]);
     }
 
     /** @return array<string, mixed> */

@@ -307,6 +307,90 @@ PDF;
         $this->imports->createRegistrationForRow((string) $batch['rows'][0]['id'], 'phpunit-organizer');
     }
 
+    public function testForceCreateRegistrationDerivesCategoryFromFileBirthYearAndGender(): void
+    {
+        $payload = $this->eventPayload();
+        $payload['distances'][0]['categories'] = [];
+        $payload['distances'][0]['ageCategories'] = [
+            ['id' => 'm30', 'name' => 'M30-39', 'gender' => 'M', 'birthYearFrom' => 1986, 'birthYearTo' => 1995],
+            ['id' => 'k30', 'name' => 'K30-39', 'gender' => 'K', 'birthYearFrom' => 1986, 'birthYearTo' => 1995],
+        ];
+        $event = $this->events->create($payload);
+        $distanceId = (string) $event['distances'][0]['id'];
+
+        $csv = "numer,uczestnik,czas,kategoria,plec,rok urodzenia,status
+999,Nowy Zawodnik,0:50:00,Open,M,1990,finished
+";
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $this->tempImportFile('csv', $csv), 'phpunit-admin');
+
+        $updated = $this->imports->createRegistrationForRow((string) $batch['rows'][0]['id'], 'phpunit-organizer');
+
+        $registration = $this->registrations->find((string) $updated['rows'][0]['selectedRegistrationId']);
+        self::assertSame('M30-39', $registration['category']);
+        self::assertSame('confirmed', $registration['status']);
+    }
+
+    public function testForceCreateRegistrationKeepsFileCategoryWithoutBirthDataOrMatch(): void
+    {
+        $payload = $this->eventPayload();
+        $payload['distances'][0]['categories'] = [];
+        $payload['distances'][0]['ageCategories'] = [
+            ['id' => 'm30', 'name' => 'M30-39', 'gender' => 'M', 'birthYearFrom' => 1986, 'birthYearTo' => 1995],
+        ];
+        $event = $this->events->create($payload);
+        $distanceId = (string) $event['distances'][0]['id'];
+
+        $csv = "numer,uczestnik,czas,kategoria,status
+999,Nowy Zawodnik,0:50:00,Weterani,finished
+";
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $this->tempImportFile('csv', $csv), 'phpunit-admin');
+
+        $updated = $this->imports->createRegistrationForRow((string) $batch['rows'][0]['id'], 'phpunit-organizer');
+
+        self::assertSame('Weterani', $this->registrations->find((string) $updated['rows'][0]['selectedRegistrationId'])['category']);
+    }
+
+    public function testForceCreateRegistrationKeepsOffListFileCategoryOnLegacyList(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+        $distanceId = (string) $event['distances'][0]['id'];
+
+        $csv = "numer,uczestnik,czas,kategoria,status
+999,Nowy Zawodnik,0:50:00,Nieznana,finished
+";
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $this->tempImportFile('csv', $csv), 'phpunit-admin');
+
+        $updated = $this->imports->createRegistrationForRow((string) $batch['rows'][0]['id'], 'phpunit-organizer');
+
+        self::assertSame('Nieznana', $this->registrations->find((string) $updated['rows'][0]['selectedRegistrationId'])['category']);
+    }
+
+    public function testFailedForceCreateLeavesNoOrphanCompetitor(): void
+    {
+        $payload = $this->eventPayload();
+        $payload['distances'][0]['limit'] = 1;
+        $event = $this->events->create($payload);
+        $distanceId = (string) $event['distances'][0]['id'];
+        $this->pdo->prepare('UPDATE event_distances SET registered_count = participant_limit WHERE id = :id')->execute(['id' => $distanceId]);
+        $last = 'Orph' . bin2hex(random_bytes(3));
+
+        $csv = "numer,uczestnik,czas,kategoria,status
+999,Jan {$last},0:50:00,Open,finished
+";
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $this->tempImportFile('csv', $csv), 'phpunit-admin');
+
+        try {
+            $this->imports->createRegistrationForRow((string) $batch['rows'][0]['id'], 'phpunit-organizer');
+            self::fail('Expected the full distance to reject the registration');
+        } catch (\RuntimeException) {
+            // expected
+        }
+
+        $count = $this->pdo->prepare('SELECT COUNT(*) FROM competitors WHERE last_name = :last');
+        $count->execute(['last' => $last]);
+        self::assertSame(0, (int) $count->fetchColumn());
+    }
+
     /** @return array<string, mixed> */
     private function eventPayload(): array
     {

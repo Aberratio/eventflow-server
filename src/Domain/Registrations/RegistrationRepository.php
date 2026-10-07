@@ -3853,16 +3853,26 @@ SQL;
     private function resolveRegistrationCategory(array $data, array $distanceRow): string
     {
         $facts = $this->competitorFacts((string) ($data['competitorId'] ?? ''));
-        $client = $data['category'] ?? '';
+        $client = is_string($data['category'] ?? '') ? (string) ($data['category'] ?? '') : '';
 
-        return AgeCategoryResolver::resolve(
-            is_string($client) ? $client : '',
-            $facts['birthYear'],
-            $facts['gender'],
-            $distanceRow['ageCategories'] ?? null,
-            $distanceRow['categories'] ?? null,
-            $distanceRow['specialCategories'] ?? null
-        );
+        try {
+            return AgeCategoryResolver::resolve(
+                $client,
+                $facts['birthYear'],
+                $facts['gender'],
+                $distanceRow['ageCategories'] ?? null,
+                $distanceRow['categories'] ?? null,
+                $distanceRow['specialCategories'] ?? null
+            );
+        } catch (InputValidationException $e) {
+            // Office trust (results-import "create office Zapis", set by internal code only): the file
+            // is the source of truth for a participant who already ran, so when the data does not
+            // yield a category the file's own label is kept. Never reachable from POST /registrations.
+            if (($data['trustedOfficeRegistration'] ?? false) === true) {
+                return mb_substr(trim($client), 0, AgeCategoryResolver::MAX_LENGTH);
+            }
+            throw $e;
+        }
     }
 
     /**

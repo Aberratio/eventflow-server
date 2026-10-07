@@ -253,7 +253,10 @@ final class EventRepositoryTest extends TestCase
 
         $distances = $this->rawDistances((string) $created['id']);
         self::assertCount(1, $distances);
-        self::assertSame('phpunit-updated-half', $distances[0]['id']);
+        // PP.59: a client-chosen id of an unknown child is never stored; the server assigns a UUID.
+        self::assertNotSame('phpunit-updated-half', $distances[0]['id']);
+        self::assertMatchesRegularExpression('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', (string) $distances[0]['id']);
+        self::assertSame($updated['distances'][0]['id'], $distances[0]['id']);
         self::assertSame('Polmaraton', $distances[0]['name']);
         self::assertSame(120, (int) $distances[0]['participant_limit']);
     }

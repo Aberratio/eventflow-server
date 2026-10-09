@@ -177,11 +177,13 @@ final class AccountInputValidationContractTest extends HttpTestCase
         ]);
         $before = $this->userCount();
 
-        foreach ([
+        foreach (
+            [
             (string) $existing['email'],
             strtoupper((string) $existing['email']),
             '  ' . $existing['email'] . '  ',
-        ] as $variant) {
+            ] as $variant
+        ) {
             $response = $this->createViaApi(['email' => $variant] + $this->validBody('dup'));
 
             self::assertSame(409, $response->getStatusCode(), $variant);

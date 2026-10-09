@@ -47,12 +47,16 @@ final class NewAccountInput
         $payload['name'] = self::name($payload);
         $payload['email'] = self::email($payload);
 
-        if (array_key_exists('role', $payload) && $payload['role'] !== null
-            && (!is_string($payload['role']) || !in_array($payload['role'], UserRepository::ROLES, true))) {
+        if (
+            array_key_exists('role', $payload) && $payload['role'] !== null
+            && (!is_string($payload['role']) || !in_array($payload['role'], UserRepository::ROLES, true))
+        ) {
             throw new InputValidationException('Wybierz poprawną rolę.', 'role', 'invalid_role');
         }
-        if (array_key_exists('status', $payload) && $payload['status'] !== null
-            && (!is_string($payload['status']) || !in_array($payload['status'], UserRepository::STATUSES, true))) {
+        if (
+            array_key_exists('status', $payload) && $payload['status'] !== null
+            && (!is_string($payload['status']) || !in_array($payload['status'], UserRepository::STATUSES, true))
+        ) {
             throw new InputValidationException('Wybierz poprawny status konta.', 'status', 'invalid_status');
         }
         if (isset($payload['gender']) && (!is_string($payload['gender']) || !in_array($payload['gender'], ['M', 'K'], true))) {

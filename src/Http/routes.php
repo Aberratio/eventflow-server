@@ -67,6 +67,7 @@ use ZmierzymyCzas\Domain\Care\CareRepository;
 use ZmierzymyCzas\Domain\Competitors\CompetitorMergeService;
 use ZmierzymyCzas\Domain\Competitors\CompetitorDuplicatePresenter;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
+use ZmierzymyCzas\Domain\Users\NewAccountInput;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Domain\Users\UserUpdatePolicy;
 use ZmierzymyCzas\Domain\Registrations\RegistrationCreatePolicy;
@@ -632,23 +633,29 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         };
 
         $api->post('/auth/register', function (Request $request, Response $response) use ($users, $body, $sendEmailVerification) {
-            $payload = $body($request);
-            if (empty($payload['name']) || empty($payload['email']) || empty($payload['password'])) {
-                return JsonResponder::error($response, 'validation_error', 'Name, email and password are required', 422);
-            }
-            if ($users->findByEmail((string) $payload['email'])) {
-                return JsonResponder::error($response, 'email_taken', 'Email is already registered', 409);
+            // PP.89: name/e-mail/password are validated (types, lengths, PasswordRule) before anything is created.
+            $input = NewAccountInput::forRegistration($body($request));
+            if ($users->findByEmail($input['email'])) {
+                return JsonResponder::error($response, 'email_taken', 'Ten adres e-mail jest już zajęty.', 409);
             }
             // PP.1: self-registration is never trusted with role/status/eventLimit —
             // an anonymous caller must never be able to mint a staff account. Role
             // changes go exclusively through the staff-only /users/{id}/role route,
             // and Organizer only comes from buying the package (E5.7) or from an admin.
-            $created = $users->create([
-                'name' => $payload['name'],
-                'email' => $payload['email'],
-                'password' => $payload['password'],
-                'role' => 'participant',
-            ]);
+            try {
+                $created = $users->create([
+                    'name' => $input['name'],
+                    'email' => $input['email'],
+                    'password' => $input['password'],
+                    'role' => 'participant',
+                ]);
+            } catch (PDOException $e) {
+                // 23000 = a concurrent request registered the same address between the check above and the INSERT.
+                if ((string) $e->getCode() === '23000') {
+                    return JsonResponder::error($response, 'email_taken', 'Ten adres e-mail jest już zajęty.', 409);
+                }
+                throw $e;
+            }
             // E1.10 mail #1 ("Weryfikacja adresu e-mail", 17 §1 row 1); PP.7: a real one-time token, consumed by /auth/email/verify.
             $sendEmailVerification($created);
             return JsonResponder::ok($response, $created, 'User registered', 201);
@@ -944,6 +951,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     ['fields' => ['password']]
                 );
             }
+            // PP.89: every key create() writes is validated here (422, never a PHP warning or a strict-MySQL 500).
+            $payload = NewAccountInput::forAdminCreate($payload);
+            if ($users->findByEmail((string) $payload['email'])) {
+                return JsonResponder::error($response, 'email_taken', 'Ten adres e-mail jest już zajęty.', 409);
+            }
             $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::USER);
             if ($urlCheck['error'] !== null) {
                 return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
@@ -958,6 +970,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             } catch (Throwable $e) {
                 if ($pdo->inTransaction()) {
                     $pdo->rollBack();
+                }
+                // 23000 = a concurrent request took the address between the check above and the INSERT.
+                if ($e instanceof PDOException && (string) $e->getCode() === '23000') {
+                    return JsonResponder::error($response, 'email_taken', 'Ten adres e-mail jest już zajęty.', 409);
                 }
                 throw $e;
             }

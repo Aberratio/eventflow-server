@@ -3667,7 +3667,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         })
             ->add(new AuthMiddleware($jwt, []));
 
-        // ── Dev seed endpoint (local, and staging for signed-in staff) ─────────────
+        // ── Dev seed endpoint (local; staging for a live organizer/staff session; seeded accounts get a known password on local only) ──────────────
         // Everything it creates is recorded in `seed_records`, so bin/prune-demo.php
         // and a seed refresh remove it along with the file-based demo data.
         $api->post('/dev/seed-event', function (Request $request, Response $response) use ($pdo, $jwt, $users, $events, $registrations, $results, $body) {
@@ -3676,14 +3676,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'forbidden', 'Dev endpoint is disabled in this environment', 403);
             }
 
-            // Decode JWT manually. On local this skips the strict middleware, so an
-            // expired-but-otherwise-valid token from a long dev session still works.
+            $isLocal = $env === 'local';
+
+            // Decode JWT manually. On local this skips the strict middleware (signature only), so a
+            // token from a long dev session still works. Off local (PP.90) the token must be a live
+            // session: no mail-link token, not logged out, no stale token_version, account active.
             $auth = [];
             $tokenValid = false;
             $header = $request->getHeaderLine('Authorization');
             if (preg_match('/^Bearer\s+(.+)$/i', $header, $m)) {
                 try {
-                    $auth = $jwt->decode($m[1]);
+                    $auth = $isLocal ? $jwt->decode($m[1]) : $jwt->decodeSession($m[1]);
                     $tokenValid = true;
                 } catch (\Throwable) {
                     // allow; caller identity falls back to empty, organizer flow uses seeded account
@@ -3707,12 +3710,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
             $manifestBefore = SeedManifest::snapshot($pdo);
 
+            // PP.90: the well-known demo password exists on local only. Everywhere else the seeded accounts get
+            // no 'password' key, so UserRepository::create() stores an unusable hash nobody can sign in with.
+            $seedPassword = $isLocal ? ['password' => 'demo123'] : [];
+
             $payload = $body($request);
             $participantCount = max(1, min(500, (int) ($payload['participantCount'] ?? 20)));
 
-            // JWT identity; fall back to body-supplied callerId when token is expired/absent
-            $callerId = (string) ($auth['sub'] ?? $payload['callerId'] ?? '');
-            $callerRole = (string) ($auth['role'] ?? $payload['callerRole'] ?? '');
+            // JWT identity. Only on local does the body-supplied callerId/callerRole stand in for an absent
+            // token; off local (PP.90) the identity comes from the live session alone.
+            $callerId = (string) ($auth['sub'] ?? ($isLocal ? ($payload['callerId'] ?? '') : ''));
+            $callerRole = (string) ($auth['role'] ?? ($isLocal ? ($payload['callerRole'] ?? '') : ''));
 
             // ── 1. Resolve organizer ─────────────────────────────────────────────
             $organizer = $callerRole === 'organizer' && $callerId !== '' ? $users->find($callerId) : null;
@@ -3723,9 +3731,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $organizer = $users->create([
                     'name' => $orgNames[array_rand($orgNames)],
                     'email' => $orgEmail,
-                    'password' => 'demo123',
                     'role' => 'organizer',
-                ]);
+                ] + $seedPassword);
             }
 
             // ── 2. Generate event data ───────────────────────────────────────────
@@ -3867,12 +3874,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     $participant = $users->create([
                         'name' => "{$firstName} {$lastName}",
                         'email' => $email,
-                        'password' => 'demo123',
                         'role' => 'participant',
                         'gender' => $gender,
                         'birthYear' => $birthYear,
                         'phone' => '+48 ' . random_int(500, 799) . ' ' . random_int(100, 999) . ' ' . random_int(100, 999),
-                    ]);
+                    ] + $seedPassword);
                     $createdParticipants[] = [
                         'id' => $participant['id'],
                         'name' => $participant['name'],
@@ -3941,7 +3947,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                         'userEmail' => $p['email'],
                         'distanceId' => $dist['id'],
                         'distanceName' => $dist['name'],
-                        'category' => $cat,
+                        'category' => 'Open', // the distance's own legacy list is ['Open']; the age bracket $cat goes to the result
                     ]);
                     $registrations->update($reg['id'], [
                         'status' => 'confirmed',
@@ -3990,7 +3996,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 'resultsCreated' => $resultCount,
                 'eventUrl' => '/events/' . ($finalEvent['slug'] ?? $slug),
             ], 'Seed event created', 201);
-        });  // no middleware — APP_ENV plus, off local, a staff token is the boundary
+        });  // no middleware — APP_ENV plus, off local, a live organizer/staff session is the boundary
 
         // --- Zawodnicy i Opieka (E0.1) ---
         // Zawodnik: profil danych startowych, byt samodzielny — może istnieć bez Konta.

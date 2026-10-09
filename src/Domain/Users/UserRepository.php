@@ -185,7 +185,7 @@ final class UserRepository extends Repository
      * are discarded: password_verify() never matches, and it takes as long as for any other account,
      * so the login response time does not reveal accounts without a password.
      */
-    private static function unusablePasswordHash(): string
+    public static function unusablePasswordHash(): string
     {
         return password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT);
     }

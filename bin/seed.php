@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use ZmierzymyCzas\Database\Connection;
+use ZmierzymyCzas\Database\DemoAccountPasswords;
 use ZmierzymyCzas\Database\DemoData;
 use ZmierzymyCzas\Database\EventCoherence;
 use ZmierzymyCzas\Database\EventFixtureImporter;
@@ -190,4 +191,10 @@ $after = SeedManifest::snapshot($pdo);
 $recorded = SeedManifest::recordDiff($pdo, $before, $after);
 
 echo "Seeded {$recorded} row(s), all tracked in `" . SeedManifest::TABLE . "` for later purge.\n";
-echo "Demo logins: jan@example.com / marek@timing.pl / admin@zmierzymyczas.pl (password: demo1234)\n";
+if ($env === 'local') {
+    echo "Demo logins: jan@example.com / marek@timing.pl / admin@zmierzymyczas.pl (password: demo1234)\n";
+} else {
+    // PP.90: staging is reachable from the internet; the seeders' well-known password must not survive there.
+    $scrubbed = DemoAccountPasswords::scrub($pdo);
+    echo "Scrubbed the demo password of {$scrubbed} seeded account(s): they have no usable password.\n";
+}

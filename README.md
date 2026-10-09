@@ -177,7 +177,9 @@ ones so a series shows both results and a next date. Existing links are never di
 
 ### Logins
 
-Demo users seeded by `composer seed` all use password `demo1234`:
+Demo users seeded by `composer seed` on a **local** database (`APP_ENV=local`) all use password `demo1234`.
+On any other environment (staging) `bin/seed.php` scrubs those passwords right after seeding, so the accounts
+exist but nobody can sign in to them (use "Nie pamiętam hasła" on a real account instead):
 
 - `jan@example.com` participant
 - `marek@timing.pl` organizer
@@ -186,15 +188,26 @@ Demo users seeded by `composer seed` all use password `demo1234`:
 - `superadmin@zmierzymyczas.pl` superadmin
 
 The five `test.*@zmierzymyczas.pl` accounts and every generated `@demo.test`
-participant use the same password.
+participant use the same password (local only).
+
+To remove the known demo passwords from an existing staging or production database run, from the
+server directory with that environment's `.env`:
+
+```
+php bin/scrub-demo-passwords.php --dry-run   # counts the accounts, writes nothing
+php bin/scrub-demo-passwords.php --deep      # also checks every account against demo123/demo1234 (slow, bcrypt per row)
+```
+
+It refuses to run when `APP_ENV=local`, prints only counts and ends the sessions of the scrubbed accounts.
+Keep (or create) a real staff account first: the demo `admin@`/`superadmin@zmierzymyczas.pl` logins stop working.
 
 ### Generating one more event while clicking through the app
 
 `POST /api/v1/dev/seed-event` builds a single event with participants, registrations
 and results. The DevToolbox in the frontend calls it. It is available when
-`APP_ENV=local` (no auth needed, for expired dev tokens) and when `APP_ENV=staging`
-(a valid organizer/moderator/admin/superadmin token is required). Disabled everywhere
-else.
+`APP_ENV=local` (no auth needed, for expired dev tokens; accounts it creates use `demo123`) and when
+`APP_ENV=staging` (a live organizer/moderator/admin/superadmin session is required; accounts it creates
+get no usable password). Disabled everywhere else.
 
 ## Configuration and boot guard
 

@@ -269,6 +269,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return 'Price must not be negative';
             }
         }
+        // PP.105: one canonical service kind; the legacy 'organizer_license' (and any typo) would sell a
+        // product that grants nothing.
+        if (($payload['serviceKind'] ?? null) !== null && $payload['serviceKind'] !== 'organizer_package') {
+            return 'Nieznany rodzaj usługi.';
+        }
         return null;
     };
     $adminRoles = ['admin', 'superadmin'];
@@ -3133,6 +3138,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     'order_invalid_address' => 'A complete shipping address is required for this delivery method.',
                     'order_invalid_invoice_data' => 'Company name and a complete billing address are required to request an invoice.',
                     'order_invalid_nip' => 'The provided NIP (tax ID) is not a valid Polish NIP.',
+                    'order_invalid_quantity' => 'Nieprawidłowa liczba pakietów organizatora (dozwolone 1–10).',
                 ];
                 if (isset($validationErrors[$e->getMessage()])) {
                     return JsonResponder::error($response, $e->getMessage(), $validationErrors[$e->getMessage()], 422);
@@ -3156,21 +3162,50 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $created, 'Order created', 201);
         })
             ->add(new AuthMiddleware($jwt, []));
-        $api->patch('/shop/orders/{id}/status', function (Request $request, Response $response, array $args) use ($orders, $users, $body, $logActivity, $mailer) {
+        // PP.105: both status doors (this one and the `status` key of PATCH /shop/orders/{id}) end in
+        // OrderRepository::changeStatus() — transition table, 404/409/422, grant on `paid`. Mail #12 and
+        // the activity log fire only after a real change (an illegal move throws before them).
+        $changeOrderStatus = static function (Request $request, Response $response, string $orderId, string $status, mixed $trackingNumber) use ($orders, $users, $logActivity, $mailer): array|Response {
+            try {
+                $updated = $orders->changeStatus($orderId, $status, is_string($trackingNumber) ? $trackingNumber : null);
+            } catch (RuntimeException $e) {
+                $errors = [
+                    'order_invalid_status' => ['Nieprawidłowy status zamówienia.', 422],
+                    'order_not_found' => ['Nie znaleziono zamówienia.', 404],
+                    'order_invalid_transition' => ['Nie można zmienić statusu zamówienia na wybrany.', 409],
+                ];
+                if (isset($errors[$e->getMessage()])) {
+                    return JsonResponder::error($response, $e->getMessage(), $errors[$e->getMessage()][0], $errors[$e->getMessage()][1]);
+                }
+                throw $e;
+            }
+            $logActivity((array) $request->getAttribute('auth'), 'order_status_changed', 'Zmieniono status zamówienia na ' . $status, 'order', $orderId, (string) ($updated['id'] ?? $orderId));
+            $buyer = $users->find((string) ($updated['userId'] ?? ''));
+            if ($buyer !== null) {
+                $mailer->sendShopOrderStatus((string) $updated['id'], (string) $buyer['email'], (string) $updated['orderNumber'], (string) $updated['status'], (string) ($updated['trackingNumber'] ?? ''));
+            }
+            return $updated;
+        };
+        $api->patch('/shop/orders/{id}/status', function (Request $request, Response $response, array $args) use ($body, $changeOrderStatus) {
             $data = $body($request);
-            $status = (string) ($data['status'] ?? '');
-            $updated = $orders->updateStatus($args['id'], $status, $data['trackingNumber'] ?? null);
-            $logActivity((array) $request->getAttribute('auth'), 'order_status_changed', 'Zmieniono status zamówienia na ' . $status, 'order', (string) $args['id'], (string) ($updated['id'] ?? $args['id']));
-            if ($updated !== null) {
-                $buyer = $users->find((string) ($updated['userId'] ?? ''));
-                if ($buyer !== null) {
-                    $mailer->sendShopOrderStatus((string) $updated['id'], (string) $buyer['email'], (string) $updated['orderNumber'], (string) $updated['status'], (string) ($updated['trackingNumber'] ?? ''));
+            $result = $changeOrderStatus($request, $response, (string) $args['id'], (string) ($data['status'] ?? ''), $data['trackingNumber'] ?? null);
+
+            return $result instanceof Response ? $result : JsonResponder::ok($response, $result);
+        })->add(new AuthMiddleware($jwt, $staffRoles));
+        $api->patch('/shop/orders/{id}', function (Request $request, Response $response, array $args) use ($orders, $body, $logActivity, $changeOrderStatus) {
+            $data = $body($request);
+            // PP.105: a status in the body goes through changeStatus() first (no blind status write); the
+            // same status as the current one is a no-op so a full-object edit from the admin UI still works.
+            if (array_key_exists('status', $data)) {
+                $current = $orders->find((string) $args['id']);
+                if ($current === null || (string) $current['status'] !== (string) $data['status']) {
+                    $result = $changeOrderStatus($request, $response, (string) $args['id'], (string) $data['status'], null);
+                    if ($result instanceof Response) {
+                        return $result;
+                    }
                 }
             }
-            return JsonResponder::ok($response, $updated);
-        })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->patch('/shop/orders/{id}', function (Request $request, Response $response, array $args) use ($orders, $body, $logActivity) {
-            $updated = $orders->update($args['id'], $body($request));
+            $updated = $orders->update($args['id'], $data);
             $logActivity((array) $request->getAttribute('auth'), 'order_updated', 'Zaktualizowano zamówienie', 'order', (string) $args['id'], (string) ($updated['id'] ?? $args['id']));
             return JsonResponder::ok($response, $updated);
         })
@@ -3418,6 +3453,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     'order_invalid_address' => 'A complete shipping address is required for this delivery method.',
                     'order_invalid_invoice_data' => 'Company name and a complete billing address are required to request an invoice.',
                     'order_invalid_nip' => 'The provided NIP (tax ID) is not a valid Polish NIP.',
+                    'order_invalid_quantity' => 'Nieprawidłowa liczba pakietów organizatora (dozwolone 1–10).',
                 ];
                 if (isset($validationErrors[$e->getMessage()])) {
                     return JsonResponder::error($response, $e->getMessage(), $validationErrors[$e->getMessage()], 422);

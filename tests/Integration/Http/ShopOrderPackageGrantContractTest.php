@@ -279,7 +279,8 @@ final class ShopOrderPackageGrantContractTest extends HttpTestCase
         self::assertSame('organizer', $row['role']);
         self::assertSame(2, (int) $row['organizer_package_credits']);
         self::assertSame(409, $this->setStatus($orderId, 'paid', $this->asAdmin())->getStatusCode());
-        self::assertSame(409, $this->request('PATCH', '/api/v1/shop/orders/' . $orderId, ['status' => 'paid'], $this->asAdmin())->getStatusCode());
+        // The same status in a full-object edit is a no-op (not a second grant, not an error).
+        self::assertSame(200, $this->request('PATCH', '/api/v1/shop/orders/' . $orderId, ['status' => 'paid'], $this->asAdmin())->getStatusCode());
         self::assertSame(2, (int) $this->userRow($this->buyer['id'])['organizer_package_credits']);
 
         // An edit without a status still works.

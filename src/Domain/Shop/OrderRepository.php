@@ -71,14 +71,27 @@ final class OrderRepository extends Repository
     private const SERVICE_KIND_ORGANIZER_PACKAGE = 'organizer_package';
 
     /**
-     * E5.7 (issue 16 §2 "Samoobsluga"): roles that already imply
-     * Organizator-level access, mirroring routes.php's $isStaffRole closure
-     * exactly (admin/superadmin/moderator) — a staff account buying an
-     * organizer package still gets its credit (unconditional per E5.6) but
-     * is never downgraded/reassigned to plain 'organizer', since that would
-     * be destructive to a role that already does everything Organizator can.
+     * PP.105 (owner decision Q3): an organizer-package order line may hold at most this many
+     * packages. The raw request value is validated, so 1000 can never be clamped into a grant.
      */
-    private const STAFF_ROLES = ['admin', 'superadmin', 'moderator'];
+    private const MAX_ORGANIZER_PACKAGES_PER_LINE = 10;
+
+    /** Every value of the `shop_orders.status` ENUM (019_shop_orders.sql). */
+    private const ORDER_STATUSES = ['pending', 'paid', 'shipped', 'delivered', 'cancelled', 'refunded'];
+
+    /**
+     * PP.105: the server-side truth for shop order status moves (matches the moderator UI
+     * pending -> paid -> shipped -> delivered, plus cancel/refund). `cancelled` and `refunded`
+     * are terminal. A digital-only order may go paid -> delivered directly.
+     */
+    private const STATUS_TRANSITIONS = [
+        'pending' => ['paid', 'cancelled'],
+        'paid' => ['shipped', 'delivered', 'cancelled', 'refunded'],
+        'shipped' => ['delivered', 'refunded'],
+        'delivered' => ['refunded'],
+        'cancelled' => [],
+        'refunded' => [],
+    ];
 
     private const ROLE_ORGANIZER = 'organizer';
 
@@ -230,7 +243,8 @@ final class OrderRepository extends Repository
             $resolvedItems = [];
             foreach ($requestedItems as $item) {
                 $productId = (string) ($item['productId'] ?? '');
-                $quantity = max(1, (int) ($item['quantity'] ?? 1));
+                $rawQuantity = $item['quantity'] ?? 1;
+                $quantity = max(1, (int) $rawQuantity);
 
                 // E1.3-style row lock: locks this shop_products row for the rest of
                 // this transaction so a concurrent order against the same product
@@ -246,6 +260,12 @@ final class OrderRepository extends Repository
                 if (!$product['inStock']) {
                     throw new \RuntimeException('order_out_of_stock');
                 }
+                // PP.105: an organizer package line is capped on the RAW request value (before the
+                // max(1, ...) clamp above), so 0 / -5 / 1000 / "abc" never turn into a grant.
+                if (($product['serviceKind'] ?? null) === self::SERVICE_KIND_ORGANIZER_PACKAGE
+                    && !$this->isValidPackageQuantity($rawQuantity)) {
+                    throw new \RuntimeException('order_invalid_quantity');
+                }
                 if ($product['stockCount'] !== null) {
                     if ($quantity > (int) $product['stockCount']) {
                         throw new \RuntimeException('order_insufficient_stock');
@@ -253,15 +273,8 @@ final class OrderRepository extends Repository
                     $this->decrementStock($productId, $quantity);
                 }
 
-                // E5.6/E5.7: the credit grant is unconditional (E5.6); the role
-                // grant right after it is E5.7's job, same transaction, same
-                // call site, so a purchase can never charge the buyer's card
-                // (well, "succeed" here) and grant a credit without also
-                // granting the role it's meant to unlock, or vice versa.
-                if (($product['serviceKind'] ?? null) === self::SERVICE_KIND_ORGANIZER_PACKAGE) {
-                    $this->grantOrganizerPackageCredits($userId, $quantity);
-                    $this->grantOrganizerRoleIfNeeded($userId);
-                }
+                // PP.105: nothing is granted here. An organizer package grants credits, the role and an
+                // event slot only when the order becomes `paid` (changeStatus()).
 
                 $price = (float) $product['price'];
                 $productTotal += $price * $quantity;
@@ -339,51 +352,14 @@ final class OrderRepository extends Repository
         return true;
     }
 
-    /**
-     * E5.6: grants `count` "pakiet organizatora" credits to the buyer — the
-     * write-side half of the counter EventRepository::submit()/reject() spend
-     * and refund. Same affected-rows-free "just add" shape as
-     * EventRepository::refundOrganizerPackageCredit(); a purchase has no
-     * upper bound to guard against, unlike the decrement at submit time.
-     */
-    private function grantOrganizerPackageCredits(string $userId, int $count): void
+    /** @param mixed $raw the unmodified `quantity` from the request */
+    private function isValidPackageQuantity(mixed $raw): bool
     {
-        $this->pdo->prepare(
-            'UPDATE users SET organizer_package_credits = organizer_package_credits + :count WHERE id = :userId'
-        )->execute(['count' => $count, 'userId' => $userId]);
-    }
-
-    /**
-     * E5.7 (issue 16 §2 "Samoobsluga"): a self-service organizer-package
-     * purchase grants the Organizator role to the buying account, same
-     * transaction as grantOrganizerPackageCredits() above — the manual
-     * "promocja po e-mailu" path (§4.4.4, PATCH /users/{id}/role, admin-only)
-     * stays as-is as the emergency route for partners/migrations; this is
-     * just the new self-service one the spec asks for.
-     *
-     * `SELECT ... FOR UPDATE` (not the unlocked UserRepository::find() this
-     * class otherwise avoids reaching for) so a role read/write can't race a
-     * concurrent write to the same row inside this same transaction; role is
-     * a single ENUM column on `users` (001_init.sql:
-     * participant|organizer|moderator|admin|superadmin), no separate roles
-     * table. Only a plain 'participant' gets bumped to 'organizer' — an
-     * account that's already 'organizer', or already holds a staff role that
-     * implies Organizator-level access anyway (STAFF_ROLES, mirroring
-     * routes.php's $isStaffRole), is left untouched: idempotent on a second
-     * purchase, and never destructive/downgrading to a higher role.
-     */
-    private function grantOrganizerRoleIfNeeded(string $userId): void
-    {
-        $stmt = $this->pdo->prepare('SELECT role FROM users WHERE id = :userId FOR UPDATE');
-        $stmt->execute(['userId' => $userId]);
-        $role = $stmt->fetchColumn();
-
-        if ($role === false || $role === self::ROLE_ORGANIZER || in_array($role, self::STAFF_ROLES, true)) {
-            return;
+        if (is_string($raw) && preg_match('/^\d{1,6}$/', $raw) === 1) {
+            $raw = (int) $raw;
         }
 
-        $this->pdo->prepare('UPDATE users SET role = :role WHERE id = :userId')
-            ->execute(['role' => self::ROLE_ORGANIZER, 'userId' => $userId]);
+        return is_int($raw) && $raw >= 1 && $raw <= self::MAX_ORGANIZER_PACKAGES_PER_LINE;
     }
 
     /**
@@ -515,23 +491,143 @@ final class OrderRepository extends Repository
         }
     }
 
-    public function updateStatus(string $id, string $status, ?string $trackingNumber = null): ?array
+    /**
+     * PP.105: THE ONLY DOOR INTO `paid` (and into cancelled/refunded) for shop orders. A future
+     * payment gateway webhook must call this method too. Until then "paid" is a staff confirmation
+     * (PATCH /shop/orders/{id}/status, or the `status` key of PATCH /shop/orders/{id}).
+     *
+     * One transaction, order row locked: status change + (on `paid`) organizer package grant, or
+     * (on cancelled/refunded of a granted order) reversal of the unused part. The
+     * `organizer_credits_granted` marker makes a double grant impossible.
+     *
+     * @return array<string, mixed> the order after the change
+     * @throws \RuntimeException order_invalid_status | order_not_found | order_invalid_transition
+     */
+    public function changeStatus(string $id, string $newStatus, ?string $trackingNumber = null): array
     {
-        $fields = ['status' => $status];
-        if ($trackingNumber !== null) {
-            $fields['tracking_number'] = $trackingNumber;
+        if (!in_array($newStatus, self::ORDER_STATUSES, true)) {
+            throw new \RuntimeException('order_invalid_status');
         }
-        $this->updateById('shop_orders', $id, $fields);
-        return $this->find($id);
+
+        $this->pdo->beginTransaction();
+        try {
+            $stmt = $this->pdo->prepare(
+                'SELECT status, user_id, organizer_credits_granted FROM shop_orders WHERE id = :id FOR UPDATE'
+            );
+            $stmt->execute(['id' => $id]);
+            $row = $stmt->fetch();
+            if (!is_array($row)) {
+                throw new \RuntimeException('order_not_found');
+            }
+
+            $current = (string) $row['status'];
+            $allowed = in_array($newStatus, self::STATUS_TRANSITIONS[$current] ?? [], true)
+                // shipped -> shipped keeps the "numer przesyłki" correction flow working.
+                || ($current === 'shipped' && $newStatus === 'shipped' && $trackingNumber !== null);
+            if (!$allowed) {
+                throw new \RuntimeException('order_invalid_transition');
+            }
+
+            $fields = 'status = :status';
+            $params = ['status' => $newStatus, 'id' => $id];
+            if ($trackingNumber !== null) {
+                $fields .= ', tracking_number = :tracking';
+                $params['tracking'] = $trackingNumber;
+            }
+            $this->pdo->prepare('UPDATE shop_orders SET ' . $fields . ' WHERE id = :id')->execute($params);
+
+            $userId = (string) $row['user_id'];
+            $granted = (int) $row['organizer_credits_granted'];
+            if ($newStatus === 'paid' && $granted === 0) {
+                $quantity = $this->organizerPackageQuantity($id);
+                if ($quantity > 0) {
+                    $this->applyOrganizerPackageGrant($userId, $quantity);
+                    $this->pdo->prepare('UPDATE shop_orders SET organizer_credits_granted = :granted WHERE id = :id')
+                        ->execute(['granted' => $quantity, 'id' => $id]);
+                }
+            } elseif (in_array($newStatus, ['cancelled', 'refunded'], true) && $granted > 0) {
+                $this->revokeUnusedOrganizerPackageGrant($userId, $granted);
+            }
+
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        return $this->find($id) ?? [];
+    }
+
+    private function organizerPackageQuantity(string $orderId): int
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT COALESCE(SUM(i.quantity), 0) FROM shop_order_items i
+             JOIN shop_products p ON p.id = i.product_id
+             WHERE i.order_id = :orderId AND p.service_kind = :kind'
+        );
+        $stmt->execute(['orderId' => $orderId, 'kind' => self::SERVICE_KIND_ORGANIZER_PACKAGE]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * PP.105: what a paid organizer package gives the buyer, all inside changeStatus()'s transaction:
+     * `quantity` credits (spent at Draft -> Submitted), the Organizator role for a plain participant
+     * (role + token_version bump in ONE statement, the PP.70 pattern: the old-role session ends and
+     * the buyer logs in again), and `quantity` event slots (`users.event_limit`, only meaningful for
+     * role organizer - issue 16 §2 "prawo do jednego wydarzenia", drafts are free). Staff roles and
+     * existing organizers keep their role and session; staff get credits only.
+     */
+    private function applyOrganizerPackageGrant(string $userId, int $quantity): void
+    {
+        $this->pdo->prepare(
+            'UPDATE users SET organizer_package_credits = organizer_package_credits + :credits WHERE id = :userId'
+        )->execute(['credits' => $quantity, 'userId' => $userId]);
+
+        $this->pdo->prepare(
+            'UPDATE users SET role = :newRole, token_version = token_version + 1 WHERE id = :userId AND role = :oldRole'
+        )->execute(['newRole' => self::ROLE_ORGANIZER, 'userId' => $userId, 'oldRole' => 'participant']);
+
+        $this->pdo->prepare(
+            'UPDATE users SET event_limit = event_limit + :slots WHERE id = :userId AND role = :role'
+        )->execute(['slots' => $quantity, 'userId' => $userId, 'role' => self::ROLE_ORGANIZER]);
+    }
+
+    /**
+     * PP.105 (owner decision Q2): cancel/refund of a paid, granted order takes back only what is
+     * still unused - credits (a spent credit is a submitted event) and event slots (never below the
+     * events the organizer already has). The role is never demoted automatically.
+     */
+    private function revokeUnusedOrganizerPackageGrant(string $userId, int $granted): void
+    {
+        $this->pdo->prepare(
+            'UPDATE users SET organizer_package_credits = organizer_package_credits - LEAST(organizer_package_credits, :revoke)
+             WHERE id = :userId'
+        )->execute(['revoke' => $granted, 'userId' => $userId]);
+
+        $stmt = $this->pdo->prepare('SELECT event_limit FROM users WHERE id = :userId AND role = :role FOR UPDATE');
+        $stmt->execute(['userId' => $userId, 'role' => self::ROLE_ORGANIZER]);
+        $limit = $stmt->fetchColumn();
+        if ($limit === false) {
+            return;
+        }
+
+        // Same definition of "used" as EventRepository::activeEventCount() (all non-deleted events).
+        $used = $this->pdo->prepare('SELECT COUNT(*) FROM events WHERE organizer_id = :userId AND deleted_at IS NULL');
+        $used->execute(['userId' => $userId]);
+        $limit = (int) $limit;
+        $newLimit = min($limit, max((int) $used->fetchColumn(), $limit - $granted));
+        $this->pdo->prepare('UPDATE users SET event_limit = :newLimit WHERE id = :userId')
+            ->execute(['newLimit' => $newLimit, 'userId' => $userId]);
     }
 
     /** @param array<string, mixed> $data @return array<string, mixed>|null */
     public function update(string $id, array $data): ?array
     {
-        $allowed = ['status', 'tracking_number', 'admin_notes', 'cancel_reason', 'price_adjustment', 'history'];
         $fields = [];
         $map = [
-            'status' => 'status',
             'trackingNumber' => 'tracking_number',
             'adminNotes' => 'admin_notes',
             'cancelReason' => 'cancel_reason',

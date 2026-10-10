@@ -81,12 +81,18 @@ final class PP105OrganizerPackageMigrationTest extends TestCase
         $legacy = $this->product($shop, 'legacy', 'organizer_license');
         $plain = $this->product($shop, 'plain', null);
 
-        // State as the OLD code left it: marker still 0 on every order.
-        $packageOrder = $this->insertOrder($buyer, 'pending', [[$package, 3], [$plain, 1]]);
-        $legacyOrder = $this->insertOrder($buyer, 'pending', [[$legacy, 2]]);
-        $plainOrder = $this->insertOrder($buyer, 'pending', [[$plain, 1]]);
+        // State as the OLD code left it: no marker column at all (pre-067 schema), package orders already granted.
+        $this->pdo->exec('ALTER TABLE shop_orders DROP COLUMN organizer_credits_granted');
+        try {
+            $packageOrder = $this->insertOrder($buyer, 'pending', [[$package, 3], [$plain, 1]]);
+            $legacyOrder = $this->insertOrder($buyer, 'pending', [[$legacy, 2]]);
+            $plainOrder = $this->insertOrder($buyer, 'pending', [[$plain, 1]]);
 
-        Migrator::applyFile($this->pdo, $file);
+            Migrator::applyFile($this->pdo, $file);
+        } finally {
+            // Idempotent: restores the column if the body above failed before applying.
+            Migrator::applyFile($this->pdo, $file);
+        }
 
         self::assertSame(3, $this->marker($packageOrder));
         self::assertSame(0, $this->marker($legacyOrder));
@@ -95,11 +101,12 @@ final class PP105OrganizerPackageMigrationTest extends TestCase
         self::assertSame('organizer_package', $this->kind($package));
         self::assertNull($this->kind($plain));
 
-        // Second run is a no-op (a legacy order is not a "granted" order, so it is not re-marked either).
+        // A new order created after the migration is never touched by a replay of the file.
+        $fresh = $this->insertOrder($buyer, 'pending', [[$package, 1]]);
         Migrator::applyFile($this->pdo, $file);
+        self::assertSame(0, $this->marker($fresh));
         self::assertSame(3, $this->marker($packageOrder));
         self::assertSame(0, $this->marker($legacyOrder));
-        self::assertSame(0, $this->marker($plainOrder));
 
         // Marked order: paying it grants nothing more; the legacy-kind order (marker 0) grants on paid.
         $orders = new OrderRepository($this->pdo, $shop);

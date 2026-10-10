@@ -311,3 +311,36 @@ expires and no reminders go out, on staging as well as production. Full runbook:
   continues and a WARNING with `check` = `payments.registration_id_unverifiable` is logged (no alert key, so
   no e-mail). TD.4 must confirm the real field name and format; if that WARNING shows up for real payments,
   the field is not echoed as our id and the check is not protecting that gateway yet.
+
+## 14. Shop orders: organizer package (PP.105)
+
+- **When the package is granted:** only when a shop order becomes `paid`. Creating an order grants nothing
+  (status `pending`). There is no payment gateway for shop orders yet, so "paid" is a staff confirmation:
+  `PATCH /api/v1/shop/orders/{id}/status` `{"status":"paid"}` (moderator, admin, superadmin) or the `status`
+  key of `PATCH /api/v1/shop/orders/{id}` (admin). Both go through `OrderRepository::changeStatus()`.
+- **What `paid` grants** (`shop_orders.organizer_credits_granted` records it, so it happens once): credits
+  += number of packages, `event_limit` += number of packages (organizers), and a plain `participant` becomes
+  `organizer` (role change ends the buyer's sessions: they log in again). Staff buyers get credits only.
+- **Cancel / refund of a paid package order:** takes back only UNUSED credits and lowers `event_limit` but not
+  below the events the organizer already has. The role is never demoted automatically (use
+  `PATCH /users/{id}/role` if needed).
+- **Limit:** at most 10 packages per order line (`422 order_invalid_quantity`).
+- **Audit of orders created by the old code (read-only, run BEFORE deploying migration 067).** The old code
+  granted credits and the role when the order was created, regardless of payment. Migration 067 marks such
+  orders as already granted (so marking them paid later does not grant twice) and corrects nothing else.
+  `pending` rows with `organizer_package` below were granted without payment: decide per row (mark paid, or
+  cancel after reversing by hand / via the new cancel path, or fix credits manually). After 067 add
+  `o.organizer_credits_granted` to the SELECT and to the GROUP BY.
+
+```sql
+SELECT o.order_number, o.status, o.created_at, o.user_id, u.email, u.role,
+       u.organizer_package_credits, u.event_limit, SUM(i.quantity) AS package_qty
+FROM shop_orders o
+JOIN shop_order_items i ON i.order_id = o.id
+JOIN shop_products p ON p.id = i.product_id
+JOIN users u ON u.id = o.user_id
+WHERE p.service_kind IN ('organizer_package', 'organizer_license')
+GROUP BY o.order_number, o.status, o.created_at, o.user_id, u.email, u.role,
+         u.organizer_package_credits, u.event_limit
+ORDER BY o.created_at;
+```

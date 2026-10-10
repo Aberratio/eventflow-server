@@ -262,8 +262,8 @@ final class OrderRepository extends Repository
                 }
                 // PP.105: an organizer package line is capped on the RAW request value (before the
                 // max(1, ...) clamp above), so 0 / -5 / 1000 / "abc" never turn into a grant.
-                if (($product['serviceKind'] ?? null) === self::SERVICE_KIND_ORGANIZER_PACKAGE
-                    && !$this->isValidPackageQuantity($rawQuantity)) {
+                $isPackage = ($product['serviceKind'] ?? null) === self::SERVICE_KIND_ORGANIZER_PACKAGE;
+                if ($isPackage && !$this->isValidPackageQuantity($rawQuantity)) {
                     throw new \RuntimeException('order_invalid_quantity');
                 }
                 if ($product['stockCount'] !== null) {

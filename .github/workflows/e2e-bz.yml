@@ -1,0 +1,128 @@
+name: BZ End-to-End Contract
+
+# PP.43: runs the real ZC server and the real Biuro Zawodow API against each other
+# (tests/e2e/bz/run.php). The BZ repo is private, so reading it needs a read-only deploy
+# key stored as the repository secret BZ_API_REPO_SSH_KEY. Without that secret the job
+# cannot run the test: it then says so loudly (warning annotation + job summary) instead
+# of passing silently. Setup steps: TESTING.md, "ZC <-> BZ end-to-end contract test".
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  schedule:
+    # Nightly, so a change merged only on the BZ side shows up as a red run here.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      bz_ref:
+        description: "Branch, tag or SHA of Aberratio/biuro_zawodow-api to test against (default: repo variable BZ_API_REF, else master)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: ZC <-> BZ end-to-end contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Check that the BZ repository can be read
+        id: gate
+        env:
+          BZ_KEY: ${{ secrets.BZ_API_REPO_SSH_KEY }}
+        run: |
+          if [ -z "$BZ_KEY" ]; then
+            msg="Secret BZ_API_REPO_SSH_KEY is not configured; the ZC<->BZ contract test did NOT run."
+            echo "::warning title=BZ e2e did NOT run::$msg"
+            {
+              echo "## BZ end-to-end contract test: SKIPPED"
+              echo ""
+              echo "$msg"
+              echo ""
+              echo "Add a read-only deploy key to Aberratio/biuro_zawodow-api and its private half as the secret BZ_API_REPO_SSH_KEY here (see TESTING.md)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.enabled == 'true'
+
+      - name: Check out Biuro Zawodow API
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Aberratio/biuro_zawodow-api
+          ref: ${{ inputs.bz_ref || vars.BZ_API_REF || 'master' }}
+          ssh-key: ${{ secrets.BZ_API_REPO_SSH_KEY }}
+          path: bz-api
+
+      - uses: shivammathur/setup-php@v2
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          php-version: "8.2"
+          coverage: none
+          extensions: pdo_mysql, sodium, curl, gd, mbstring
+
+      - name: Install ZC dependencies
+        if: steps.gate.outputs.enabled == 'true'
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Install BZ dependencies
+        if: steps.gate.outputs.enabled == 'true'
+        working-directory: bz-api
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Run the end-to-end scenario
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        env:
+          BZ_DIR: ${{ github.workspace }}/bz-api
+          E2E_DB_HOST: 127.0.0.1
+          E2E_DB_PORT: "3306"
+          E2E_DB_USER: root
+          E2E_DB_PASSWORD: ""
+          E2E_LOG_DIR: ${{ runner.temp }}/e2e-logs
+        run: php tests/e2e/bz/run.php | tee "$RUNNER_TEMP/e2e-output.txt"
+
+      - name: Summarise the run
+        if: always() && steps.gate.outputs.enabled == 'true'
+        env:
+          BZ_REF: ${{ inputs.bz_ref || vars.BZ_API_REF || 'master' }}
+        run: |
+          {
+            echo "## BZ end-to-end contract test"
+            echo ""
+            echo "BZ ref: \`$BZ_REF\`"
+            echo ""
+            echo '```'
+            tail -n 40 "$RUNNER_TEMP/e2e-output.txt" 2>/dev/null || echo "(no output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload redacted logs
+        if: failure() && steps.gate.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-bz-logs
+          path: ${{ runner.temp }}/e2e-logs
+          retention-days: 7
+          if-no-files-found: ignore

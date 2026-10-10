@@ -116,12 +116,16 @@
             "php -l src/Support/Log/PiiRedactingProcessor.php",
             "php -l src/Support/Log/AlertThrottle.php",
             "php -l src/Support/Log/AlertHandler.php",
-            "php -l src/Http/DomainErrorCode.php"
+            "php -l src/Http/DomainErrorCode.php",
+            "php -l tests/e2e/bz/lib.php",
+            "php -l tests/e2e/bz/run.php",
+            "php -l tests/e2e/bz/zc-fixture.php"
         ],
         "seed:fresh": "php bin/seed.php --fresh",
         "seed:purge": "php bin/seed.php --purge",
         "prune-demo": "php bin/prune-demo.php --dry-run",
         "test:prepare": "php tests/bin/test-db.php prepare",
+        "e2e:bz": "php tests/e2e/bz/run.php",
         "stan": "phpstan analyse --no-progress",
         "cs": "phpcs"
     }

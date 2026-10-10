@@ -131,8 +131,30 @@ final class OrderRepository extends Repository
              ORDER BY o.created_at DESC"
         );
         $stmt->execute($params);
-        $rows = $stmt->fetchAll();
-        return array_map(fn (array $row): array => $this->hydrateOrder($row), $rows);
+        $orders = array_map(fn (array $row): array => $this->hydrateOrder($row), $stmt->fetchAll());
+
+        // PP.105: the staff list (the only UI path to mark an order paid) needs items[] like every other
+        // order read; one query for the whole page instead of one per order.
+        if ($orders !== []) {
+            $ids = array_map(static fn (array $order): string => (string) $order['id'], $orders);
+            $itemStmt = $this->pdo->prepare(
+                'SELECT order_id AS orderId, id, product_id AS productId, product_name AS productName, quantity, price, size, color
+                 FROM shop_order_items WHERE order_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')'
+            );
+            $itemStmt->execute($ids);
+            $byOrder = [];
+            foreach ($itemStmt->fetchAll() as $item) {
+                $orderId = (string) $item['orderId'];
+                unset($item['orderId']);
+                $byOrder[$orderId][] = $item;
+            }
+            foreach ($orders as &$order) {
+                $order['items'] = $byOrder[(string) $order['id']] ?? [];
+            }
+            unset($order);
+        }
+
+        return $orders;
     }
 
     public function find(string $id): ?array

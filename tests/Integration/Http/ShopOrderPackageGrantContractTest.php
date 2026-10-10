@@ -308,6 +308,19 @@ final class ShopOrderPackageGrantContractTest extends HttpTestCase
         self::assertSame(201, $this->request('POST', '/api/v1/shop/products', ['slug' => $this->prefix . '-q'] + $payload, $this->asAdmin())->getStatusCode());
     }
 
+    public function testStaffOrderListCarriesTheItemsOfEachOrder(): void
+    {
+        $orderId = $this->orderId($this->createOrder(2, $this->asBuyer()));
+
+        $list = $this->json($this->request('GET', '/api/v1/shop/orders?userId=' . $this->buyer['id'], [], $this->asModerator()))['data'];
+
+        self::assertCount(1, $list);
+        self::assertSame($orderId, $list[0]['id']);
+        self::assertCount(1, $list[0]['items']);
+        self::assertSame(2, (int) $list[0]['items'][0]['quantity']);
+        self::assertSame($this->product['id'], $list[0]['items'][0]['productId']);
+    }
+
     // T12
     public function testConcurrentMarkPaidGrantsExactlyOnce(): void
     {

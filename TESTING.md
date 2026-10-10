@@ -121,6 +121,75 @@ failure: it usually means a migration or seed step silently failed and the test'
 `try {...} catch { markTestSkipped(...) }` swallowed it — "0 failures, N skipped" is not a
 green run.
 
+## ZC <-> BZ end-to-end contract test
+
+`tests/e2e/bz/run.php` starts the real ZC server (this checkout) and the real Biuro Zawodow API
+(`Aberratio/biuro_zawodow-api`, a second checkout) on two fresh MySQL databases and drives the
+whole integration over HTTP and the two CLIs. Each side's own suites test against fakes of the
+other; this is the only test that notices when the two stop agreeing.
+
+Scenario (every step has HTTP and database assertions, about 65 in total):
+
+- **S0** BZ stores the platform connection and never echoes the token; a pull while the ZC
+  integration is still off is refused (`token_rejected`) and imports nothing.
+- **S1** the ZC organizer enables the integration (`PATCH /events/{id}`).
+- **S2** BZ pulls: three participants with matching `platform_registration_id`, `pqr_` and
+  `zqr_` codes; a second pull creates no duplicates.
+- **S3** a participant withdraws on ZC; the webhook is delivered in the same request (outbox
+  `sent`), BZ marks only that participant withdrawn; a repeated cancel and `bz.outbox_retry`
+  send nothing twice.
+- **S4** at BZ a `zqr_` scan and a `pqr_` scan resolve the right participants and check them in;
+  scanning the withdrawn one warns (`platform_removed_at`) and does not check in.
+- **S5** `scripts/push-platform-changes.php` writes `checked_in_at` / `checked_in_by` back into
+  ZC for the two checked-in participants only; a second push changes nothing.
+
+Exit codes: `0` passed, `1` an assertion failed (step label and redacted diagnostics are
+printed), `2` environment problem (missing extension, vendor, busy port, bad DB name ...).
+
+### Run it locally
+
+Use dedicated checkouts or worktrees of both repos; the runner writes (and afterwards deletes)
+its own `.env` in the ZC checkout and refuses to touch a `.env` it did not write.
+
+```
+git worktree add ../zc-e2e <branch>          # ZC server
+git worktree add ../bz-e2e origin/master     # in the BZ api repo
+composer install                              # in both
+```
+
+```
+export BZ_DIR=/path/to/bz-e2e
+export E2E_DB_HOST=127.0.0.1 E2E_DB_PORT=3306 E2E_DB_USER=root E2E_DB_PASSWORD=
+php tests/e2e/bz/run.php            # or: composer e2e:bz
+```
+
+Needs PHP extensions `pdo_mysql`, `curl` and `sodium` (XAMPP on Windows:
+`php -d extension=sodium tests/e2e/bz/run.php`) and MySQL 8.4 (the run drops and recreates
+exactly `zc_e2e` and `bz_e2e`; names must end in `_e2e`). Optional variables: `E2E_ZC_DB`,
+`E2E_BZ_DB`, `E2E_ZC_PORT` (18081), `E2E_BZ_PORT` (18090), `E2E_LOG_DIR`, `ZC_DIR`; `--keep`
+leaves the databases, the `.env` and the logs for debugging. A run takes under 30 s. It does
+not use `bin/seed.php` (the full seed takes minutes locally); the fixture loads only the demo
+accounts.
+
+### CI (`.github/workflows/e2e-bz.yml`)
+
+Runs on pull requests, pushes to main/master, nightly (catches BZ-side drift) and manually
+(`bz_ref` input; default is the repository variable `BZ_API_REF`, else `master`). The BZ
+repository is private, so the job needs a read-only deploy key. **Owner setup, once:**
+
+1. Create an SSH key pair without passphrase: `ssh-keygen -t ed25519 -N "" -C "zc-e2e-bz" -f bz-e2e-key`.
+2. `Aberratio/biuro_zawodow-api` -> Settings -> Deploy keys -> add the **public** key, leave
+   "Allow write access" unchecked.
+3. `Aberratio/eventflow-server` -> Settings -> Secrets and variables -> Actions -> new secret
+   `BZ_API_REPO_SSH_KEY` with the **private** key; then delete the local key files.
+4. After the first green run, add the `e2e` check (job "ZC <-> BZ end-to-end contract") as a
+   required check in the branch ruleset.
+
+Until the secret exists the job does not run the test: it finishes with a warning annotation
+"BZ e2e did NOT run" and a "SKIPPED" job summary. That is deliberately visible, but it is not
+a gate. Pin a BZ ref temporarily through `BZ_API_REF` if a BZ change must not block ZC pull
+requests.
+
 ## Checking an existing DB (e.g. staging) before configuring deploy secrets
 
 Read-only — run these against the target database and compare against a fresh database's

@@ -265,7 +265,7 @@ final class RbacGrid
         'POST /api/v1/shop/orders' => ['policy' => self::AUTH, 'basis' => 'buyer = auth.sub (plan line 2709)'],
         'GET /api/v1/me/orders' => ['policy' => self::AUTH, 'override' => ['participant' => self::OK, 'owner' => self::OK, 'foreignOrganizer' => self::OK, 'organizer' => self::OK, 'moderator' => self::OK, 'admin' => self::OK, 'superadmin' => self::OK], 'basis' => 'macierz §3 Zamówienia sklepowe — Uczestnik: własne; identity = auth.sub (PP.17)'],
         'GET /api/v1/me/orders/{id}' => ['policy' => self::SELF_ONLY, 'params' => ['id' => 'order'], 'basis' => 'macierz §3 własne; foreign id = 404, not 403 (no enumeration) (PP.17)'],
-        'PATCH /api/v1/shop/orders/{id}/status' => ['policy' => self::STAFF, 'basis' => 'macierz: Moderator "tylko zmiana statusu" (§8 Q1) (plan line 2752)'],
+        'PATCH /api/v1/shop/orders/{id}/status' => ['policy' => self::STAFF, 'params' => ['id' => 'order'], 'body' => ['status' => 'shipped'], 'basis' => 'macierz: Moderator "tylko zmiana statusu" (§8 Q1) (plan line 2752)'],
         'PATCH /api/v1/shop/orders/{id}' => ['policy' => self::ADMIN, 'basis' => 'H1 (plan line 2765)'],
         'GET /api/v1/shop/products' => ['policy' => self::PUBLIC, 'basis' => 'public read/endpoint (no extra per-row rule) (plan line 2772)'],
         'GET /api/v1/shop/products/slug/{slug}' => ['policy' => self::PUBLIC, 'basis' => 'public read/endpoint (no extra per-row rule) (plan line 2782)'],

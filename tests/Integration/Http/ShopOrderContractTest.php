@@ -545,7 +545,7 @@ final class ShopOrderContractTest extends HttpTestCase
      * `organizer_package_credits` counter; the order needs no delivery method
      * and no shipping address at all, unlike every other product in this file.
      */
-    public function testPurchasingOrganizerPackageIncrementsCreditByOne(): void
+    public function testPurchasingOrganizerPackageDoesNotGrantCreditsAtCheckout(): void
     {
         $product = $this->createOrganizerPackageProduct();
 
@@ -564,11 +564,14 @@ final class ShopOrderContractTest extends HttpTestCase
             $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
         );
 
+        // PP.105: the order is only `pending` - nothing is granted before payment.
         self::assertSame(201, $response->getStatusCode());
-        self::assertSame(1, $this->organizerPackageCredits($this->buyer['id']));
+        self::assertSame('pending', $this->json($response)['data']['status']);
+        self::assertSame(0, $this->organizerPackageCredits($this->buyer['id']));
+        self::assertSame('participant', $this->roleOf($this->buyer['id']));
     }
 
-    public function testPurchasingNUnitsOfOrganizerPackageIncrementsCreditByN(): void
+    public function testMarkingNUnitsOfOrganizerPackagePaidGrantsCreditByN(): void
     {
         $product = $this->createOrganizerPackageProduct();
 
@@ -587,6 +590,10 @@ final class ShopOrderContractTest extends HttpTestCase
         );
 
         self::assertSame(201, $response->getStatusCode());
+        self::assertSame(0, $this->organizerPackageCredits($this->buyer['id']));
+
+        $this->markPaid((string) $this->json($response)['data']['id']);
+
         self::assertSame(3, $this->organizerPackageCredits($this->buyer['id']));
     }
 
@@ -623,7 +630,7 @@ final class ShopOrderContractTest extends HttpTestCase
      * grants both the credit (E5.6, unconditional) AND the Organizator role,
      * not just the credit.
      */
-    public function testPurchasingOrganizerPackageAsParticipantGrantsCreditAndOrganizerRole(): void
+    public function testMarkingOrganizerPackagePaidAsParticipantGrantsCreditAndOrganizerRole(): void
     {
         $product = $this->createOrganizerPackageProduct();
 
@@ -640,6 +647,10 @@ final class ShopOrderContractTest extends HttpTestCase
         );
 
         self::assertSame(201, $response->getStatusCode());
+        self::assertSame('participant', $this->roleOf($this->buyer['id']));
+
+        $this->markPaid((string) $this->json($response)['data']['id']);
+
         self::assertSame(1, $this->organizerPackageCredits($this->buyer['id']));
         self::assertSame('organizer', $this->roleOf($this->buyer['id']));
     }
@@ -653,7 +664,7 @@ final class ShopOrderContractTest extends HttpTestCase
      * no-op rather than something that could ever fail on a "already has
      * this role" edge case).
      */
-    public function testPurchasingOrganizerPackageAsExistingOrganizerOnlyAddsCreditAndLeavesRoleUnchanged(): void
+    public function testMarkingOrganizerPackagePaidAsExistingOrganizerOnlyAddsCreditAndLeavesRoleUnchanged(): void
     {
         $this->users->update($this->buyer['id'], ['role' => 'organizer']);
         $product = $this->createOrganizerPackageProduct();
@@ -671,6 +682,10 @@ final class ShopOrderContractTest extends HttpTestCase
         );
 
         self::assertSame(201, $response->getStatusCode());
+        self::assertSame(0, $this->organizerPackageCredits($this->buyer['id']));
+
+        $this->markPaid((string) $this->json($response)['data']['id']);
+
         self::assertSame(2, $this->organizerPackageCredits($this->buyer['id']));
         self::assertSame('organizer', $this->roleOf($this->buyer['id']));
     }
@@ -682,7 +697,7 @@ final class ShopOrderContractTest extends HttpTestCase
      * to plain 'organizer' — that would be destructive to a strictly higher
      * role for no reason.
      */
-    public function testPurchasingOrganizerPackageAsAdminGrantsCreditWithoutTouchingTheHigherRole(): void
+    public function testMarkingOrganizerPackagePaidAsAdminGrantsCreditWithoutTouchingTheHigherRole(): void
     {
         $this->users->update($this->buyer['id'], ['role' => 'admin']);
         $product = $this->createOrganizerPackageProduct();
@@ -700,8 +715,30 @@ final class ShopOrderContractTest extends HttpTestCase
         );
 
         self::assertSame(201, $response->getStatusCode());
+        self::assertSame(0, $this->organizerPackageCredits($this->buyer['id']));
+
+        $this->markPaid((string) $this->json($response)['data']['id']);
+
         self::assertSame(1, $this->organizerPackageCredits($this->buyer['id']));
         self::assertSame('admin', $this->roleOf($this->buyer['id']));
+    }
+
+    /** PP.105: staff confirmation of payment - the only door into `paid`. */
+    private function markPaid(string $orderId): void
+    {
+        $staff = $this->users->create([
+            'name' => 'Order Staff',
+            'email' => $this->prefix . '-staff-' . bin2hex(random_bytes(2)) . '@example.test',
+            'password' => 'demo1234',
+            'role' => 'moderator',
+        ]);
+        $response = $this->request(
+            'PATCH',
+            '/api/v1/shop/orders/' . $orderId . '/status',
+            ['status' => 'paid'],
+            $this->bearer($staff['id'], 'moderator', $staff['email'])
+        );
+        self::assertSame(200, $response->getStatusCode());
     }
 
     private function roleOf(string $userId): string

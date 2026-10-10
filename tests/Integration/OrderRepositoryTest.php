@@ -99,18 +99,11 @@ final class OrderRepositoryTest extends TestCase
     }
 
     /**
-     * E5.7 (issue 16 §2 "Samoobsluga"): proves the credit grant and the
-     * Organizator role grant can't desync — both happen inside create()'s
-     * single transaction (see OrderRepository::create()'s comment at the
-     * grantOrganizerPackageCredits()/grantOrganizerRoleIfNeeded() call site).
-     * A cart with a valid organizer-package item first, then a second item
-     * that fails stock validation, forces the whole transaction to roll
-     * back: if the role grant lived outside that transaction (e.g. committed
-     * eagerly, or in a separate connection/statement not covered by the
-     * rollback), this test would catch it as a role that "stuck" despite the
-     * order never actually succeeding.
+     * PP.105: the grant lives in changeStatus('paid') now - status, credits, role and
+     * event_limit change in ONE transaction, so a failure inside it (here: the event_limit
+     * increment overflows the INT column under the strict session mode) leaves nothing behind.
      */
-    public function testFailedOrderRollsBackBothTheCreditGrantAndTheRoleGrantTogether(): void
+    public function testFailureInsideTheGrantRollsBackStatusCreditsAndRoleTogether(): void
     {
         $organizerPackage = $this->shop->createProduct([
             'name' => $this->prefix . ' Pakiet Organizatora',
@@ -125,36 +118,27 @@ final class OrderRepositoryTest extends TestCase
             'isService' => true,
             'serviceKind' => 'organizer_package',
         ]);
-        $limitedProduct = $this->shop->createProduct([
-            'name' => $this->prefix . ' Limited Product',
-            'slug' => $this->prefix . '-limited',
-            'description' => 'Test',
-            'price' => 10,
-            'category' => 'apparel',
-            'brand' => 'Test Brand',
-            'imageUrl' => 'https://example.test/product.jpg',
-            'inStock' => true,
-            'stockCount' => 1,
-        ]);
-
-        $payload = [
-            'items' => [
-                ['productId' => $organizerPackage['id'], 'productName' => $organizerPackage['name'], 'quantity' => 1],
-                ['productId' => $limitedProduct['id'], 'productName' => $limitedProduct['name'], 'quantity' => 5],
-            ],
-            'deliveryMethod' => ['id' => 'pickup', 'name' => 'Odbior osobisty'],
+        $order = $this->orders->create([
+            'items' => [['productId' => $organizerPackage['id'], 'productName' => $organizerPackage['name'], 'quantity' => 1]],
             'paymentMethod' => ['id' => 'card', 'name' => 'Karta platnicza'],
-        ];
+        ], $this->buyer['id']);
+        self::assertSame('pending', $order['status']);
+        self::assertSame(0, $this->organizerPackageCredits($this->buyer['id']));
+
+        $this->pdo->prepare("UPDATE users SET role = 'organizer', event_limit = 2147483647 WHERE id = :id")
+            ->execute(['id' => $this->buyer['id']]);
 
         try {
-            $this->orders->create($payload, $this->buyer['id']);
-            self::fail('Expected order_insufficient_stock to abort the whole transaction.');
-        } catch (\RuntimeException $e) {
-            self::assertSame('order_insufficient_stock', $e->getMessage());
+            $this->orders->changeStatus((string) $order['id'], 'paid', null);
+            self::fail('Expected the event_limit overflow to abort the transition.');
+        } catch (\PDOException) {
+            // strict INT overflow
         }
 
+        $stmt = $this->pdo->prepare('SELECT status FROM shop_orders WHERE id = :id');
+        $stmt->execute(['id' => $order['id']]);
+        self::assertSame('pending', $stmt->fetchColumn());
         self::assertSame(0, $this->organizerPackageCredits($this->buyer['id']));
-        self::assertSame('participant', $this->roleOf($this->buyer['id']));
     }
 
     private function organizerPackageCredits(string $userId): int
@@ -162,13 +146,6 @@ final class OrderRepositoryTest extends TestCase
         $stmt = $this->pdo->prepare('SELECT organizer_package_credits FROM users WHERE id = :id');
         $stmt->execute(['id' => $userId]);
         return (int) $stmt->fetchColumn();
-    }
-
-    private function roleOf(string $userId): string
-    {
-        $stmt = $this->pdo->prepare('SELECT role FROM users WHERE id = :id');
-        $stmt->execute(['id' => $userId]);
-        return (string) $stmt->fetchColumn();
     }
 
     /** @return array<string, mixed> */

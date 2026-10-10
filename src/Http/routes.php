@@ -3930,7 +3930,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     $catPositions[$cat] = ($catPositions[$cat] ?? 0) + 1;
                     $bibNum = str_pad((string) ($bibIdx + 1), 3, '0', STR_PAD_LEFT);
                     $isFinished = $t['status'] === 'finished';
-                    $totalSec = $t['seconds'];
+                    $totalSec = (int) round($t['seconds']);
                     $h = (int) floor($totalSec / 3600);
                     $m = (int) floor(($totalSec % 3600) / 60);
                     $s = $totalSec % 60;

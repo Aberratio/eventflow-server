@@ -155,6 +155,107 @@ final class ResultCorrectionTrailContractTest extends HttpTestCase
         self::assertSame(404, $this->request('GET', '/api/v1/results/nope/corrections', [], $this->auth($this->organizer))->getStatusCode());
     }
 
+    public function testNetTimeCorrectionIsStoredAndTrailedFromTo(): void
+    {
+        $this->patch(['netTime' => '00:44:30', 'netTimeInSeconds' => 2670]);
+        $this->patch(['netTime' => '00:44:00', 'netTimeInSeconds' => 2640, 'reason' => 'Druga korekta']);
+
+        // Both corrections can share one second, so the order of the rows is not asserted.
+        $rows = $this->corrections();
+        self::assertCount(2, $rows);
+        $netChanges = array_map(static fn (array $row): array => $row['changes']['netTime'], $rows);
+        self::assertContainsEquals(['from' => '00:44:30', 'to' => '00:44:00'], $netChanges);
+        self::assertContainsEquals(['from' => null, 'to' => '00:44:30'], $netChanges);
+        self::assertArrayNotHasKey('time', $rows[0]['changes']);
+    }
+
+    public function testPlacesCorrectionIsAppliedSurvivesRenumberingAndIsTrailed(): void
+    {
+        $patch = $this->patch(['position' => 3, 'categoryPosition' => 2, 'reason' => 'Decyzja sedziego']);
+        self::assertSame(200, $patch->getStatusCode());
+
+        $data = $this->json($patch)['data'];
+        self::assertSame(3, (int) $data['position']);
+        self::assertSame(2, (int) $data['categoryPosition']);
+        $changes = $this->corrections()[0]['changes'];
+        self::assertEquals(['from' => 1, 'to' => 3], $changes['position']);
+        self::assertEquals(['from' => 1, 'to' => 2], $changes['categoryPosition']);
+        self::assertArrayNotHasKey('time', $changes);
+    }
+
+    public function testManualPlaceSurvivesUpdateOfAnotherResultAndNullReleasesIt(): void
+    {
+        $this->patch(['position' => 5, 'categoryPosition' => 4]);
+        $other = $this->json($this->request('POST', '/api/v1/results', [
+            'eventId' => $this->event['id'], 'distanceId' => $this->distanceId, 'userName' => 'Drugi',
+            'category' => 'Open', 'time' => '00:40:00', 'timeInSeconds' => 2400, 'status' => 'finished',
+        ], $this->auth($this->organizer)))['data'];
+        $this->request('PATCH', '/api/v1/results/' . $other['id'], ['bibNumber' => '9'], $this->auth($this->organizer));
+
+        $mine = $this->stored();
+        self::assertSame(5, (int) $mine['position']);
+        self::assertSame(4, (int) $mine['categoryPosition']);
+
+        $released = $this->json($this->patch(['position' => null]))['data'];
+        self::assertSame(2, (int) $released['position']);
+        self::assertSame(4, (int) $released['categoryPosition'], 'category place stays manual');
+    }
+
+    public function testNullPlaceKeepsAutomaticRanking(): void
+    {
+        $patch = $this->patch(['position' => null, 'categoryPosition' => null]);
+
+        self::assertSame(200, $patch->getStatusCode());
+        self::assertSame(1, (int) $this->json($patch)['data']['position']);
+        self::assertSame([], $this->corrections());
+    }
+
+    /** @dataProvider invalidPlaces */
+    public function testInvalidPlaceIs422(string $field, mixed $value): void
+    {
+        self::assertSame(422, $this->patch([$field => $value])->getStatusCode());
+        self::assertSame([], $this->corrections());
+    }
+
+    /** @return iterable<string, array{string, mixed}> */
+    public static function invalidPlaces(): iterable
+    {
+        yield 'position zero' => ['position', 0];
+        yield 'position negative' => ['position', -2];
+        yield 'position text' => ['position', 'abc'];
+        yield 'position fraction' => ['position', 1.5];
+        yield 'category zero' => ['categoryPosition', 0];
+        yield 'category negative' => ['categoryPosition', -1];
+    }
+
+    public function testPlaceIsIgnoredForNonClassifiedStatus(): void
+    {
+        $patch = $this->patch(['status' => 'dnf', 'position' => 5]);
+
+        self::assertSame(0, (int) $this->json($patch)['data']['position']);
+    }
+
+    /** @return array<string, mixed> */
+    private function stored(): array
+    {
+        $stmt = $this->pdo->prepare('SELECT position, category_position AS categoryPosition FROM results WHERE id = :id');
+        $stmt->execute(['id' => $this->resultId]);
+
+        return $stmt->fetch();
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function patch(array $payload): ResponseInterface
+    {
+        return $this->request('PATCH', '/api/v1/results/' . $this->resultId, $payload, $this->auth($this->organizer));
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function corrections(): array
+    {
+        return $this->json($this->request('GET', '/api/v1/results/' . $this->resultId . '/corrections', [], $this->auth($this->organizer)))['data'];
+    }
+
     private function markOfficial(): ResponseInterface
     {
         return $this->request(

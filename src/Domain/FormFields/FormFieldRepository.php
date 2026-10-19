@@ -195,6 +195,124 @@ final class FormFieldRepository extends Repository
     }
 
     /**
+     * B-02: edycja typu i/lub listy wariantów istniejącego pola własnego
+     * (zamiast usuń + dodaj). Klucz pola i klucze wariantów zostają stabilne.
+     * Reguły bezpieczeństwa wobec już zapisanych odpowiedzi:
+     * - zmiana TYPU pola, które ma jakiekolwiek odpowiedzi → 409 HAS_ANSWERS;
+     * - USUNIĘCIE wariantu (po kluczu) użytego w odpowiedzi → 409 OPTION_IN_USE;
+     *   dodanie, zmiana etykiety i ceny są zawsze dozwolone.
+     * Specyfikacja (model §6 / issue 10) zakazuje zmiany typu tylko dla pola
+     * odziedziczonego przez Dystans; na poziomie Wydarzenia go nie zakazuje.
+     *
+     * @param array<string, mixed> $data fieldType?, options?
+     * @throws \InvalidArgumentException walidacja (422)
+     * @throws FormFieldConflictException kolizja z odpowiedziami (409)
+     */
+    public function updateDefinition(string $id, array $data): array
+    {
+        $field = $this->find($id);
+        if ($field === null) {
+            throw new \InvalidArgumentException('Nie znaleziono pozycji formularza.');
+        }
+
+        $hasType = array_key_exists('fieldType', $data);
+        $hasOptions = array_key_exists('options', $data);
+        if (!$hasType && !$hasOptions) {
+            return $field;
+        }
+        if ($field['kind'] !== 'custom') {
+            throw new \InvalidArgumentException('Typ i warianty można zmieniać wyłącznie w polach własnych.');
+        }
+
+        $currentType = (string) $field['fieldType'];
+        $newType = $hasType ? (string) $data['fieldType'] : $currentType;
+        if (!FormFieldType::isValid($newType)) {
+            throw new \InvalidArgumentException('Nieznany typ pola własnego.');
+        }
+
+        $update = [];
+        if ($newType !== $currentType) {
+            if ($this->countAnswers($id) > 0) {
+                throw new FormFieldConflictException(
+                    FormFieldConflictException::HAS_ANSWERS,
+                    'Nie można zmienić typu pola, które ma już odpowiedzi w Zapisach.'
+                );
+            }
+            $update['field_type'] = $newType;
+        }
+
+        if (FormFieldType::usesOptions($newType)) {
+            if ($hasOptions) {
+                if (!is_array($data['options'])) {
+                    throw new \InvalidArgumentException('Warianty muszą być listą.');
+                }
+                $options = self::normalizeOptions($data['options']);
+                $keys = array_column($options, 'key');
+                if (count($keys) !== count(array_unique($keys))) {
+                    throw new \InvalidArgumentException('Klucze wariantów muszą być unikalne.');
+                }
+                $this->assertRemovedOptionsUnused($field, $keys);
+                $update['options'] = json_encode($options, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            } elseif ($newType !== $currentType) {
+                $update['options'] = json_encode([], JSON_UNESCAPED_UNICODE);
+            }
+        } else {
+            if ($hasOptions && !empty($data['options'])) {
+                throw new \InvalidArgumentException('Ten typ pola nie ma wariantów.');
+            }
+            if ($newType !== $currentType) {
+                $update['options'] = null;
+            }
+        }
+
+        $this->updateById('form_fields', $id, $update);
+        return $this->find($id) ?? [];
+    }
+
+    private function countAnswers(string $fieldId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM form_field_answers WHERE form_field_id = :id');
+        $stmt->execute(['id' => $fieldId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * @param array<string, mixed> $field
+     * @param array<int, string> $newKeys
+     */
+    private function assertRemovedOptionsUnused(array $field, array $newKeys): void
+    {
+        $removed = array_values(array_diff(
+            array_map(static fn (array $o): string => (string) $o['key'], (array) ($field['options'] ?? [])),
+            $newKeys
+        ));
+        if ($removed === []) {
+            return;
+        }
+
+        $stmt = $this->pdo->prepare('SELECT value_text AS valueText, value_json AS valueJson FROM form_field_answers WHERE form_field_id = :id');
+        $stmt->execute(['id' => $field['id']]);
+        $used = [];
+        foreach ($stmt->fetchAll() as $row) {
+            if ($row['valueText'] !== null && $row['valueText'] !== '') {
+                $used[(string) $row['valueText']] = true;
+            }
+            if ($row['valueJson'] !== null && $row['valueJson'] !== '') {
+                foreach ((array) json_decode((string) $row['valueJson'], true) as $key) {
+                    $used[(string) $key] = true;
+                }
+            }
+        }
+        $blocked = array_values(array_filter($removed, static fn (string $k): bool => isset($used[$k])));
+        if ($blocked !== []) {
+            throw new FormFieldConflictException(
+                FormFieldConflictException::OPTION_IN_USE,
+                'Nie można usunąć wariantu użytego w odpowiedziach: ' . implode(', ', $blocked) . '.'
+            );
+        }
+    }
+
+    /**
      * Zmienia stan (Nie/Pokaż/Wymagany), egzekwując trzy klasy sterowania
      * (model §3) przez `FormFieldCatalog::allowedStates()`. Dla pól własnych
      * dozwolone są wszystkie trzy stany bez ograniczeń (własne pola są zawsze

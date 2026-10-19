@@ -1307,7 +1307,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $logActivity($auth, 'event_created', 'Utworzono wydarzenie zewnętrzne', 'event', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
             return JsonResponder::ok($response, $created, 'External event created', 201);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->patch('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $users, $body, $canManageEvent, $isStaffRole, $logActivity, $notifyEventChanged, $calendarSync) {
+        $api->patch('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $users, $body, $canManageEvent, $isStaffRole, $adminRoles, $logActivity, $notifyEventChanged, $calendarSync) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             if (!$canManageEvent($event, $auth)) {
@@ -1323,8 +1323,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             // G-10 (macierz §2, spec 09 pkt 3): handing the Event over is reserved for its Owner, and
             // Admin may force it; the Moderator (a Współzarządzający on someone else's Event) may not.
             // The Owner is the organizer who passed $canManageEvent above.
-            $transferOwnership = static function (string $targetId) use ($events, $users, $event, $args, $response): ?Response {
-                if (in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished'], true)) {
+            $transferOwnership = static function (string $targetId, bool $overrideLock = false) use ($events, $users, $event, $args, $response): ?Response {
+                if (!$overrideLock && in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished'], true)) {
                     return JsonResponder::error($response, 'published_organizer_locked', 'Published events cannot be transferred to another organizer', 409);
                 }
                 $organizer = $users->find($targetId);
@@ -1363,8 +1363,26 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 if ($role === 'moderator') {
                     return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
                 }
-                if (($failure = $transferOwnership((string) $payload['organizerId'])) !== null) {
+                // PP.4 admin (owner decision): Admin may hand over even a published/finished Event
+                // (the organizer-owner stays locked out above); the override is audited.
+                $adminOverride = in_array($role, $adminRoles, true);
+                if (($failure = $transferOwnership((string) $payload['organizerId'], $adminOverride)) !== null) {
                     return $failure;
+                }
+                if ($adminOverride) {
+                    $logActivity(
+                        $auth,
+                        'event_ownership_transferred',
+                        'Przekazano własność wydarzenia innemu organizatorowi',
+                        'event',
+                        (string) $args['id'],
+                        (string) ($event['name'] ?? ''),
+                        [
+                            'fromOrganizerId' => (string) ($event['organizerId'] ?? ''),
+                            'toOrganizerId' => (string) $payload['organizerId'],
+                            'publicationStatus' => (string) ($event['publicationStatus'] ?? ''),
+                        ]
+                    );
                 }
                 unset($payload['organizerId'], $payload['organizerName']);
             } elseif (!$isStaffRole($role)) {

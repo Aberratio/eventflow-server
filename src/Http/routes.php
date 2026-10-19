@@ -71,6 +71,7 @@ use ZmierzymyCzas\Domain\Users\NewAccountInput;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Domain\Users\UserUpdatePolicy;
 use ZmierzymyCzas\Domain\Registrations\RegistrationCreatePolicy;
+use ZmierzymyCzas\Domain\Registrations\RegistrationFormInvalidException;
 use ZmierzymyCzas\Domain\Registrations\RegistrationPatchPolicy;
 use ZmierzymyCzas\Http\DomainErrorCode;
 use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
@@ -2149,9 +2150,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
             // PP.54: the authenticated caller, for the team captain-consent check (never taken from the body).
             $data['actorUserId'] = $callerId;
+            // B-07: validate form answers / identity values in the same transaction (server-set, never from the body).
+            $data['enforceRegistrationForm'] = true;
 
             try {
                 return JsonResponder::ok($response, $registrations->create($data, confirmWhenNothingDue: true), 'Registration created', 201);
+            } catch (RegistrationFormInvalidException $e) {
+                return JsonResponder::error($response, 'registration_form_invalid', 'Formularz zapisu zawiera błędy. Popraw zaznaczone pola.', 422, ['fields' => $e->errors()]);
             } catch (RuntimeException $e) {
                 // PP.54: same 403 for a missing, wrong or foreign token — no oracle.
                 if ($e->getMessage() === 'registration_team_invite_required') {

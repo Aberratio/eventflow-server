@@ -231,7 +231,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $admin = new AdminRepository($pdo);
     $backgrounds = new EventBackgroundRepository($pdo);
     $insurance = new InsuranceRepository($pdo);
-    $orders = new OrderRepository($pdo, $shop);
+    $orders = new OrderRepository($pdo, $shop, $onlinePaymentGatewayConfigured);
     $certificates = new CertificateRepository($pdo);
     $care = new CareRepository($pdo);
     // E8.1: scalanie profili Zawodnika — orkiestruje repozytoria powyżej,
@@ -1320,26 +1320,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             // generic edit can never bypass moderation or the state machine by smuggling
             // these in the body (E1.1).
             unset($payload['status'], $payload['publicationStatus'], $payload['isTest']);
-            if ($role === 'organizer') {
-                unset($payload['organizerId'], $payload['organizerName'], $payload['featured']);
-                if ((string) ($event['publicationStatus'] ?? '') === 'submitted') {
-                    // Editing a submission-in-review invalidates that pending review — the
-                    // organizer has to resubmit the edited version. Published events are
-                    // exempt (E1.1: moderation is a one-time gate, not continuous control).
-                    $payload['publicationStatus'] = 'draft';
-                    $payload['submittedAt'] = null;
-                    $payload['approvedAt'] = null;
-                    $payload['approvedBy'] = null;
-                }
-            } elseif (array_key_exists('organizerId', $payload) && ($payload['organizerId'] ?? '') !== ($event['organizerId'] ?? '')) {
-                // PP.4: ownership transfer is Owner/Admin only (macierz §2 owner-only list).
-                if ($role === 'moderator') {
-                    return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
-                }
+            // G-10 (macierz §2, spec 09 pkt 3): handing the Event over is reserved for its Owner, and
+            // Admin may force it; the Moderator (a Współzarządzający on someone else's Event) may not.
+            // The Owner is the organizer who passed $canManageEvent above.
+            $transferOwnership = static function (string $targetId) use ($events, $users, $event, $args, $response): ?Response {
                 if (in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished'], true)) {
                     return JsonResponder::error($response, 'published_organizer_locked', 'Published events cannot be transferred to another organizer', 409);
                 }
-                $organizer = $users->find((string) $payload['organizerId']);
+                $organizer = $users->find($targetId);
                 if (!$organizer || $organizer['role'] !== 'organizer' || ($organizer['status'] ?? 'active') !== 'active') {
                     return JsonResponder::error($response, 'invalid_organizer', 'Active organizer is required', 422);
                 }
@@ -1350,6 +1338,33 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                         return JsonResponder::error($response, 'event_limit_exceeded', 'Organizer has no available event slots', 409);
                     }
                     throw $e;
+                }
+
+                return null;
+            };
+            $transferRequested = array_key_exists('organizerId', $payload) && (string) ($payload['organizerId'] ?? '') !== (string) ($event['organizerId'] ?? '');
+            if ($role === 'organizer') {
+                $ownerTarget = $transferRequested ? (string) $payload['organizerId'] : null;
+                unset($payload['organizerId'], $payload['organizerName'], $payload['featured']);
+                if ($ownerTarget !== null && ($failure = $transferOwnership($ownerTarget)) !== null) {
+                    return $failure;
+                }
+                if ((string) ($event['publicationStatus'] ?? '') === 'submitted') {
+                    // Editing a submission-in-review invalidates that pending review — the
+                    // organizer has to resubmit the edited version. Published events are
+                    // exempt (E1.1: moderation is a one-time gate, not continuous control).
+                    $payload['publicationStatus'] = 'draft';
+                    $payload['submittedAt'] = null;
+                    $payload['approvedAt'] = null;
+                    $payload['approvedBy'] = null;
+                }
+            } elseif ($transferRequested) {
+                // PP.4: ownership transfer is Owner/Admin only (macierz §2 owner-only list).
+                if ($role === 'moderator') {
+                    return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+                }
+                if (($failure = $transferOwnership((string) $payload['organizerId'])) !== null) {
+                    return $failure;
                 }
                 unset($payload['organizerId'], $payload['organizerName']);
             } elseif (!$isStaffRole($role)) {

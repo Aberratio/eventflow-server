@@ -43,6 +43,7 @@ use ZmierzymyCzas\Domain\Payments\Tpay\TpayGateway;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotification;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotificationVerifier;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayOAuthClient;
+use ZmierzymyCzas\Domain\Registrations\RegistrationOpenRules;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Registrations\StartListExportFormatter;
 use ZmierzymyCzas\Domain\Results\ResultImportRepository;
@@ -2065,7 +2066,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $registrations->byUser((string) $args['userId']));
         })
             ->add(new AuthMiddleware($jwt));
-        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $competitors, $care, $users, $body, $events, $canViewEvent) {
+        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $competitors, $care, $users, $body, $events, $canViewEvent, $canManageEvent) {
             $auth = (array) $request->getAttribute('auth');
             $callerId = (string) ($auth['sub'] ?? '');
             $policy = RegistrationCreatePolicy::filter($body($request));
@@ -2120,6 +2121,16 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'not_found', 'Nie znaleziono wydarzenia.', 404);
             }
 
+            // B-01 (spec 08 axis 4): is registration open? Enforced here for every client (form,
+            // embed and joinTeam all post to this route). Staff of the Event skip the time rules;
+            // the import / seed paths call the repository directly and are not gated.
+            // G-08: a Draft in test mode takes the whole request as a dry run.
+            $openness = RegistrationOpenRules::evaluate($event, new \DateTimeImmutable(), $canManageEvent($event, $auth));
+            if ($openness['message'] !== null) {
+                return JsonResponder::error($response, 'registration_closed', $openness['message'], 409);
+            }
+            $isTestRun = $openness['verdict'] === RegistrationOpenRules::TEST;
+
             // PP.52 (3): identity is derived, never taken from the body.
             $isOwnProfile = (string) ($competitor['userId'] ?? '') === $callerId;
             $data['competitorId'] = (string) $competitor['id'];
@@ -2151,7 +2162,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $data['actorUserId'] = $callerId;
 
             try {
-                return JsonResponder::ok($response, $registrations->create($data, confirmWhenNothingDue: true), 'Registration created', 201);
+                return JsonResponder::ok($response, $registrations->create($data, confirmWhenNothingDue: true, dryRun: $isTestRun), 'Registration created', 201);
             } catch (RuntimeException $e) {
                 // PP.54: same 403 for a missing, wrong or foreign token — no oracle.
                 if ($e->getMessage() === 'registration_team_invite_required') {

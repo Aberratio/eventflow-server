@@ -1699,7 +1699,7 @@ SQL;
      *
      * @param array<string, mixed> $data
      */
-    public function create(array $data, bool $confirmWhenNothingDue = false): array
+    public function create(array $data, bool $confirmWhenNothingDue = false, bool $dryRun = false): array
     {
         // E1.4: free up any slots an overdue Zapis of THIS Dystans is still holding before
         // this new one checks capacity/tier thresholds below — this is exactly the
@@ -1795,9 +1795,19 @@ SQL;
                     'insuranceAmount' => $computed['insuranceAmount'],
                 ]);
             }
+            if ($dryRun) {
+                // G-08 (spec 08 axis 3): a test-mode Zapis is never real. Everything above ran
+                // (validation, pricing, capacity), so the organizer sees the true outcome; the
+                // rollback leaves no Zapis, no counter bump, no discount use, no start-list row.
+                $preview = $this->find($id);
+                $this->pdo->rollBack();
+                return [...($preview ?? []), 'isTest' => true];
+            }
             $this->pdo->commit();
         } catch (\Throwable $e) {
-            $this->pdo->rollBack();
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
             throw $e;
         }
 

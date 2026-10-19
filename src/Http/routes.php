@@ -4350,6 +4350,62 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $mailTemplates->resolve((string) $args['mailType'], (string) $args['eventId']));
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
+        // B-03 (spec 17 §5, umowa §4.4.12/§5.19): template preview — renders a DRAFT (subject/bodyHtml from
+        // the body, each optional: omitted = the saved effective template) with the same MailRenderer the
+        // send path uses, over example variables of the mail type. Nothing is saved.
+        $api->post('/admin/mail-templates/{mailType}/preview', function (Request $request, Response $response, array $args) use ($mailTemplates, $body) {
+            $payload = $body($request);
+            try {
+                $preview = $mailTemplates->preview(
+                    (string) $args['mailType'],
+                    null,
+                    isset($payload['subject']) && is_string($payload['subject']) ? $payload['subject'] : null,
+                    isset($payload['bodyHtml']) && is_string($payload['bodyHtml']) ? $payload['bodyHtml'] : null
+                );
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, str_starts_with($e->getMessage(), 'unknown_mail_type') ? 'not_found' : 'validation_error', $e->getMessage(), str_starts_with($e->getMessage(), 'unknown_mail_type') ? 404 : 422);
+            }
+            return JsonResponder::ok($response, $preview);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->post('/events/{eventId}/mail-templates/{mailType}/preview', function (Request $request, Response $response, array $args) use ($events, $mailTemplates, $canManageEvent, $body) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $payload = $body($request);
+            try {
+                $preview = $mailTemplates->preview(
+                    (string) $args['mailType'],
+                    (string) $args['eventId'],
+                    isset($payload['subject']) && is_string($payload['subject']) ? $payload['subject'] : null,
+                    isset($payload['bodyHtml']) && is_string($payload['bodyHtml']) ? $payload['bodyHtml'] : null,
+                    ['eventName' => (string) ($event['name'] ?? '')]
+                );
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, str_starts_with($e->getMessage(), 'unknown_mail_type') ? 'not_found' : 'validation_error', $e->getMessage(), str_starts_with($e->getMessage(), 'unknown_mail_type') ? 404 : 422);
+            }
+            return JsonResponder::ok($response, $preview);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        // B-03: mail log — read-only, paginated view of the Central Mailer outbox (recipient masked).
+        // Global = admins (all rows, `lastError` included, `search` by recipient); per event = event managers
+        // (rows with contextId = the event; no lastError, no search).
+        $api->get('/admin/mail-log', function (Request $request, Response $response) use ($centralMailerOutbox, $query) {
+            $page = $centralMailerOutbox->logPage($query($request), true);
+            return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->get('/events/{eventId}/mail-log', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $centralMailerOutbox, $query) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $filters = $query($request);
+            unset($filters['search']);
+            $filters['contextId'] = (string) $args['eventId'];
+            $page = $centralMailerOutbox->logPage($filters, false);
+            return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
         // E1.10 §8 ("Przepustowość: komunikat, nie cisza") — mass-send progress
         // for mail #5, the one genuinely bulk mail in this catalog (tickets to a
         // full paid start list). Defaults to payment_confirmed but accepts any

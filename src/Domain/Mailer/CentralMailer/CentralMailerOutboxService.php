@@ -288,6 +288,17 @@ final class CentralMailerOutboxService
     }
 
     /**
+     * B-03 mail log (read-only): see CentralMailerOutboxRepository::listForLog().
+     *
+     * @param array<string, mixed> $filters
+     * @return array{data: array<int, array<string, mixed>>, total: int, page: int, pageSize: int}
+     */
+    public function logPage(array $filters, bool $includeError): array
+    {
+        return $this->outbox->listForLog($filters, $includeError);
+    }
+
+    /**
      * Polls Central Mailer for every outbox row still awaiting a terminal
      * status and writes back whatever it reports (§6.4 point 3 — Central Mailer
      * has no webhooks, only polling). PP.18: the scheduler's

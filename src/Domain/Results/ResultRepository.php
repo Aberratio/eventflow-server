@@ -225,8 +225,8 @@ final class ResultRepository extends Repository
         'timeInSeconds' => [InputRules::NUMBER, 'Czas w sekundach'],
         'netTime' => [InputRules::TEXT_NULLABLE, 'Czas netto'],
         'netTimeInSeconds' => [InputRules::NUMBER_NULLABLE, 'Czas netto w sekundach'],
-        'position' => [InputRules::INT, 'Miejsce'],
-        'categoryPosition' => [InputRules::INT, 'Miejsce w kategorii'],
+        'position' => [InputRules::INT_NULLABLE, 'Miejsce'],
+        'categoryPosition' => [InputRules::INT_NULLABLE, 'Miejsce w kategorii'],
         'gender' => [InputRules::ENUM_NULLABLE, 'Płeć', ['M', 'K']],
         'birthYear' => [InputRules::INT_NULLABLE, 'Rok urodzenia'],
         'splits' => [InputRules::OBJECTS_NULLABLE, 'Międzyczasy'],
@@ -262,6 +262,12 @@ final class ResultRepository extends Repository
     public function create(array $data): array
     {
         InputRules::check($data, self::INPUT_RULES, true);
+        // Places are NOT NULL columns; null means "not given" (renumbering computes them).
+        foreach (['position', 'categoryPosition'] as $placeField) {
+            if (array_key_exists($placeField, $data) && $data[$placeField] === null) {
+                unset($data[$placeField]);
+            }
+        }
         $this->assertSplits($data);
         $status = (string) ($data['status'] ?? 'finished');
         if ($status === 'finished') {
@@ -404,6 +410,21 @@ final class ResultRepository extends Repository
         }
 
         InputRules::check($data, self::INPUT_RULES, false);
+        // G-03: a place is a positive integer (manual override, flagged so renumbering keeps it) or null
+        // (releases the override - the computed ranking takes over again).
+        $manualPlaces = [];
+        foreach (['position' => ['position', 'Miejsce'], 'categoryPosition' => ['category_position', 'Miejsce w kategorii']] as $field => [$column, $label]) {
+            if (!array_key_exists($field, $data)) {
+                continue;
+            }
+            if ($data[$field] !== null) {
+                if ((int) $data[$field] < 1) {
+                    throw InputRules::invalid($field, $label);
+                }
+            }
+            $manualPlaces[$column] = $data[$field] === null ? null : (int) $data[$field];
+            unset($data[$field]);
+        }
         $this->assertSplits($data);
         $mapped = $this->map($id, $data, false);
         unset($mapped['id']);
@@ -411,6 +432,15 @@ final class ResultRepository extends Repository
         if (in_array($status, self::NON_CLASSIFIED_STATUSES, true)) {
             $mapped['position'] = 0;
             $mapped['category_position'] = 0;
+            $mapped['position_manual'] = 0;
+            $mapped['category_position_manual'] = 0;
+        } else {
+            foreach ($manualPlaces as $column => $place) {
+                $mapped[$column . '_manual'] = $place === null ? 0 : 1;
+                if ($place !== null) {
+                    $mapped[$column] = $place;
+                }
+            }
         }
         if ($mapped !== []) {
             $this->updateById('results', $id, $mapped);
@@ -452,7 +482,7 @@ final class ResultRepository extends Repository
     private function renumberEventDistance(string $eventId, string $distanceId): void
     {
         $stmt = $this->pdo->prepare(
-            'SELECT id, category FROM results
+            'SELECT id, category, position_manual AS positionManual, category_position_manual AS categoryManual FROM results
              WHERE event_id = :eventId AND distance_id = :distanceId AND status = "finished"
              ORDER BY time_in_seconds ASC'
         );
@@ -463,10 +493,19 @@ final class ResultRepository extends Repository
         foreach ($rows as $index => $row) {
             $category = (string) $row['category'];
             $categoryPositions[$category] = ($categoryPositions[$category] ?? 0) + 1;
-            $this->updateById('results', (string) $row['id'], [
-                'position' => $index + 1,
-                'category_position' => $categoryPositions[$category],
-            ]);
+            // G-03: a manually corrected place is left as the organizer set it. Ranks of the
+            // others are still counted over all finishers, so a manual place can coincide with
+            // an automatic one - the organizer owns that call.
+            $places = [];
+            if (!(int) $row['positionManual']) {
+                $places['position'] = $index + 1;
+            }
+            if (!(int) $row['categoryManual']) {
+                $places['category_position'] = $categoryPositions[$category];
+            }
+            if ($places !== []) {
+                $this->updateById('results', (string) $row['id'], $places);
+            }
         }
     }
 

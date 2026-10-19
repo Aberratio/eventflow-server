@@ -26,21 +26,31 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
  * Konto email of their own) — nothing to send to.
  *
  * Reply-to (17 §4): `from` is always Central Mailer's configured platform
- * address; `reply-to` should be the organizer's contact for event-scoped
- * mails (4, 5, 7, 8, 9, 10) and platform support otherwise (1-3, 12). Left
- * entirely unimplemented here on purpose — CentralMailerClientInterface::enqueue()
- * has no `from`/`replyTo` field at all, and kontrakt-central-mailer.md's own
- * backlog list (04 §"Braki") names per-request from/replyTo as a confirmed gap
- * in Central Mailer itself, not something this platform can render around via
- * HTML headers. Revisit once Central Mailer's API grows that field.
+ * address; `reply-to` is the organizer's contact e-mail (EventReplyToResolver) for
+ * the event-scoped mails (4, 5, 7, 8, 9, 10 - REPLY_TO_ORGANIZER_MAILS) and absent
+ * otherwise (authentication and systemic mails), so Central Mailer applies its global
+ * reply-to. It is written to the outbox row together with the rest of the message,
+ * so every retry carries the same replyTo. Without a resolver or a usable organizer
+ * address the mail simply has no replyTo.
  */
 final class CriticalMailer
 {
+    /** 17 §4: event-scoped mails whose Reply-To is the organizer's contact. */
+    private const REPLY_TO_ORGANIZER_MAILS = [
+        MailCatalog::REGISTRATION_CREATED,
+        MailCatalog::PAYMENT_CONFIRMED,
+        MailCatalog::UNPAID_REMINDER,
+        MailCatalog::EVENT_CHANGED,
+        MailCatalog::MODERATION_DECISION,
+        MailCatalog::RESULTS_PUBLISHED,
+    ];
+
     public function __construct(
         private readonly CentralMailerConfig $config,
         private readonly CentralMailerOutboxService $outbox,
         private readonly MailTemplateRepository $templates,
         private readonly MailRenderer $renderer = new MailRenderer(),
+        private readonly ?EventReplyToResolver $replyToResolver = null,
     ) {
     }
 
@@ -286,6 +296,12 @@ final class CriticalMailer
             'metadata' => ['mailType' => $mailType, 'templateVersion' => $template['version'], 'templateSource' => $template['source']],
             'attachments' => $attachments,
         ];
+        if ($eventId !== null && $eventId !== '' && in_array($mailType, self::REPLY_TO_ORGANIZER_MAILS, true)) {
+            $replyTo = $this->replyToResolver?->forEvent($eventId);
+            if ($replyTo !== null) {
+                $message['replyTo'] = $replyTo;
+            }
+        }
 
         return $deferred ? $this->outbox->enqueueDeferred($message) : $this->outbox->enqueue($message);
     }

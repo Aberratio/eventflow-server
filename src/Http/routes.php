@@ -57,6 +57,7 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxRepository;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
+use ZmierzymyCzas\Domain\Mailer\CriticalMails\EventReplyToResolver;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
 use ZmierzymyCzas\Domain\Mailer\Http\CurlHttpClient as MailerCurlHttpClient;
 use ZmierzymyCzas\Domain\Mailer\ResultsPublication\ResultsPublicationMailRequests;
@@ -121,7 +122,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $centralMailerClient = new CentralMailerClient(new MailerCurlHttpClient(), $centralMailerConfig);
     $centralMailerOutbox = new CentralMailerOutboxService($centralMailerClient, new CentralMailerOutboxRepository($pdo), $logger);
     $mailTemplates = new MailTemplateRepository($pdo);
-    $mailer = new CriticalMailer($centralMailerConfig, $centralMailerOutbox, $mailTemplates);
+    $mailer = new CriticalMailer($centralMailerConfig, $centralMailerOutbox, $mailTemplates, replyToResolver: new EventReplyToResolver($pdo));
     // E3.4: outbound "push zmian krytycznych" to Biuro Zawodów — same
     // "isConfigured() gates whether sending is even attempted" stance as
     // Tpay/PayNow/Central Mailer above. Unlike those, there is no separate API

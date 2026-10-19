@@ -96,6 +96,25 @@ final class MailOutboxRetryTest extends TestCase
         self::assertNull($stored['lastError']);
     }
 
+    public function testReplyToIsStoredInTheOutboxRowAndSurvivesRetries(): void
+    {
+        $message = $this->message('rt', ['replyTo' => ['email' => 'organizer@club.test', 'name' => 'Klub Biegowy']]);
+        $this->http->queueResponse(new HttpResponse(500, 'boom'));
+        $row = $this->service->enqueue($message);
+        self::assertSame(['email' => 'organizer@club.test', 'name' => 'Klub Biegowy'], $row['replyTo']);
+
+        $this->http->queueResponse(new HttpResponse(201, (string) json_encode(['id' => 'cm-rt', 'status' => 'pending'])));
+        $this->service->retryDue((new \DateTimeImmutable())->modify('+3 minutes'), 50);
+
+        self::assertCount(2, $this->http->calls);
+        foreach ($this->http->calls as $call) {
+            self::assertSame(
+                ['email' => 'organizer@club.test', 'name' => 'Klub Biegowy'],
+                json_decode((string) $call['body'], true)['replyTo']
+            );
+        }
+    }
+
     public function testBackoffScheduleAndAbandonAfterMaxAttemptsWithAlert(): void
     {
         $this->http->queueResponse(new HttpResponse(500, 'boom for runner@example.test'));

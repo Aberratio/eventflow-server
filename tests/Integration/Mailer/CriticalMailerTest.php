@@ -13,6 +13,8 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxRepository;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
+use ZmierzymyCzasDomainMailerCriticalMailsventReplyToResolver;
+use ZmierzymyCzas\Domain\Mailer\CriticalMails\EventReplyToResolver;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailCatalog;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
 use ZmierzymyCzas\Domain\Mailer\Http\HttpResponse;
@@ -55,6 +57,8 @@ final class CriticalMailerTest extends TestCase
         if (!isset($this->pdo)) {
             return;
         }
+        $this->pdo->prepare('DELETE FROM events WHERE id LIKE :prefix')->execute(['prefix' => $this->prefix . '%']);
+        $this->pdo->prepare('DELETE FROM users WHERE id LIKE :prefix')->execute(['prefix' => $this->prefix . '%']);
         $this->pdo->prepare('DELETE FROM central_mailer_outbox WHERE source_entity_id LIKE :prefix')
             ->execute(['prefix' => $this->prefix . '%']);
     }
@@ -65,7 +69,114 @@ final class CriticalMailerTest extends TestCase
         $client = new CentralMailerClient($this->http, $config);
         $outbox = new CentralMailerOutboxService($client, $this->outboxRepo);
 
-        return new CriticalMailer($config, $outbox, new MailTemplateRepository($this->pdo));
+        return new CriticalMailer($config, $outbox, new MailTemplateRepository($this->pdo), replyToResolver: new EventReplyToResolver($this->pdo));
+    }
+
+    /** @param array<string, mixed>|null $contact */
+    private function insertEvent(string $suffix, ?array $contact, ?string $organizerUserId = null): string
+    {
+        $id = $this->prefix . '-evt-' . $suffix;
+        $this->pdo->prepare(
+            'INSERT INTO events
+                (id, name, slug, discipline, date, location, city, description, image_url,
+                 organizer_id, organizer_name, organizer_contact, registration_deadline)
+             VALUES
+                (:id, :name, :slug, :discipline, :date, :location, :city, :description, :imageUrl,
+                 :organizerId, :organizerName, :contact, :registrationDeadline)'
+        )->execute([
+            'id' => $id,
+            'name' => 'Bieg testowy',
+            'slug' => $id,
+            'discipline' => 'running',
+            'date' => date('Y-m-d', strtotime('+6 months')),
+            'location' => 'Stadion',
+            'city' => 'Warszawa',
+            'description' => 'Opis',
+            'imageUrl' => 'https://example.test/e.jpg',
+            'organizerId' => $organizerUserId ?? ($this->prefix . '-no-such-user'),
+            'organizerName' => 'Klub Biegowy',
+            'contact' => $contact === null ? null : json_encode($contact),
+            'registrationDeadline' => '2026-06-01',
+        ]);
+
+        return $id;
+    }
+
+    private function insertUser(string $suffix, string $email): string
+    {
+        $id = $this->prefix . '-usr-' . $suffix;
+        $this->pdo->prepare('INSERT INTO users (id, name, email, password_hash) VALUES (:id, :name, :email, :hash)')
+            ->execute(['id' => $id, 'name' => 'Organizator', 'email' => $email, 'hash' => 'x']);
+
+        return $id;
+    }
+
+    /** @return array<string, mixed> request body of the last POST to Central Mailer */
+    private function lastRequestBody(): array
+    {
+        return json_decode((string) $this->http->calls[array_key_last($this->http->calls)]['body'], true);
+    }
+
+    public function testEventMailsCarryTheOrganizerContactEmailAsReplyTo(): void
+    {
+        $eventId = $this->insertEvent('contact', ['email' => 'kontakt@klub.test', 'phone' => '+48 500 000 000']);
+        $mailer = $this->mailer();
+
+        $cases = [
+            'registration_created' => fn () => $mailer->sendRegistrationCreated($this->prefix . '-r1', $eventId, 'user@example.test', 'Bieg', '10km', '50.00'),
+            'payment_confirmed' => fn () => $mailer->sendPaymentConfirmed($this->prefix . '-r2', $eventId, 'user@example.test', 'Bieg', '10km', 'https://app/my'),
+            'unpaid_reminder' => fn () => $mailer->sendUnpaidReminder($this->prefix . '-r3', $eventId, 'user@example.test', 'Bieg', '50.00', 'https://app/pay', '2026-01-01', 'w1'),
+            'event_changed' => fn () => $mailer->sendEventChanged($eventId, $this->prefix . '-rcp', 'user@example.test', 'Bieg', 'zmiana', 'n/a'),
+            'moderation_decision' => fn () => $mailer->sendModerationDecision($eventId, 'org@example.test', 'Bieg', 'approved'),
+            'results_published' => fn () => $mailer->sendResultsPublished($eventId, $this->prefix . '-hash', 'user@example.test', 'Bieg', 'https://app/results'),
+        ];
+        foreach ($cases as $type => $send) {
+            $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-' . $type, 'status' => 'pending'])));
+            $row = $send();
+            self::assertSame(['email' => 'kontakt@klub.test', 'name' => 'Klub Biegowy'], $row['replyTo'], $type);
+        }
+
+        // Everything but the deferred results mail was POSTed with replyTo in the body.
+        self::assertCount(5, $this->http->calls);
+        foreach ($this->http->calls as $call) {
+            self::assertSame(['email' => 'kontakt@klub.test', 'name' => 'Klub Biegowy'], json_decode((string) $call['body'], true)['replyTo']);
+        }
+    }
+
+    public function testReplyToFallsBackToOrganizerAccountEmailWhenContactHasNoEmail(): void
+    {
+        $userId = $this->insertUser('org', 'konto-organizatora@klub.test');
+        $eventId = $this->insertEvent('account', ['phone' => '+48 500 000 000'], $userId);
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-acc', 'status' => 'pending'])));
+
+        $this->mailer()->sendRegistrationCreated($this->prefix . '-r4', $eventId, 'user@example.test', 'Bieg', '10km', '50.00');
+
+        self::assertSame(['email' => 'konto-organizatora@klub.test', 'name' => 'Klub Biegowy'], $this->lastRequestBody()['replyTo']);
+    }
+
+    public function testNoReplyToWhenOrganizerEmailIsUnknownOrInvalid(): void
+    {
+        $eventId = $this->insertEvent('none', ['email' => 'not-an-email']);
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-none', 'status' => 'pending'])));
+
+        $row = $this->mailer()->sendRegistrationCreated($this->prefix . '-r5', $eventId, 'user@example.test', 'Bieg', '10km', '50.00');
+
+        self::assertNull($row['replyTo']);
+        self::assertArrayNotHasKey('replyTo', $this->lastRequestBody());
+    }
+
+    public function testAuthenticationAndSystemMailsHaveNoReplyTo(): void
+    {
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-a', 'status' => 'pending'])));
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-b', 'status' => 'pending'])));
+        $mailer = $this->mailer();
+
+        $mailer->sendPasswordReset($this->prefix . '-t1', 'user@example.test', 'https://app/reset', 60);
+        $mailer->sendShopOrderStatus($this->prefix . '-t2', 'user@example.test', 'ZC-1', 'shipped');
+
+        foreach ($this->http->calls as $call) {
+            self::assertArrayNotHasKey('replyTo', json_decode((string) $call['body'], true));
+        }
     }
 
     public function testSendReturnsNullSilentlyWhenNotConfigured(): void

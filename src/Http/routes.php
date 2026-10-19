@@ -2181,7 +2181,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $registrations->byUser((string) $args['userId']));
         })
             ->add(new AuthMiddleware($jwt));
-        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $competitors, $care, $users, $body, $events, $canViewEvent, $canManageEvent) {
+        // B-02: the request-to-payload preparation shared by POST /registrations and POST /registrations/quote
+        // (authorisation, Zawodnik identity, event visibility, opening rules). Returns a Response when the
+        // request is refused, otherwise the server-completed payload.
+        $prepareRegistrationRequest = function (Request $request, Response $response) use ($competitors, $care, $users, $body, $events, $canViewEvent, $canManageEvent) {
             $auth = (array) $request->getAttribute('auth');
             $callerId = (string) ($auth['sub'] ?? '');
             $policy = RegistrationCreatePolicy::filter($body($request));
@@ -2278,56 +2281,81 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             // B-07: validate form answers / identity values in the same transaction (server-set, never from the body).
             $data['enforceRegistrationForm'] = true;
 
-            try {
-                return JsonResponder::ok($response, $registrations->create($data, confirmWhenNothingDue: true, dryRun: $isTestRun), 'Registration created', 201);
-            } catch (RegistrationFormInvalidException $e) {
+            return ['data' => $data, 'isTestRun' => $isTestRun];
+        };
+        // The domain rejections of create() / quote() as responses; anything unknown is rethrown.
+        $registrationFailureResponse = function (Response $response, RuntimeException $e): Response {
+            if ($e instanceof RegistrationFormInvalidException) {
                 return JsonResponder::error($response, 'registration_form_invalid', 'Formularz zapisu zawiera błędy. Popraw zaznaczone pola.', 422, ['fields' => $e->errors()]);
+            }
+            // PP.54: same 403 for a missing, wrong or foreign token — no oracle.
+            if ($e->getMessage() === 'registration_team_invite_required') {
+                return JsonResponder::error($response, 'registration_team_invite_required', 'Do tej drużyny można dołączyć tylko przez link zaproszenia od kapitana.', 403);
+            }
+            // E1.3: the Dystans is full — a state conflict (someone else took the
+            // last slot), not a validation problem with this request, so 409
+            // rather than the 422s below.
+            if ($e->getMessage() === 'registration_capacity_exceeded') {
+                return JsonResponder::error($response, 'registration_capacity_exceeded', 'This distance has reached its participant limit.', 409);
+            }
+            // E7.1 (issue 23 Answer §1): "team full" is a distinct,
+            // legitimate rejection reason from the Dystans' own capacity
+            // above — a Drużyna can be full while the Dystans still has
+            // free slots, and vice versa.
+            if ($e->getMessage() === 'registration_team_full') {
+                return JsonResponder::error($response, 'registration_team_full', 'This team already has its maximum number of members.', 409);
+            }
+            if ($e->getMessage() === 'registration_team_not_found') {
+                return JsonResponder::error($response, 'registration_team_not_found', 'Selected team was not found.', 404);
+            }
+            $teamValidationErrors = [
+                'registration_team_distance_mismatch' => 'Selected team does not belong to this event/distance.',
+                'registration_team_requires_relay_distance' => 'Teams can only be created for a relay distance.',
+                'registration_team_name_required' => 'Team name is required to create a team.',
+                // E7.5 (issue 23 Answer §7): the captain's optional Kategoria
+                // specjalna, when given, must match one of the Dystans's
+                // configured special categories.
+                'team_special_category_invalid' => 'Selected special category is not configured for this distance.',
+            ];
+            if (array_key_exists($e->getMessage(), $teamValidationErrors)) {
+                return JsonResponder::error($response, $e->getMessage(), $teamValidationErrors[$e->getMessage()], 422);
+            }
+            $discountErrors = [
+                'discount_code_invalid' => 'Discount code is invalid.',
+                'discount_code_inactive' => 'Discount code is inactive.',
+                'discount_code_not_started' => 'Discount code is not active yet.',
+                'discount_code_expired' => 'Discount code has expired.',
+                'discount_code_used_up' => 'Discount code usage limit has been reached.',
+                'discount_code_distance_mismatch' => 'Discount code does not apply to the selected distance.',
+                'registration_distance_invalid' => 'Selected distance is invalid.',
+            ];
+            if (array_key_exists($e->getMessage(), $discountErrors)) {
+                return JsonResponder::error($response, $e->getMessage(), $discountErrors[$e->getMessage()], 422);
+            }
+            throw $e;
+        };
+        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $prepareRegistrationRequest, $registrationFailureResponse) {
+            $prepared = $prepareRegistrationRequest($request, $response);
+            if ($prepared instanceof Response) {
+                return $prepared;
+            }
+            try {
+                return JsonResponder::ok($response, $registrations->create($prepared['data'], confirmWhenNothingDue: true, dryRun: $prepared['isTestRun']), 'Registration created', 201);
             } catch (RuntimeException $e) {
-                // PP.54: same 403 for a missing, wrong or foreign token — no oracle.
-                if ($e->getMessage() === 'registration_team_invite_required') {
-                    return JsonResponder::error($response, 'registration_team_invite_required', 'Do tej drużyny można dołączyć tylko przez link zaproszenia od kapitana.', 403);
-                }
-                // E1.3: the Dystans is full — a state conflict (someone else took the
-                // last slot), not a validation problem with this request, so 409
-                // rather than the 422s below.
-                if ($e->getMessage() === 'registration_capacity_exceeded') {
-                    return JsonResponder::error($response, 'registration_capacity_exceeded', 'This distance has reached its participant limit.', 409);
-                }
-                // E7.1 (issue 23 Answer §1): "team full" is a distinct,
-                // legitimate rejection reason from the Dystans' own capacity
-                // above — a Drużyna can be full while the Dystans still has
-                // free slots, and vice versa.
-                if ($e->getMessage() === 'registration_team_full') {
-                    return JsonResponder::error($response, 'registration_team_full', 'This team already has its maximum number of members.', 409);
-                }
-                if ($e->getMessage() === 'registration_team_not_found') {
-                    return JsonResponder::error($response, 'registration_team_not_found', 'Selected team was not found.', 404);
-                }
-                $teamValidationErrors = [
-                    'registration_team_distance_mismatch' => 'Selected team does not belong to this event/distance.',
-                    'registration_team_requires_relay_distance' => 'Teams can only be created for a relay distance.',
-                    'registration_team_name_required' => 'Team name is required to create a team.',
-                    // E7.5 (issue 23 Answer §7): the captain's optional Kategoria
-                    // specjalna, when given, must match one of the Dystans's
-                    // configured special categories.
-                    'team_special_category_invalid' => 'Selected special category is not configured for this distance.',
-                ];
-                if (array_key_exists($e->getMessage(), $teamValidationErrors)) {
-                    return JsonResponder::error($response, $e->getMessage(), $teamValidationErrors[$e->getMessage()], 422);
-                }
-                $discountErrors = [
-                    'discount_code_invalid' => 'Discount code is invalid.',
-                    'discount_code_inactive' => 'Discount code is inactive.',
-                    'discount_code_not_started' => 'Discount code is not active yet.',
-                    'discount_code_expired' => 'Discount code has expired.',
-                    'discount_code_used_up' => 'Discount code usage limit has been reached.',
-                    'discount_code_distance_mismatch' => 'Discount code does not apply to the selected distance.',
-                    'registration_distance_invalid' => 'Selected distance is invalid.',
-                ];
-                if (array_key_exists($e->getMessage(), $discountErrors)) {
-                    return JsonResponder::error($response, $e->getMessage(), $discountErrors[$e->getMessage()], 422);
-                }
-                throw $e;
+                return $registrationFailureResponse($response, $e);
+            }
+        })->add(new AuthMiddleware($jwt));
+        // B-02: price a Zapis before making it. Same payload, same checks and same pricing code as
+        // POST /registrations, but nothing is written (no Zapis, answers, counter bump, discount use, team).
+        $api->post('/registrations/quote', function (Request $request, Response $response) use ($registrations, $prepareRegistrationRequest, $registrationFailureResponse) {
+            $prepared = $prepareRegistrationRequest($request, $response);
+            if ($prepared instanceof Response) {
+                return $prepared;
+            }
+            try {
+                return JsonResponder::ok($response, $registrations->quote($prepared['data']));
+            } catch (RuntimeException $e) {
+                return $registrationFailureResponse($response, $e);
             }
         })->add(new AuthMiddleware($jwt));
         // PP.2: previously any logged-in caller could PATCH any Zapis (IDOR + payment

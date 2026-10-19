@@ -97,7 +97,13 @@ final class OrderRepository extends Repository
 
     private ShopRepository $shop;
 
-    public function __construct(\PDO $pdo, ?ShopRepository $shop = null)
+    /**
+     * @param bool $onlineGatewayConfigured G-06b: whether Tpay or PayNow is configured; when false,
+     *        create() refuses card/BLIK exactly as GET /shop/payment-methods hides them. Defaults to
+     *        true so internal callers that build their own repository (the challenge-reward order)
+     *        keep the whole catalog; the HTTP wiring in routes.php passes the real value.
+     */
+    public function __construct(\PDO $pdo, ?ShopRepository $shop = null, private readonly bool $onlineGatewayConfigured = true)
     {
         parent::__construct($pdo);
         $this->shop = $shop ?? new ShopRepository($pdo);
@@ -238,7 +244,13 @@ final class OrderRepository extends Repository
 
         $deliveryMethod = null;
         $deliveryPrice = 0.0;
-        $paymentMethod = $this->resolveMethod((array) ($data['paymentMethod'] ?? []), self::PAYMENT_METHODS, 'order_invalid_payment_method');
+        // G-06b: only a method the shop really offers (availablePaymentMethods()), not the whole catalog.
+        $offered = array_column($this->availablePaymentMethods($this->onlineGatewayConfigured), 'id');
+        $paymentMethod = $this->resolveMethod(
+            (array) ($data['paymentMethod'] ?? []),
+            array_intersect_key(self::PAYMENT_METHODS, array_flip($offered)),
+            'order_invalid_payment_method'
+        );
         $paymentSurcharge = (float) ($paymentMethod['surcharge'] ?? 0);
 
         if (!$isDigitalOnlyCart) {

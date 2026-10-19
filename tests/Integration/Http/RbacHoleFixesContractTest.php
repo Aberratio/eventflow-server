@@ -215,6 +215,7 @@ final class RbacHoleFixesContractTest extends HttpTestCase
     public function testOwnerAndAdminMayTransferOwnershipButForeignOrganizerMayNot(): void
     {
         $target = (string) self::$fx->values['foreignOrganizer'];
+        self::$sharedPdo->prepare('UPDATE users SET event_limit = 99 WHERE id = :id')->execute(['id' => $target]);
 
         $mine = $this->newEvent();
         self::$sharedPdo->prepare("UPDATE events SET publication_status = 'draft' WHERE id = :id")->execute(['id' => $mine['id']]);
@@ -227,7 +228,7 @@ final class RbacHoleFixesContractTest extends HttpTestCase
         self::assertSame($target, $this->scalar('SELECT organizer_id FROM events WHERE id = :id', ['id' => $mine['id']]));
 
         $forced = $this->newEvent();
-        self::$sharedPdo->prepare("UPDATE events SET publication_status = 'draft' WHERE id = :id")->execute(['id' => $forced['id']]);
+        self::$sharedPdo->prepare("UPDATE events SET publication_status = 'cancelled' WHERE id = :id")->execute(['id' => $forced['id']]);
         $admin = $this->request('PATCH', '/api/v1/events/' . $forced['id'], ['organizerId' => $target], $this->as('admin'));
         self::assertSame(200, $admin->getStatusCode(), (string) $admin->getBody());
         self::assertSame($target, $this->scalar('SELECT organizer_id FROM events WHERE id = :id', ['id' => $forced['id']]));

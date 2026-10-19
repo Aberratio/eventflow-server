@@ -553,7 +553,7 @@ final class ShopOrderContractTest extends HttpTestCase
             'items' => [
                 ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 1, 'price' => 1],
             ],
-            'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+            'paymentMethod' => ['id' => 'bank', 'name' => 'Przelew bankowy'],
             // deliberately no deliveryMethod, no shippingAddress.
         ];
 
@@ -579,7 +579,7 @@ final class ShopOrderContractTest extends HttpTestCase
             'items' => [
                 ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 3, 'price' => 1],
             ],
-            'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+            'paymentMethod' => ['id' => 'bank', 'name' => 'Przelew bankowy'],
         ];
 
         $response = $this->request(
@@ -611,7 +611,7 @@ final class ShopOrderContractTest extends HttpTestCase
             'items' => [
                 ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 1, 'price' => 1],
             ],
-            'paymentMethod' => ['id' => 'card', 'name' => 'Karta platnicza'],
+            'paymentMethod' => ['id' => 'bank', 'name' => 'Przelew bankowy'],
         ];
 
         $response = $this->request(
@@ -641,7 +641,7 @@ final class ShopOrderContractTest extends HttpTestCase
                 'items' => [
                     ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 1, 'price' => 1],
                 ],
-                'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+                'paymentMethod' => ['id' => 'bank', 'name' => 'Przelew bankowy'],
             ],
             $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
         );
@@ -676,7 +676,7 @@ final class ShopOrderContractTest extends HttpTestCase
                 'items' => [
                     ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 2, 'price' => 1],
                 ],
-                'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+                'paymentMethod' => ['id' => 'bank', 'name' => 'Przelew bankowy'],
             ],
             $this->bearer($this->buyer['id'], 'organizer', $this->buyer['email'])
         );
@@ -709,7 +709,7 @@ final class ShopOrderContractTest extends HttpTestCase
                 'items' => [
                     ['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 1, 'price' => 1],
                 ],
-                'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+                'paymentMethod' => ['id' => 'bank', 'name' => 'Przelew bankowy'],
             ],
             $this->bearer($this->buyer['id'], 'admin', $this->buyer['email'])
         );
@@ -806,7 +806,7 @@ final class ShopOrderContractTest extends HttpTestCase
                 ],
             ],
             'deliveryMethod' => ['id' => 'courier', 'name' => 'Kurier', 'price' => 999999],
-            'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+            'paymentMethod' => ['id' => 'bank', 'name' => 'Przelew bankowy'],
             // E5.3: courier requires a shipping address — pre-existing tests
             // in this file that only care about pricing/stock/product
             // validation get a valid one by default so they don't have to

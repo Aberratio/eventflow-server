@@ -246,7 +246,7 @@ final class TeamMemberSwapContractTest extends HttpTestCase
         [$teamId, $memberRegId] = $this->teamWithMember();
         $current = (string) $this->registrationRow($memberRegId)['competitor_id'];
 
-        $same = $this->swap($this->captain, $teamId, $memberRegId, ['competitorId' => $current]);
+        $same = $this->swap($this->organizer, $teamId, $memberRegId, ['competitorId' => $current]);
         self::assertSame(422, $same->getStatusCode());
         self::assertSame('team_swap_same_person', $this->json($same)['error']['code']);
 

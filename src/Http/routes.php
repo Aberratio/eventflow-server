@@ -18,6 +18,8 @@ use ZmierzymyCzas\Domain\Auth\JwtService;
 use ZmierzymyCzas\Domain\Auth\PasswordRule;
 use ZmierzymyCzas\Domain\Auth\SessionRevocationRepository;
 use ZmierzymyCzas\Domain\Bz\BzWebhookClient;
+use ZmierzymyCzas\Domain\Calendar\GoogleCalendarSettingsRepository;
+use ZmierzymyCzas\Domain\Calendar\GoogleCalendarSyncService;
 use ZmierzymyCzas\Domain\Bz\BzWebhookConfig;
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxRepository;
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxService;
@@ -86,6 +88,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     // PP.7: every AuthMiddleware/optionalAuth below captures this guarded copy.
     $jwt = $jwt->withSessionGuard(new DbSessionGuard($pdo));
     $events = new EventRepository($pdo);
+    // R-17: Google Calendar (§5.9). Inactive (nothing queued or sent) until an admin enables it AND the key file exists.
+    $calendarSettings = new GoogleCalendarSettingsRepository($pdo);
+    $calendarSync = GoogleCalendarSyncService::fromEnv($pdo, $logger);
     // E3.1/E3.3: static per-application incoming API key config (Central Mailer
     // pattern) — built once here, same "isConfigured/fromEnv once at boot" stance
     // as TpayConfig/PayNowConfig/CentralMailerConfig above. E3.3's BZ pull
@@ -456,7 +461,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $calendarSettings, $calendarSync): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // PP.20: a cheap round trip on the connection index.php already opened.
             try {
@@ -1440,7 +1445,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $logActivity($auth, 'event_submitted', 'Przesłano wydarzenie do moderacji', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
             return JsonResponder::ok($response, $event);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->post('/events/{id}/approve', function (Request $request, Response $response, array $args) use ($events, $users, $logActivity, $mailer) {
+        $api->post('/events/{id}/approve', function (Request $request, Response $response, array $args) use ($events, $users, $logActivity, $mailer, $calendarSync) {
             $auth = (array) $request->getAttribute('auth');
             // Approve is a one-step Submitted -> Published (E1.1) — there is no separate
             // "approved" resting state to publish from afterwards.
@@ -1449,6 +1454,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be approved in its current status', 409);
             }
             $logActivity($auth, 'event_approved', 'Zatwierdzono i opublikowano wydarzenie', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
+            // R-17: queue the Google Calendar entry (never throws, never calls Google inline).
+            $calendarSync->enqueueForApprovedEvent((string) $args['id']);
             // E1.10 mail #9 ("Decyzja moderacji", 17 §1 row 9) — recipient is the
             // "Event Team", which (per EventRepository's own permission-matrix
             // doc comment) has no membership model yet in this codebase, so this
@@ -3058,6 +3065,72 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             ['id' => 'blik', 'name' => 'BLIK'],
             ['id' => 'bank', 'name' => 'Przelew bankowy'],
         ]));
+
+        // R-17 (§5.9 / §4.4.13): Google Calendar integration, admin only. The service-account key lives in the
+        // environment only (GOOGLE_CALENDAR_SERVICE_ACCOUNT_FILE); the API reports just whether it is present.
+        $calendarSettingsView = static function () use ($calendarSettings, $calendarSync): array {
+            $s = $calendarSettings->get();
+            $creds = $calendarSync->credentialsConfigured();
+
+            return [
+                'enabled' => $s['enabled'],
+                'connected' => $creds && $s['calendarId'] !== '',
+                'credentialsConfigured' => $creds,
+                'calendarId' => $s['calendarId'],
+                'timeZone' => $s['timeZone'],
+                'lastSyncAt' => $s['lastSyncAt'],
+            ];
+        };
+        $api->get('/calendar/settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $calendarSettingsView()))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->patch('/calendar/settings', function (Request $request, Response $response) use ($calendarSettings, $calendarSettingsView, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $data = $body($request);
+            $current = $calendarSettings->get();
+            $enabled = array_key_exists('enabled', $data) ? (bool) $data['enabled'] : $current['enabled'];
+            $calendarId = array_key_exists('calendarId', $data) ? trim((string) $data['calendarId']) : $current['calendarId'];
+            $timeZone = array_key_exists('timeZone', $data) ? trim((string) $data['timeZone']) : $current['timeZone'];
+            if (strlen($calendarId) > 255 || preg_match('/\s/', $calendarId) === 1) {
+                return JsonResponder::error($response, 'validation_error', 'calendarId is invalid', 422);
+            }
+            if (!in_array($timeZone, \DateTimeZone::listIdentifiers(), true)) {
+                return JsonResponder::error($response, 'validation_error', 'timeZone is invalid', 422);
+            }
+            if ($enabled && $calendarId === '') {
+                return JsonResponder::error($response, 'validation_error', 'calendarId is required to enable the integration', 422);
+            }
+            // Only these three fields are writable; `connected`, `credentialsConfigured`, `lastSyncAt` are derived.
+            $calendarSettings->update(['enabled' => $enabled, 'calendarId' => $calendarId, 'timeZone' => $timeZone]);
+            $logActivity($auth, 'calendar_settings_updated', 'Zaktualizowano ustawienia Kalendarza Google', 'calendarSettings', null, null);
+
+            return JsonResponder::ok($response, $calendarSettingsView());
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+        // Manual "send to calendar" for one Event: the body's `id` selects it; the Event data is read from the DB.
+        $api->post('/calendar/events', function (Request $request, Response $response) use ($calendarSync, $events, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $eventId = trim((string) ($body($request)['id'] ?? ''));
+            if ($eventId === '') {
+                return JsonResponder::error($response, 'validation_error', 'Event id is required', 422);
+            }
+            $event = $events->find($eventId);
+            if ($event === null) {
+                return JsonResponder::error($response, 'not_found', 'Event not found', 404);
+            }
+            if (($event['publicationStatus'] ?? '') !== 'published') {
+                return JsonResponder::error($response, 'invalid_status_transition', 'Only a published Event can be sent to the calendar', 409);
+            }
+            if (!$calendarSync->isActive()) {
+                return JsonResponder::error($response, 'calendar_not_configured', 'Google Calendar integration is off or has no credentials', 409);
+            }
+            try {
+                $calendarSync->sendNow($eventId, new \DateTimeImmutable());
+            } catch (\RuntimeException) {
+                return JsonResponder::error($response, 'calendar_sync_failed', 'Google Calendar did not accept the event; it will be retried', 502);
+            }
+            $logActivity($auth, 'calendar_event_sent', 'Wysłano wydarzenie do Kalendarza Google', 'event', $eventId, (string) ($event['name'] ?? ''));
+
+            return JsonResponder::ok($response, null);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
 
         $api->get('/insurance/settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->getSettings()));
         $api->patch('/insurance/settings', function (Request $request, Response $response) use ($insurance, $body, $logActivity) {

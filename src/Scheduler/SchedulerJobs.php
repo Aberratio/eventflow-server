@@ -11,6 +11,7 @@ use ZmierzymyCzas\Domain\Bz\BzWebhookConfig;
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxRepository;
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxService;
 use ZmierzymyCzas\Domain\Bz\Http\CurlHttpClient as BzCurlHttpClient;
+use ZmierzymyCzas\Domain\Calendar\GoogleCalendarSyncService;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerClient;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
@@ -26,6 +27,7 @@ use ZmierzymyCzas\Scheduler\Jobs\BzOutboxRetryJob;
 use ZmierzymyCzas\Scheduler\Jobs\CaptureFormSnapshotsJob;
 use ZmierzymyCzas\Scheduler\Jobs\ExpireUnpaidRegistrationsJob;
 use ZmierzymyCzas\Scheduler\Jobs\FinishPastEventsJob;
+use ZmierzymyCzas\Scheduler\Jobs\GoogleCalendarOutboxRetryJob;
 use ZmierzymyCzas\Scheduler\Jobs\MailOutboxReconcileJob;
 use ZmierzymyCzas\Scheduler\Jobs\MailOutboxRetryJob;
 use ZmierzymyCzas\Scheduler\Jobs\PaymentRemindersJob;
@@ -48,6 +50,7 @@ final class SchedulerJobs
         'mail.outbox_reconcile',
         'mail.results_published',   // PP.19: fan-out first, so the new deferred rows go out in the same tick
         'mail.outbox_retry',        // PP.19: dispatch deferred / failed / stale rows (429-aware)
+        'calendar.outbox_retry',    // R-17: send approved Events to Google Calendar (skipped while off / no key)
     ];
 
     /** @return list<ScheduledJob> in NAMES order */
@@ -85,6 +88,7 @@ final class SchedulerJobs
                 $logger
             )),
             new MailOutboxRetryJob($outbox, $mailerConfig),
+            new GoogleCalendarOutboxRetryJob(GoogleCalendarSyncService::fromEnv($pdo, $logger)),
         ];
     }
 }

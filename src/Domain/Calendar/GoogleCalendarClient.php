@@ -42,22 +42,32 @@ final class GoogleCalendarClient implements GoogleCalendarClientInterface
         $this->api('PUT', $this->eventsUrl($calendarId) . '/' . rawurlencode($googleEventId), $event);
     }
 
+    public function deleteEvent(string $calendarId, string $googleEventId): void
+    {
+        // 404 / 410: the entry is already gone (removed by hand or by an earlier attempt) - the goal is reached.
+        $this->api('DELETE', $this->eventsUrl($calendarId) . '/' . rawurlencode($googleEventId), null, [404, 410]);
+    }
+
     private function eventsUrl(string $calendarId): string
     {
         return self::API_BASE . '/calendars/' . rawurlencode($calendarId) . '/events';
     }
 
     /**
-     * @param array<string, mixed> $body
+     * @param array<string, mixed>|null $body
+     * @param list<int> $acceptedStatuses non-2xx statuses that are not an error for this call
      * @return array<string, mixed>
      */
-    private function api(string $method, string $url, array $body): array
+    private function api(string $method, string $url, ?array $body, array $acceptedStatuses = []): array
     {
         $response = $this->http->request($method, $url, [
             'Authorization' => 'Bearer ' . $this->token(),
             'Content-Type' => 'application/json',
             'Accept' => 'application/json',
-        ], (string) json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        ], $body !== null ? (string) json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null);
+        if (in_array($response->status, $acceptedStatuses, true)) {
+            return [];
+        }
         if (!$response->isSuccessful()) {
             throw new \RuntimeException('google_calendar_request_failed: HTTP ' . $response->status . ' ' . substr($response->body, 0, 300));
         }

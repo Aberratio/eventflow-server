@@ -1307,7 +1307,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $logActivity($auth, 'event_created', 'Utworzono wydarzenie zewnętrzne', 'event', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
             return JsonResponder::ok($response, $created, 'External event created', 201);
         })->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->patch('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $users, $body, $canManageEvent, $isStaffRole, $logActivity, $notifyEventChanged) {
+        $api->patch('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $users, $body, $canManageEvent, $isStaffRole, $logActivity, $notifyEventChanged, $calendarSync) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             if (!$canManageEvent($event, $auth)) {
@@ -1414,6 +1414,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
             $payload = $urlCheck['payload'];
             $updated = $events->update($args['id'], $payload);
+            // R-17: a changed title/date/place of a published Event updates its calendar entry (queued, never inline).
+            $calendarSync->enqueueUpdateOnChange($event, $updated);
             $logActivity($auth, 'event_updated', 'Zaktualizowano wydarzenie', 'event', (string) $args['id'], (string) ($updated['name'] ?? $event['name'] ?? ''));
             // E1.10 mail #8: only "pola krytyczne" (17 §1 row 8) — date and
             // location — and only once the event is actually live (Published/
@@ -1432,7 +1434,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
             return JsonResponder::ok($response, $updated);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->delete('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $isStaffRole, $logActivity) {
+        $api->delete('/events/{id}', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $isStaffRole, $logActivity, $calendarSync) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             if (!$canManageEvent($event, $auth)) {
@@ -1447,6 +1449,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'event_delete_forbidden', 'Only upcoming events without registrations can be deleted.', 409);
             }
             $events->delete($args['id']);
+            $calendarSync->enqueueDeleteForEvent((string) $args['id']);
             $logActivity($auth, 'event_deleted', 'Usunięto wydarzenie', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
@@ -1520,7 +1523,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // Published -> Cancelled. Manual, terminal, Owner or admin only per the matrix
         // (deliberately narrower than $eventManagerRoles — no moderator, no Event Team
         // other than the owner). Bulk refunds are ticket 13, out of scope here.
-        $api->post('/events/{id}/cancel', function (Request $request, Response $response, array $args) use ($events, $registrations, $adminRoles, $logActivity, $notifyEventChanged) {
+        $api->post('/events/{id}/cancel', function (Request $request, Response $response, array $args) use ($events, $registrations, $adminRoles, $logActivity, $notifyEventChanged, $calendarSync) {
             $auth = (array) $request->getAttribute('auth');
             $event = $events->find($args['id']);
             $role = (string) ($auth['role'] ?? '');
@@ -1532,6 +1535,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             if (!$cancelled) {
                 return JsonResponder::error($response, 'invalid_status_transition', 'Only a published event can be cancelled', 409);
             }
+            // R-17: remove the calendar entry of a cancelled event (queued, never inline).
+            $calendarSync->enqueueDeleteForEvent((string) $args['id']);
             // E1.5, spec 13 rozstrzygnięcie 2: odwołanie Wydarzenia to zbiorcza operacja —
             // wszystkie opłacone Zapisy trafiają w jednej akcji do „do zwrotu", nie N
             // osobnych żądań zawodnika.

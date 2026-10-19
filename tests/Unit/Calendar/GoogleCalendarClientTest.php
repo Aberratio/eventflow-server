@@ -75,6 +75,32 @@ final class GoogleCalendarClientTest extends TestCase
         self::assertStringEndsWith('/events/a', $this->http->calls[2]['url']);
     }
 
+    public function testDeleteEventSendsDeleteAndTreats404And410AsSuccess(): void
+    {
+        $this->http->queueResponse(new HttpResponse(200, json_encode(['access_token' => 't', 'expires_in' => 3600])));
+        $this->http->queueResponse(new HttpResponse(204, ''));
+        $this->http->queueResponse(new HttpResponse(404, 'not found'));
+        $this->http->queueResponse(new HttpResponse(410, 'gone'));
+
+        $this->client->deleteEvent('cal@group.calendar.google.com', 'g-evt-1');
+        $this->client->deleteEvent('cal@group.calendar.google.com', 'g-evt-1');
+        $this->client->deleteEvent('cal@group.calendar.google.com', 'g-evt-1');
+
+        $api = $this->http->calls[1];
+        self::assertSame('DELETE', $api['method']);
+        self::assertSame('https://www.googleapis.com/calendar/v3/calendars/cal%40group.calendar.google.com/events/g-evt-1', $api['url']);
+        self::assertNull($api['body']);
+    }
+
+    public function testDeleteEventStillThrowsOnOtherErrors(): void
+    {
+        $this->http->queueResponse(new HttpResponse(200, json_encode(['access_token' => 't', 'expires_in' => 3600])));
+        $this->http->queueResponse(new HttpResponse(500, 'boom'));
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('HTTP 500');
+        $this->client->deleteEvent('c', 'g');
+    }
+
     public function testNon2xxFromApiThrows(): void
     {
         $this->http->queueResponse(new HttpResponse(200, json_encode(['access_token' => 't', 'expires_in' => 3600])));

@@ -1596,9 +1596,12 @@ SQL;
             'gender' => $competitor['gender'] ?? null,
             'phone' => $competitor['phone'] ?? null,
             'club' => $competitor['club'] ?? null,
-            // country/city/postal_code/voivodeship/address/anonymization: no
-            // storage column exists for these anywhere yet — see this
-            // method's caller's docblock.
+            // B-07: the address fields live on competitors (migration 085).
+            'country' => $competitor['country'] ?? null,
+            'city' => $competitor['city'] ?? null,
+            'postal_code' => $competitor['postalCode'] ?? null,
+            'voivodeship' => $competitor['voivodeship'] ?? null,
+            'address' => $competitor['address'] ?? null,
             default => null,
         };
     }
@@ -1755,6 +1758,13 @@ SQL;
             // other member — but only for a Zapis actually JOINING an
             // existing team (teamId set, createTeam not truthy). The captain
             // (createTeam truthy) is always priced normally, in both modes.
+            // B-07: form answers + identity values of the Zapis's form (the HTTP layer sets
+            // `enforceRegistrationForm`; internal/office callers skip the form).
+            $form = null;
+            if (!empty($data['enforceRegistrationForm'])) {
+                $form = (new RegistrationFormService($this->pdo))->prepare($data);
+                $data['formModifierItems'] = $form['modifierItems'];
+            }
             $isJoiningExistingTeam = $team['teamId'] !== null && empty($data['createTeam']);
             $suppressStartFee = $isJoiningExistingTeam && ($distanceRow['teamPricingMode'] ?? 'per_person') === 'per_team';
             $pricing = $this->pricingForRegistration($data, $distanceRow, $suppressStartFee);
@@ -1795,6 +1805,9 @@ SQL;
             // kept as the atomic affected-rows check (belt-and-braces, see above).
             $this->incrementRegisteredCount((string) $distanceRow['distanceId']);
             $this->createSettlementItems($id, $pricing['settlementItems'], date(DATE_ATOM));
+            if ($form !== null) {
+                (new RegistrationFormService($this->pdo))->persist($id, isset($data['competitorId']) ? (string) $data['competitorId'] : null, $form);
+            }
             if ($pricing['discountId'] !== null) {
                 $this->markDiscountUsed($pricing['discountId'], $id, $data, $pricing);
             }
@@ -4063,18 +4076,17 @@ SQL;
     /**
      * Step 4 (Modyfikatory): pricing contributions from form-field-variant choices —
      * "posiłek wegetariański +5", "udział w losowaniu −5" (rozstrzygnięcie 8 w
-     * spec). Not built yet: ticket 10 / E1.13 owns the source of these variants and
-     * their prices. This method is the deliberate seam for that ticket — a real,
-     * always-called stage in the pipeline, not a silently-skipped step — so E1.13
-     * only has to change this one method's body, never pricingForRegistration()'s
-     * shape or create()/hydrate()'s handling of settlement items.
+     * spec). B-07: RegistrationFormService::prepare() builds the items from the field
+     * configuration on the server (never from the client's amounts) and create()
+     * hands them over as `formModifierItems`. They may be negative; the Zapis's
+     * total is floored at 0 by amountDueFromItems()/hydrate().
      *
      * @param array<string, mixed> $data
      * @return array<int, array{name: string, basis: string, amount: float}>
      */
     private function modifierSettlementItems(array $data): array
     {
-        return [];
+        return array_values((array) ($data['formModifierItems'] ?? []));
     }
 
     /** @return array<int, array<string, mixed>> */

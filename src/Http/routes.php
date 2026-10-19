@@ -2688,7 +2688,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 && !$canUploadResults($events->find((string) $payload['eventId']), $auth)) {
                 return JsonResponder::error($response, 'forbidden', 'Nie możesz przenieść wyniku do wydarzenia, którym nie zarządzasz.', 403);
             }
+            // G-03: `reason` is not a result field - it belongs to the trail row only.
+            $correctionReason = isset($payload['reason']) && is_string($payload['reason']) ? $payload['reason'] : null;
+            unset($payload['reason']);
             $updated = $results->update($args['id'], $payload);
+            $results->recordCorrection($result, $updated ?? $result, (string) ($auth['sub'] ?? ''), $correctionReason);
             // Spec 14 sekcja 6: "Korekta jest możliwa zawsze ... ze śladem: kto
             // zmienił, kiedy, z jakiego na jaki czas" - ten sam "zakoduj diff w
             // opisie" wzorzec co korekta snapshotu formularza (patrz
@@ -2706,6 +2710,19 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $description = $changes === [] ? 'Zaktualizowano wynik' : 'Skorygowano wynik (' . implode(', ', $changes) . ')';
             $logActivity($auth, 'result_updated', $description, 'result', (string) $args['id'], (string) ($updated['userName'] ?? $result['userName'] ?? ''));
             return JsonResponder::ok($response, $updated);
+        })
+            ->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        // G-03 (spec 14 pkt 6): the trail of corrections of one result (who, when, previous and new
+        // value, reason). Same right as editing the result.
+        $api->get('/results/{id}/corrections', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults) {
+            $result = $results->find((string) $args['id']);
+            if (!$result) {
+                return JsonResponder::error($response, 'not_found', 'Result not found', 404);
+            }
+            if (!$canUploadResults($events->find((string) $result['eventId']), (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'result_event_not_open', 'Corrections can be read only for results of events you manage.', 403);
+            }
+            return JsonResponder::ok($response, $results->corrections((string) $args['id']));
         })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
         // E2.3 (spec 14 sekcja 6): "Organizator publikuje wyniki wstepne od

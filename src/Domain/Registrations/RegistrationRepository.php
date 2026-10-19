@@ -167,7 +167,7 @@ user_name AS userName,
 user_email AS userEmail, distance_id AS distanceId, distance_name AS distanceName, category,
 registered_at AS registeredAt, status, bib_number AS bibNumber, qr_code AS qrCode, team_name AS teamName, team_id AS teamId,
 discount_code AS discountCode, removed_at AS removedAt, checked_in_at AS checkedInAt, checked_in_by AS checkedInBy,
-registered_by_id AS registeredById
+registered_by_id AS registeredById, payment_expires_at AS paymentExpiresAt
 SQL;
 
     private const COLUMNS_R = <<<'SQL'
@@ -176,7 +176,7 @@ r.user_name AS userName,
 r.user_email AS userEmail, r.distance_id AS distanceId, r.distance_name AS distanceName, r.category,
 r.registered_at AS registeredAt, r.status, r.bib_number AS bibNumber, r.qr_code AS qrCode, r.team_name AS teamName, r.team_id AS teamId,
 r.discount_code AS discountCode, r.removed_at AS removedAt, r.checked_in_at AS checkedInAt, r.checked_in_by AS checkedInBy,
-r.registered_by_id AS registeredById
+r.registered_by_id AS registeredById, r.payment_expires_at AS paymentExpiresAt
 SQL;
 
     /**
@@ -2919,6 +2919,21 @@ SQL;
             if ($registration === null) {
                 $this->pdo->rollBack();
                 return null;
+            }
+            if ($registration['status'] === 'pending') {
+                // B-05: a still-open window on the gateway route gets a fresh gateway session for the
+                // SAME Zapis and the same frozen amount; the window and the slot are left untouched.
+                // A transfer (organizer_bank) Zapis has no gateway session to restart.
+                if ($this->paymentConfigType((string) $registration['eventId']) === 'organizer_bank') {
+                    throw new \RuntimeException('retry_not_available_for_bank_transfer');
+                }
+                $this->pdo->commit();
+                $pending = $this->find($id);
+                if ($pending !== null && $pending['status'] === 'pending') {
+                    $pending['paymentSession'] = $this->startGatewaySessionIfNeeded($pending);
+                }
+
+                return $pending;
             }
             if ($registration['status'] !== 'expired') {
                 throw new \RuntimeException('retry_requires_expired_registration');

@@ -8,12 +8,9 @@ namespace ZmierzymyCzas\Domain\Bz;
  * Client-zone contract for Biuro Zawodów's critical-change webhook receiver
  * (issue 12 §1: "Platforma dodatkowo wypycha webhookiem zmiany krytyczne").
  *
- * There is currently no real BZ-side endpoint to call — confirmed by checking
- * the sibling biuro_zawodow repo before writing this: implementing that
- * receiver is explicit future BZ-side backlog (issue 12's "Lista zmian
- * wymaganych po stronie Biura Zawodów", separate repo/team, E3.7 territory).
- * This client is nonetheless a real, working HTTP client (not a stub) — built
- * against the contract issue 12 itself specifies, the same way E1.6/E1.7's
+ * The BZ-side receiver is `POST /webhooks/critical-changes` in biuro_zawodow-api.
+ * This client is a real, working HTTP client (not a stub) built against the
+ * contract issue 12 specifies, the same way E1.6/E1.7's
  * gateway clients were built against Tpay/PayNow's real APIs before this
  * platform had production credentials for either.
  */

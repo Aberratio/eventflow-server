@@ -128,6 +128,31 @@ final class StartListExportFormatter
         return $bytes;
     }
 
+    /**
+     * G-11 (umowa §4.2.4: eksport listy startowej CSV/XML). UTF-8 XML with the same columns, in the
+     * same order, as the CSV: one `<entry>` per registration, one `<field key="…" label="…">` per
+     * column (keys/labels go into attributes, never element names, so a custom form field with an
+     * arbitrary label cannot produce an invalid document). Characters illegal in XML 1.0 are
+     * dropped; everything else is escaped.
+     *
+     * @param array<int, array{key: string, label: string}> $columns
+     * @param array<int, array<string, mixed>> $rows
+     */
+    public static function toXml(array $columns, array $rows): string
+    {
+        $xml = '<?xml version="1.0" encoding="UTF-8"?>' . "\n" . '<startList>' . "\n";
+        foreach ($rows as $row) {
+            $xml .= "  <entry>\n";
+            foreach ($columns as $column) {
+                $xml .= '    <field key="' . self::xmlEscape($column['key']) . '" label="' . self::xmlEscape($column['label']) . '">'
+                    . self::xmlEscape(self::cellText($row[$column['key']] ?? '')) . "</field>\n";
+            }
+            $xml .= "  </entry>\n";
+        }
+
+        return $xml . '</startList>' . "\n";
+    }
+
     private static function cellText(mixed $value): string
     {
         if ($value === null) {
@@ -144,7 +169,10 @@ final class StartListExportFormatter
 
     private static function xmlEscape(string $value): string
     {
-        return htmlspecialchars($value, ENT_XML1 | ENT_QUOTES, 'UTF-8');
+        // Control characters other than TAB/LF/CR are not allowed in XML 1.0 at all (even escaped).
+        $value = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', $value) ?? '';
+
+        return htmlspecialchars($value, ENT_XML1 | ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     private static function contentTypesXml(): string

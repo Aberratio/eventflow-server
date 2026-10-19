@@ -57,6 +57,7 @@ final class CentralMailerOutboxService
      *   contextId?: ?string,
      *   metadata?: ?array<string, mixed>,
      *   attachments?: ?list<array<string, mixed>>,
+     *   replyTo?: ?array{email: string, name?: ?string},
      * } $message
      * @return array<string, mixed> the outbox row (existing, if this idempotency
      *         key was already recorded — nothing is sent twice)
@@ -155,6 +156,7 @@ final class CentralMailerOutboxService
             // normalise key order, and Central Mailer hashes json_encode(metadata).
             'metadata' => self::canonical($message['metadata'] ?? null),
             'attachments' => $message['attachments'] ?? null,
+            'replyTo' => $message['replyTo'] ?? null,
             'attempts' => $attempts,
             'nextAttemptAt' => $nextAttemptAtUtc,
         ]);
@@ -180,6 +182,10 @@ final class CentralMailerOutboxService
         ];
         if (is_array($row['attachments'] ?? null) && $row['attachments'] !== []) {
             $payload['attachments'] = $row['attachments'];
+        }
+        // From the stored row, like everything else, so a retry resends the identical replyTo.
+        if (is_array($row['replyTo'] ?? null)) {
+            $payload['replyTo'] = $row['replyTo'];
         }
 
         try {
@@ -285,6 +291,17 @@ final class CentralMailerOutboxService
     public function progressForContext(string $contextId, string $sourceEntityType): array
     {
         return $this->outbox->countByContext($contextId, $sourceEntityType);
+    }
+
+    /**
+     * B-03 mail log (read-only): see CentralMailerOutboxRepository::listForLog().
+     *
+     * @param array<string, mixed> $filters
+     * @return array{data: array<int, array<string, mixed>>, total: int, page: int, pageSize: int}
+     */
+    public function logPage(array $filters, bool $includeError): array
+    {
+        return $this->outbox->listForLog($filters, $includeError);
     }
 
     /**

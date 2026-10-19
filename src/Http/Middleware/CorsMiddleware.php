@@ -44,6 +44,6 @@ final class CorsMiddleware implements MiddlewareInterface
         return $response
             ->withHeader('Access-Control-Allow-Origin', $allowOrigin)
             ->withHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Requested-With')
-            ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+            ->withHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
     }
 }

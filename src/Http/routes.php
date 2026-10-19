@@ -18,6 +18,8 @@ use ZmierzymyCzas\Domain\Auth\JwtService;
 use ZmierzymyCzas\Domain\Auth\PasswordRule;
 use ZmierzymyCzas\Domain\Auth\SessionRevocationRepository;
 use ZmierzymyCzas\Domain\Bz\BzWebhookClient;
+use ZmierzymyCzas\Domain\Calendar\GoogleCalendarSettingsRepository;
+use ZmierzymyCzas\Domain\Calendar\GoogleCalendarSyncService;
 use ZmierzymyCzas\Domain\Bz\BzWebhookConfig;
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxRepository;
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxService;
@@ -43,6 +45,7 @@ use ZmierzymyCzas\Domain\Payments\Tpay\TpayGateway;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotification;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotificationVerifier;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayOAuthClient;
+use ZmierzymyCzas\Domain\Registrations\RegistrationOpenRules;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Registrations\StartListExportFormatter;
 use ZmierzymyCzas\Domain\Results\ResultImportRepository;
@@ -57,6 +60,7 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxRepository;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
+use ZmierzymyCzas\Domain\Mailer\CriticalMails\EventReplyToResolver;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
 use ZmierzymyCzas\Domain\Mailer\Http\CurlHttpClient as MailerCurlHttpClient;
 use ZmierzymyCzas\Domain\Mailer\ResultsPublication\ResultsPublicationMailRequests;
@@ -71,6 +75,7 @@ use ZmierzymyCzas\Domain\Users\NewAccountInput;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Domain\Users\UserUpdatePolicy;
 use ZmierzymyCzas\Domain\Registrations\RegistrationCreatePolicy;
+use ZmierzymyCzas\Domain\Registrations\RegistrationFormInvalidException;
 use ZmierzymyCzas\Domain\Registrations\RegistrationPatchPolicy;
 use ZmierzymyCzas\Http\DomainErrorCode;
 use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
@@ -86,6 +91,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     // PP.7: every AuthMiddleware/optionalAuth below captures this guarded copy.
     $jwt = $jwt->withSessionGuard(new DbSessionGuard($pdo));
     $events = new EventRepository($pdo);
+    // R-17: Google Calendar (§5.9). Inactive (nothing queued or sent) until an admin enables it AND the key file exists.
+    $calendarSettings = new GoogleCalendarSettingsRepository($pdo);
+    $calendarSync = GoogleCalendarSyncService::fromEnv($pdo, $logger);
     // E3.1/E3.3: static per-application incoming API key config (Central Mailer
     // pattern) — built once here, same "isConfigured/fromEnv once at boot" stance
     // as TpayConfig/PayNowConfig/CentralMailerConfig above. E3.3's BZ pull
@@ -111,6 +119,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $payNowHttp = new CurlHttpClient();
     $payNowGateway = $payNowConfig->isConfigured() ? new PayNowGateway($payNowHttp, $payNowConfig) : null;
     $payNowNotificationVerifier = new PayNowNotificationVerifier($payNowConfig);
+    // G-06: card/BLIK are offered in the shop only when an online gateway is configured.
+    $onlinePaymentGatewayConfigured = $tpayConfig->isConfigured() || $payNowConfig->isConfigured();
     // E1.10: Central Mailer-backed critical mail sending, built on top of E1.9's
     // outbox service. Same "isConfigured() gates whether sending is even
     // attempted" stance as Tpay/PayNow above — CriticalMailer checks
@@ -121,7 +131,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $centralMailerClient = new CentralMailerClient(new MailerCurlHttpClient(), $centralMailerConfig);
     $centralMailerOutbox = new CentralMailerOutboxService($centralMailerClient, new CentralMailerOutboxRepository($pdo), $logger);
     $mailTemplates = new MailTemplateRepository($pdo);
-    $mailer = new CriticalMailer($centralMailerConfig, $centralMailerOutbox, $mailTemplates);
+    $mailer = new CriticalMailer($centralMailerConfig, $centralMailerOutbox, $mailTemplates, replyToResolver: new EventReplyToResolver($pdo));
     // E3.4: outbound "push zmian krytycznych" to Biuro Zawodów — same
     // "isConfigured() gates whether sending is even attempted" stance as
     // Tpay/PayNow/Central Mailer above. Unlike those, there is no separate API
@@ -208,12 +218,20 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             rtrim((string) Env::get('APP_URL', ''), '/') . '/challenges/' . $completion['challengeId'] . '/reward'
         );
     };
+    // G-02 (spec 15 §3): result writes (create / correction / delete / official publication /
+    // import commit) recompute the Wyzwania progress of that Event's participants and fire the
+    // same idempotent completion gate (+ mail #13) as join and manual review.
+    $syncChallengesForEvent = static function (string $eventId) use ($challenges, $notifyChallengeCompletion): void {
+        foreach ($challenges->syncForEvent($eventId) as $participation) {
+            $notifyChallengeCompletion($participation);
+        }
+    };
     $pages = new InfoPageRepository($pdo);
     $partners = new PartnerRepository($pdo);
     $admin = new AdminRepository($pdo);
     $backgrounds = new EventBackgroundRepository($pdo);
     $insurance = new InsuranceRepository($pdo);
-    $orders = new OrderRepository($pdo, $shop);
+    $orders = new OrderRepository($pdo, $shop, $onlinePaymentGatewayConfigured);
     $certificates = new CertificateRepository($pdo);
     $care = new CareRepository($pdo);
     // E8.1: scalanie profili Zawodnika — orkiestruje repozytoria powyżej,
@@ -283,6 +301,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $publicEventStatuses = ['published', 'finished'];
     $isSuperAdmin = static fn (Request $request): bool => ((string) (((array) $request->getAttribute('auth'))['role'] ?? '')) === 'superadmin';
     $isStaffRole = static fn (string $role): bool => in_array($role, ['admin', 'superadmin', 'moderator'], true);
+    // D-01: detail routes answer 404 (standard error shape) for an unknown resource, never 200 with data:null.
+    $okOrNotFound = static fn (Response $response, mixed $found, string $message) => $found === null
+        ? JsonResponder::error($response, 'not_found', $message, 404)
+        : JsonResponder::ok($response, $found);
     // PP.1/PP.2: identity helpers. "self" is a strict JWT-subject match, never a body field.
     $isSelf = static fn (string $userId, array $auth): bool =>
         $userId !== '' && (string) ($auth['sub'] ?? '') === $userId;
@@ -456,7 +478,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // PP.20: a cheap round trip on the connection index.php already opened.
             try {
@@ -618,6 +640,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 'tv' => $users->tokenVersion((string) $user['id']),
                 'jti' => JwtService::newJti(),
             ]);
+            $users->recordLogin((string) $user['id']);
+            $user = $users->find((string) $user['id']) ?? $user;
             return JsonResponder::ok($response, ['user' => $user, 'token' => $token]);
         });
 
@@ -1296,26 +1320,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             // generic edit can never bypass moderation or the state machine by smuggling
             // these in the body (E1.1).
             unset($payload['status'], $payload['publicationStatus'], $payload['isTest']);
-            if ($role === 'organizer') {
-                unset($payload['organizerId'], $payload['organizerName'], $payload['featured']);
-                if ((string) ($event['publicationStatus'] ?? '') === 'submitted') {
-                    // Editing a submission-in-review invalidates that pending review — the
-                    // organizer has to resubmit the edited version. Published events are
-                    // exempt (E1.1: moderation is a one-time gate, not continuous control).
-                    $payload['publicationStatus'] = 'draft';
-                    $payload['submittedAt'] = null;
-                    $payload['approvedAt'] = null;
-                    $payload['approvedBy'] = null;
-                }
-            } elseif (array_key_exists('organizerId', $payload) && ($payload['organizerId'] ?? '') !== ($event['organizerId'] ?? '')) {
-                // PP.4: ownership transfer is Owner/Admin only (macierz §2 owner-only list).
-                if ($role === 'moderator') {
-                    return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
-                }
+            // G-10 (macierz §2, spec 09 pkt 3): handing the Event over is reserved for its Owner, and
+            // Admin may force it; the Moderator (a Współzarządzający on someone else's Event) may not.
+            // The Owner is the organizer who passed $canManageEvent above.
+            $transferOwnership = static function (string $targetId) use ($events, $users, $event, $args, $response): ?Response {
                 if (in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished'], true)) {
                     return JsonResponder::error($response, 'published_organizer_locked', 'Published events cannot be transferred to another organizer', 409);
                 }
-                $organizer = $users->find((string) $payload['organizerId']);
+                $organizer = $users->find($targetId);
                 if (!$organizer || $organizer['role'] !== 'organizer' || ($organizer['status'] ?? 'active') !== 'active') {
                     return JsonResponder::error($response, 'invalid_organizer', 'Active organizer is required', 422);
                 }
@@ -1326,6 +1338,33 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                         return JsonResponder::error($response, 'event_limit_exceeded', 'Organizer has no available event slots', 409);
                     }
                     throw $e;
+                }
+
+                return null;
+            };
+            $transferRequested = array_key_exists('organizerId', $payload) && (string) ($payload['organizerId'] ?? '') !== (string) ($event['organizerId'] ?? '');
+            if ($role === 'organizer') {
+                $ownerTarget = $transferRequested ? (string) $payload['organizerId'] : null;
+                unset($payload['organizerId'], $payload['organizerName'], $payload['featured']);
+                if ($ownerTarget !== null && ($failure = $transferOwnership($ownerTarget)) !== null) {
+                    return $failure;
+                }
+                if ((string) ($event['publicationStatus'] ?? '') === 'submitted') {
+                    // Editing a submission-in-review invalidates that pending review — the
+                    // organizer has to resubmit the edited version. Published events are
+                    // exempt (E1.1: moderation is a one-time gate, not continuous control).
+                    $payload['publicationStatus'] = 'draft';
+                    $payload['submittedAt'] = null;
+                    $payload['approvedAt'] = null;
+                    $payload['approvedBy'] = null;
+                }
+            } elseif ($transferRequested) {
+                // PP.4: ownership transfer is Owner/Admin only (macierz §2 owner-only list).
+                if ($role === 'moderator') {
+                    return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+                }
+                if (($failure = $transferOwnership((string) $payload['organizerId'])) !== null) {
+                    return $failure;
                 }
                 unset($payload['organizerId'], $payload['organizerName']);
             } elseif (!$isStaffRole($role)) {
@@ -1440,7 +1479,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $logActivity($auth, 'event_submitted', 'Przesłano wydarzenie do moderacji', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
             return JsonResponder::ok($response, $event);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->post('/events/{id}/approve', function (Request $request, Response $response, array $args) use ($events, $users, $logActivity, $mailer) {
+        $api->post('/events/{id}/approve', function (Request $request, Response $response, array $args) use ($events, $users, $logActivity, $mailer, $calendarSync) {
             $auth = (array) $request->getAttribute('auth');
             // Approve is a one-step Submitted -> Published (E1.1) — there is no separate
             // "approved" resting state to publish from afterwards.
@@ -1449,6 +1488,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be approved in its current status', 409);
             }
             $logActivity($auth, 'event_approved', 'Zatwierdzono i opublikowano wydarzenie', 'event', (string) $args['id'], (string) ($event['name'] ?? ''));
+            // R-17: queue the Google Calendar entry (never throws, never calls Google inline).
+            $calendarSync->enqueueForApprovedEvent((string) $args['id']);
             // E1.10 mail #9 ("Decyzja moderacji", 17 §1 row 9) — recipient is the
             // "Event Team", which (per EventRepository's own permission-matrix
             // doc comment) has no membership model yet in this codebase, so this
@@ -1665,6 +1706,72 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 }
                 throw $e;
             }
+        })->add(new AuthMiddleware($jwt));
+        // G-04: the roster a captain / the Event's manager chooses the member to swap out of.
+        // Same gate as the swap itself (captain or $canManageEvent); a stranger gets 403, no roster.
+        $api->get('/teams/{teamId}/members', function (Request $request, Response $response, array $args) use ($registrations, $teams, $events, $canManageEvent) {
+            $auth = (array) $request->getAttribute('auth');
+            $team = $teams->find((string) $args['teamId']);
+            if ($team === null) {
+                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+            }
+            if (!TeamRepository::isCaptain($team, (string) ($auth['sub'] ?? '')) && !$canManageEvent($events->find((string) $team['eventId']), $auth)) {
+                return JsonResponder::error($response, 'team_not_captain', 'Tylko kapitan drużyny lub organizator wydarzenia widzi skład z możliwością wymiany.', 403);
+            }
+
+            return JsonResponder::ok($response, $registrations->teamMembers((string) $args['teamId']));
+        })->add(new AuthMiddleware($jwt));
+        // G-04 (spec 23 Answer §2 / spec 20 "Transfer"): swap the Zawodnik on a relay member's
+        // Zapis. Per-resource check, not a role gate: the Drużyna's captain (until the Dystans's
+        // swap deadline) or the Event's manager ($canManageEvent: owner, plus moderator/admin as
+        // co-managers on a published Event; no deadline). The repository owns every rule, this
+        // route only resolves "is the caller a manager of THIS Event" and writes the activity-log
+        // entry (who, when, from whom to whom).
+        $api->post('/teams/{teamId}/members/{registrationId}/swap', function (Request $request, Response $response, array $args) use ($registrations, $teams, $events, $canManageEvent, $logActivity, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $team = $teams->find((string) $args['teamId']);
+            if ($team === null) {
+                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+            }
+            $isManager = $canManageEvent($events->find((string) $team['eventId']), $auth);
+            try {
+                $result = $registrations->swapTeamMember(
+                    (string) $args['teamId'],
+                    (string) $args['registrationId'],
+                    $body($request),
+                    ['id' => (string) ($auth['sub'] ?? ''), 'email' => (string) ($auth['email'] ?? ''), 'isManager' => $isManager]
+                );
+            } catch (RuntimeException $e) {
+                $errors = [
+                    'team_not_found' => ['Team was not found.', 404],
+                    'registration_not_found' => ['Nie znaleziono zapisu w tej drużynie.', 404],
+                    'team_not_captain' => ['Tylko kapitan drużyny lub organizator wydarzenia może wymienić zawodnika.', 403],
+                    'not_authorized_to_register' => ['Nie masz upoważnienia (Opieki) do zapisania tego zawodnika.', 403],
+                    'team_swap_deadline_passed' => ['Termin wymiany zawodnika w drużynie minął — skontaktuj się z organizatorem.', 409],
+                    'team_swap_registration_inactive' => ['Nie można wymienić zawodnika na anulowanym zapisie.', 409],
+                    'team_swap_competitor_already_registered' => ['Ta osoba jest już zapisana na to wydarzenie.', 409],
+                    'team_swap_same_person' => ['To ten sam zawodnik, który jest już na tym zapisie.', 422],
+                    'team_swap_person_required' => ['Podaj istniejącego zawodnika (competitorId) albo dane nowej osoby (newPerson: imię i nazwisko).', 422],
+                    'team_swap_competitor_not_found' => ['Nie znaleziono zawodnika.', 404],
+                    'registration_distance_invalid' => ['Selected distance is invalid.', 422],
+                ];
+                if (isset($errors[$e->getMessage()])) {
+                    [$message, $status] = $errors[$e->getMessage()];
+                    return JsonResponder::error($response, $e->getMessage(), $message, $status);
+                }
+                throw $e;
+            }
+            $logActivity(
+                $auth,
+                'team_member_swapped',
+                sprintf('Wymieniono zawodnika w drużynie „%s”: %s -> %s', (string) ($team['name'] ?? ''), $result['from']['name'], $result['to']['name']),
+                'registration',
+                (string) $args['registrationId'],
+                (string) $result['to']['name'],
+                ['teamId' => (string) $args['teamId'], 'from' => $result['from'], 'to' => $result['to'], 'byManager' => $isManager]
+            );
+
+            return JsonResponder::ok($response, $result['registration'], 'Team member swapped');
         })->add(new AuthMiddleware($jwt));
         // PP.2: middleware alone only checked global role membership — an organizer of
         // event B could read event A's full registration list. $canManageEvent scopes
@@ -1959,8 +2066,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
 
             $format = strtolower((string) ($request->getQueryParams()['format'] ?? 'csv'));
-            if (!in_array($format, ['csv', 'xlsx'], true)) {
-                return JsonResponder::error($response, 'validation_error', 'Nieobsługiwany format eksportu. Dozwolone: csv, xlsx.', 422);
+            if (!in_array($format, ['csv', 'xlsx', 'xml'], true)) {
+                return JsonResponder::error($response, 'validation_error', 'Nieobsługiwany format eksportu. Dozwolone: csv, xlsx, xml.', 422);
             }
 
             $eventId = (string) $args['eventId'];
@@ -1968,9 +2075,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $export = $registrations->startListExportRows($eventId, $distanceId);
 
             try {
-                $fileContent = $format === 'xlsx'
-                    ? StartListExportFormatter::toXlsx($export['columns'], $export['rows'])
-                    : StartListExportFormatter::toCsv($export['columns'], $export['rows']);
+                $fileContent = match ($format) {
+                    'xlsx' => StartListExportFormatter::toXlsx($export['columns'], $export['rows']),
+                    'xml' => StartListExportFormatter::toXml($export['columns'], $export['rows']),
+                    default => StartListExportFormatter::toCsv($export['columns'], $export['rows']),
+                };
             } catch (\RuntimeException $e) {
                 if ($e->getMessage() === 'xlsx_not_supported') {
                     return JsonResponder::error($response, 'xlsx_not_supported', 'Serwer PHP nie obsluguje zapisu XLSX (brak rozszerzenia ZipArchive). Uzyj eksportu CSV.', 500);
@@ -1999,6 +2108,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return $response
                     ->withHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
                     ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.xlsx"');
+            }
+
+            if ($format === 'xml') {
+                $response->getBody()->write($fileContent);
+                return $response
+                    ->withHeader('Content-Type', 'application/xml; charset=utf-8')
+                    ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.xml"');
             }
 
             $response->getBody()->write($fileContent);
@@ -2065,7 +2181,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $registrations->byUser((string) $args['userId']));
         })
             ->add(new AuthMiddleware($jwt));
-        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $competitors, $care, $users, $body, $events, $canViewEvent) {
+        $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $competitors, $care, $users, $body, $events, $canViewEvent, $canManageEvent) {
             $auth = (array) $request->getAttribute('auth');
             $callerId = (string) ($auth['sub'] ?? '');
             $policy = RegistrationCreatePolicy::filter($body($request));
@@ -2120,6 +2236,16 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'not_found', 'Nie znaleziono wydarzenia.', 404);
             }
 
+            // B-01 (spec 08 axis 4): is registration open? Enforced here for every client (form,
+            // embed and joinTeam all post to this route). Staff of the Event skip the time rules;
+            // the import / seed paths call the repository directly and are not gated.
+            // G-08: a Draft in test mode takes the whole request as a dry run.
+            $openness = RegistrationOpenRules::evaluate($event, new \DateTimeImmutable(), $canManageEvent($event, $auth));
+            if ($openness['message'] !== null) {
+                return JsonResponder::error($response, 'registration_closed', $openness['message'], 409);
+            }
+            $isTestRun = $openness['verdict'] === RegistrationOpenRules::TEST;
+
             // PP.52 (3): identity is derived, never taken from the body.
             $isOwnProfile = (string) ($competitor['userId'] ?? '') === $callerId;
             $data['competitorId'] = (string) $competitor['id'];
@@ -2149,9 +2275,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
             // PP.54: the authenticated caller, for the team captain-consent check (never taken from the body).
             $data['actorUserId'] = $callerId;
+            // B-07: validate form answers / identity values in the same transaction (server-set, never from the body).
+            $data['enforceRegistrationForm'] = true;
 
             try {
-                return JsonResponder::ok($response, $registrations->create($data, confirmWhenNothingDue: true), 'Registration created', 201);
+                return JsonResponder::ok($response, $registrations->create($data, confirmWhenNothingDue: true, dryRun: $isTestRun), 'Registration created', 201);
+            } catch (RegistrationFormInvalidException $e) {
+                return JsonResponder::error($response, 'registration_form_invalid', 'Formularz zapisu zawiera błędy. Popraw zaznaczone pola.', 422, ['fields' => $e->errors()]);
             } catch (RuntimeException $e) {
                 // PP.54: same 403 for a missing, wrong or foreign token — no oracle.
                 if ($e->getMessage() === 'registration_team_invite_required') {
@@ -2325,6 +2455,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             } catch (RuntimeException $e) {
                 $errors = [
                     'retry_requires_expired_registration' => ['retry_requires_expired_registration', 'Only an expired registration can be retried.', 409],
+                    'retry_not_available_for_bank_transfer' => ['retry_not_available_for_bank_transfer', 'Payment by bank transfer has no gateway link to retry.', 409],
                     'registration_capacity_exceeded' => ['registration_capacity_exceeded', 'This distance has reached its participant limit.', 409],
                     'registration_distance_invalid' => ['registration_distance_invalid', 'Selected distance is invalid.', 422],
                 ];
@@ -2658,7 +2789,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         });
         $api->get('/events/{eventId}/results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->byEvent($args['eventId'], $request->getQueryParams()['distanceId'] ?? null)));
         $api->get('/users/{userId}/results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->byUser($args['userId'])));
-        $api->post('/results', function (Request $request, Response $response) use ($events, $results, $body, $canUploadResults, $logActivity) {
+        $api->post('/results', function (Request $request, Response $response) use ($events, $results, $body, $canUploadResults, $logActivity, $syncChallengesForEvent) {
             $payload = $body($request);
             $event = $events->find((string) ($payload['eventId'] ?? ''));
             $auth = (array) $request->getAttribute('auth');
@@ -2666,11 +2797,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
             }
             $created = $results->create($payload);
+            $syncChallengesForEvent((string) ($created['eventId'] ?? $payload['eventId'] ?? ''));
             $logActivity($auth, 'result_created', 'Dodano wynik', 'result', (string) ($created['id'] ?? ''), (string) ($created['userName'] ?? ''));
             return JsonResponder::ok($response, $created, 'Result created', 201);
         })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->patch('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $body, $canUploadResults, $logActivity) {
+        $api->patch('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $body, $canUploadResults, $logActivity, $syncChallengesForEvent) {
             $result = $results->find((string) $args['id']);
             if (!$result) {
                 return JsonResponder::error($response, 'not_found', 'Result not found', 404);
@@ -2688,7 +2820,15 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 && !$canUploadResults($events->find((string) $payload['eventId']), $auth)) {
                 return JsonResponder::error($response, 'forbidden', 'Nie możesz przenieść wyniku do wydarzenia, którym nie zarządzasz.', 403);
             }
+            // G-03: `reason` is not a result field - it belongs to the trail row only.
+            $correctionReason = isset($payload['reason']) && is_string($payload['reason']) ? $payload['reason'] : null;
+            unset($payload['reason']);
             $updated = $results->update($args['id'], $payload);
+            $results->recordCorrection($result, $updated ?? $result, (string) ($auth['sub'] ?? ''), $correctionReason);
+            $syncChallengesForEvent((string) ($updated['eventId'] ?? $result['eventId']));
+            if ((string) ($updated['eventId'] ?? $result['eventId']) !== (string) $result['eventId']) {
+                $syncChallengesForEvent((string) $result['eventId']);
+            }
             // Spec 14 sekcja 6: "Korekta jest możliwa zawsze ... ze śladem: kto
             // zmienił, kiedy, z jakiego na jaki czas" - ten sam "zakoduj diff w
             // opisie" wzorzec co korekta snapshotu formularza (patrz
@@ -2708,6 +2848,19 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $updated);
         })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        // G-03 (spec 14 pkt 6): the trail of corrections of one result (who, when, previous and new
+        // value, reason). Same right as editing the result.
+        $api->get('/results/{id}/corrections', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults) {
+            $result = $results->find((string) $args['id']);
+            if (!$result) {
+                return JsonResponder::error($response, 'not_found', 'Result not found', 404);
+            }
+            if (!$canUploadResults($events->find((string) $result['eventId']), (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'result_event_not_open', 'Corrections can be read only for results of events you manage.', 403);
+            }
+            return JsonResponder::ok($response, $results->corrections((string) $args['id']));
+        })
+            ->add(new AuthMiddleware($jwt, $eventManagerRoles));
         // E2.3 (spec 14 sekcja 6): "Organizator publikuje wyniki wstepne od
         // razu po imporcie/recznym wpisaniu ... Po weryfikacji ...
         // organizator oznacza wyniki jako oficjalne." Granulacja per
@@ -2716,13 +2869,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // $canUploadResults co reszta mutacji /results/* (organizator/
         // admin/moderator danego wydarzenia, tylko dla published/finished
         // eventow), nie surowe $canManageEvent.
-        $api->post('/events/{eventId}/distances/{distanceId}/results/publish-official', function (Request $request, Response $response, array $args) use ($events, $results, $resultsMailRequests, $canUploadResults, $logActivity) {
+        $api->post('/events/{eventId}/distances/{distanceId}/results/publish-official', function (Request $request, Response $response, array $args) use ($events, $results, $resultsMailRequests, $canUploadResults, $logActivity, $syncChallengesForEvent) {
             $event = $events->find((string) $args['eventId']);
             $auth = (array) $request->getAttribute('auth');
             if (!$canUploadResults($event, $auth)) {
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be published only for active or past events you manage.', 403);
             }
             $updatedCount = $results->markOfficial((string) $args['eventId'], (string) $args['distanceId']);
+            $syncChallengesForEvent((string) $args['eventId']);
             if ($updatedCount > 0) {
                 // PP.19: only records the request (O(1), no mail inline); the scheduler's mail.results_published
                 // job fans out to the participants.
@@ -2744,7 +2898,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             ]);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
-        $api->delete('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults, $logActivity) {
+        $api->delete('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults, $logActivity, $syncChallengesForEvent) {
             $result = $results->find((string) $args['id']);
             if (!$result) {
                 return JsonResponder::error($response, 'not_found', 'Result not found', 404);
@@ -2755,6 +2909,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be deleted only for active or past events you manage.', 403);
             }
             $results->delete($args['id']);
+            $syncChallengesForEvent((string) $result['eventId']);
             $logActivity($auth, 'result_deleted', 'Usunięto wynik', 'result', (string) $args['id'], (string) ($result['userName'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
@@ -2927,7 +3082,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
-        $api->post('/result-imports/{id}/commit', function (Request $request, Response $response, array $args) use ($events, $resultImports, $canUploadResults) {
+        $api->post('/result-imports/{id}/commit', function (Request $request, Response $response, array $args) use ($events, $resultImports, $canUploadResults, $syncChallengesForEvent) {
             $batch = $resultImports->find((string) $args['id']);
             if (!$batch) {
                 return JsonResponder::error($response, 'not_found', 'Import not found', 404);
@@ -2936,7 +3091,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
             }
             try {
-                return JsonResponder::ok($response, $resultImports->commit((string) $args['id']), 'Wyniki zapisane');
+                $committed = $resultImports->commit((string) $args['id']);
+                $syncChallengesForEvent((string) $batch['eventId']);
+                return JsonResponder::ok($response, $committed, 'Wyniki zapisane');
             } catch (RuntimeException $e) {
                 $code = DomainErrorCode::of($e);
                 $messages = [
@@ -2957,8 +3114,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $page = $series->list($filters);
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
         });
-        $api->get('/series/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->findBySlug($args['slug'])));
-        $api->get('/series/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->find($args['id'])));
+        $api->get('/series/slug/{slug}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $series->findBySlug($args['slug']), 'Nie znaleziono serii.'));
+        $api->get('/series/{id}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $series->find($args['id']), 'Nie znaleziono serii.'));
         // E6.6 (issue 15 §6): "Klasyfikacja Serii jest widoczna publicznie" —
         // a Series has no participations of its own, so its ranking is the
         // union of its linked Wyzwania's participants (ChallengeRepository::
@@ -3053,11 +3210,73 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             ['id' => 'paczkomat', 'name' => 'Paczkomat', 'price' => 12.99, 'estimatedDays' => '1-2 dni'],
             ['id' => 'pickup', 'name' => 'Odbior osobisty', 'price' => 0, 'estimatedDays' => 'w dniu zawodow'],
         ]));
-        $api->get('/shop/payment-methods', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
-            ['id' => 'card', 'name' => 'Karta platnicza'],
-            ['id' => 'blik', 'name' => 'BLIK'],
-            ['id' => 'bank', 'name' => 'Przelew bankowy'],
-        ]));
+        $api->get('/shop/payment-methods', static fn (Request $request, Response $response) => JsonResponder::ok($response, $orders->availablePaymentMethods($onlinePaymentGatewayConfigured)));
+
+        // R-17 (§5.9 / §4.4.13): Google Calendar integration, admin only. The service-account key lives in the
+        // environment only (GOOGLE_CALENDAR_SERVICE_ACCOUNT_FILE); the API reports just whether it is present.
+        $calendarSettingsView = static function () use ($calendarSettings, $calendarSync): array {
+            $s = $calendarSettings->get();
+            $creds = $calendarSync->credentialsConfigured();
+
+            return [
+                'enabled' => $s['enabled'],
+                'connected' => $creds && $s['calendarId'] !== '',
+                'credentialsConfigured' => $creds,
+                'calendarId' => $s['calendarId'],
+                'timeZone' => $s['timeZone'],
+                'lastSyncAt' => $s['lastSyncAt'],
+            ];
+        };
+        $api->get('/calendar/settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $calendarSettingsView()))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->patch('/calendar/settings', function (Request $request, Response $response) use ($calendarSettings, $calendarSettingsView, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $data = $body($request);
+            $current = $calendarSettings->get();
+            $enabled = array_key_exists('enabled', $data) ? (bool) $data['enabled'] : $current['enabled'];
+            $calendarId = array_key_exists('calendarId', $data) ? trim((string) $data['calendarId']) : $current['calendarId'];
+            $timeZone = array_key_exists('timeZone', $data) ? trim((string) $data['timeZone']) : $current['timeZone'];
+            if (strlen($calendarId) > 255 || preg_match('/\s/', $calendarId) === 1) {
+                return JsonResponder::error($response, 'validation_error', 'calendarId is invalid', 422);
+            }
+            if (!in_array($timeZone, \DateTimeZone::listIdentifiers(), true)) {
+                return JsonResponder::error($response, 'validation_error', 'timeZone is invalid', 422);
+            }
+            if ($enabled && $calendarId === '') {
+                return JsonResponder::error($response, 'validation_error', 'calendarId is required to enable the integration', 422);
+            }
+            // Only these three fields are writable; `connected`, `credentialsConfigured`, `lastSyncAt` are derived.
+            $calendarSettings->update(['enabled' => $enabled, 'calendarId' => $calendarId, 'timeZone' => $timeZone]);
+            $logActivity($auth, 'calendar_settings_updated', 'Zaktualizowano ustawienia Kalendarza Google', 'calendarSettings', null, null);
+
+            return JsonResponder::ok($response, $calendarSettingsView());
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+        // Manual "send to calendar" for one Event: the body's `id` selects it; the Event data is read from the DB.
+        $api->post('/calendar/events', function (Request $request, Response $response) use ($calendarSync, $events, $body, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $eventId = trim((string) ($body($request)['id'] ?? ''));
+            if ($eventId === '') {
+                return JsonResponder::error($response, 'validation_error', 'Event id is required', 422);
+            }
+            $event = $events->find($eventId);
+            if ($event === null) {
+                return JsonResponder::error($response, 'not_found', 'Event not found', 404);
+            }
+            if (($event['publicationStatus'] ?? '') !== 'published') {
+                return JsonResponder::error($response, 'invalid_status_transition', 'Only a published Event can be sent to the calendar', 409);
+            }
+            if (!$calendarSync->isActive()) {
+                return JsonResponder::error($response, 'calendar_not_configured', 'Google Calendar integration is off or has no credentials', 409);
+            }
+            try {
+                $calendarSync->sendNow($eventId, new \DateTimeImmutable());
+            } catch (\RuntimeException) {
+                return JsonResponder::error($response, 'calendar_sync_failed', 'Google Calendar did not accept the event; it will be retried', 502);
+            }
+            $logActivity($auth, 'calendar_event_sent', 'Wysłano wydarzenie do Kalendarza Google', 'event', $eventId, (string) ($event['name'] ?? ''));
+
+            return JsonResponder::ok($response, null);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
 
         $api->get('/insurance/settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->getSettings()));
         $api->patch('/insurance/settings', function (Request $request, Response $response) use ($insurance, $body, $logActivity) {
@@ -3098,7 +3317,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
         $api->get('/shop/orders', fn (Request $request, Response $response) => JsonResponder::ok($response, $orders->list($query($request))))
             ->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->get('/shop/orders/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $orders->find($args['id'])))
+        $api->get('/shop/orders/{id}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $orders->find($args['id']), 'Nie znaleziono zamówienia.'))
             ->add(new AuthMiddleware($jwt, $staffRoles));
         // PP.17 (macierz §3 "Zamówienia sklepowe — Uczestnik: własne"): the caller's own orders.
         // Identity is auth.sub only — there is no userId input (a ?userId= query is ignored).
@@ -3222,16 +3441,16 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $page = $shop->products($filters);
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
         });
-        $api->get('/shop/products/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->findProductBySlug($args['slug'])));
-        $api->get('/shop/products/{id}', function (Request $request, Response $response, array $args) use ($shop, $optionalAuth, $isStaffRole) {
+        $api->get('/shop/products/slug/{slug}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $shop->findProductBySlug($args['slug']), 'Nie znaleziono produktu.'));
+        $api->get('/shop/products/{id}', function (Request $request, Response $response, array $args) use ($shop, $optionalAuth, $isStaffRole, $okOrNotFound) {
             $product = $shop->findProduct((string) $args['id']);
             // Archived products are staff-only, same visibility rule as the
             // catalog listing's `includeArchived` filter above — a direct ID
             // lookup must not let the public route around it.
             if ($product !== null && ($product['status'] ?? 'active') !== 'active' && !$isStaffRole((string) ($optionalAuth($request)['role'] ?? ''))) {
-                return JsonResponder::ok($response, null);
+                $product = null;
             }
-            return JsonResponder::ok($response, $product);
+            return $okOrNotFound($response, $product, 'Nie znaleziono produktu.');
         });
         $api->post('/shop/products', function (Request $request, Response $response) use ($shop, $body, $logActivity, $validateShopProduct) {
             $payload = $body($request);
@@ -3289,8 +3508,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
             return JsonResponder::ok($response, $challenges->list($filters));
         });
-        $api->get('/challenges/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->findBySlug($args['slug'])));
-        $api->get('/challenges/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->find($args['id'])));
+        $api->get('/challenges/slug/{slug}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $challenges->findBySlug($args['slug']), 'Nie znaleziono wyzwania.'));
+        $api->get('/challenges/{id}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $challenges->find($args['id']), 'Nie znaleziono wyzwania.'));
         $api->post('/challenges', function (Request $request, Response $response) use ($challenges, $body) {
             $auth = (array) $request->getAttribute('auth');
             $payload = $body($request);
@@ -3490,7 +3709,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         })->add(new AuthMiddleware($jwt, $staffRoles));
 
         $api->get('/info-pages', fn (Request $request, Response $response) => JsonResponder::ok($response, $pages->list()));
-        $api->get('/info-pages/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $pages->findBySlug($args['slug'])));
+        $api->get('/info-pages/slug/{slug}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $pages->findBySlug($args['slug']), 'Nie znaleziono strony.'));
         $api->post('/info-pages', function (Request $request, Response $response) use ($pages, $body, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $payload = $body($request);
@@ -3534,7 +3753,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
         $api->get('/partners', fn (Request $request, Response $response) => JsonResponder::ok($response, $partners->list()));
         $api->get('/partners/featured', fn (Request $request, Response $response) => JsonResponder::ok($response, $partners->featured()));
-        $api->get('/partners/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $partners->find((string) $args['id'])));
+        $api->get('/partners/{id}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $partners->find((string) $args['id']), 'Nie znaleziono partnera.'));
         $api->post('/partners', function (Request $request, Response $response) use ($partners, $body, $logActivity) {
             $payload = $body($request);
             if (trim((string) ($payload['name'] ?? '')) === '' || trim((string) ($payload['logoUrl'] ?? '')) === '') {
@@ -3582,7 +3801,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         })->add(new AuthMiddleware($jwt, $adminRoles));
 
         $api->get('/event-backgrounds', fn (Request $request, Response $response) => JsonResponder::ok($response, $backgrounds->list()));
-        $api->get('/event-backgrounds/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $backgrounds->find($args['id'])));
+        $api->get('/event-backgrounds/{id}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $backgrounds->find($args['id']), 'Nie znaleziono tła.'));
         $api->get('/event-backgrounds/{id}/usages', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $backgrounds->usages($args['id'])))
             ->add(new AuthMiddleware($jwt, $staffRoles));
         $api->post('/uploads/event-backgrounds', function (Request $request, Response $response) use ($uploads) {
@@ -3683,6 +3902,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // ticket's literal "zestawienia dla admina platformy" — this is a
         // platform-wide aggregate, not an Event-scoped operational view like
         // online-sessions/activity-logs above that moderator also needs.
+        // G-05: sales dashboard (monthly revenue, top products, orders by status) - admin-only like platform-stats.
+        $api->get('/admin/sales-stats', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->salesStats()))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
         $api->get('/admin/platform-stats', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->platformStats()))
             ->add(new AuthMiddleware($jwt, $adminRoles));
 
@@ -4348,6 +4570,62 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $mailTemplates->deleteEventOverride((string) $args['mailType'], (string) $args['eventId']);
             $logActivity($auth, 'mail_template_reverted', 'Przywrócono domyślny szablon maila dla wydarzenia: ' . $args['mailType'], 'mailTemplate', (string) $args['mailType'], (string) ($event['name'] ?? ''));
             return JsonResponder::ok($response, $mailTemplates->resolve((string) $args['mailType'], (string) $args['eventId']));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        // B-03 (spec 17 §5, umowa §4.4.12/§5.19): template preview — renders a DRAFT (subject/bodyHtml from
+        // the body, each optional: omitted = the saved effective template) with the same MailRenderer the
+        // send path uses, over example variables of the mail type. Nothing is saved.
+        $api->post('/admin/mail-templates/{mailType}/preview', function (Request $request, Response $response, array $args) use ($mailTemplates, $body) {
+            $payload = $body($request);
+            try {
+                $preview = $mailTemplates->preview(
+                    (string) $args['mailType'],
+                    null,
+                    isset($payload['subject']) && is_string($payload['subject']) ? $payload['subject'] : null,
+                    isset($payload['bodyHtml']) && is_string($payload['bodyHtml']) ? $payload['bodyHtml'] : null
+                );
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, str_starts_with($e->getMessage(), 'unknown_mail_type') ? 'not_found' : 'validation_error', $e->getMessage(), str_starts_with($e->getMessage(), 'unknown_mail_type') ? 404 : 422);
+            }
+            return JsonResponder::ok($response, $preview);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->post('/events/{eventId}/mail-templates/{mailType}/preview', function (Request $request, Response $response, array $args) use ($events, $mailTemplates, $canManageEvent, $body) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $payload = $body($request);
+            try {
+                $preview = $mailTemplates->preview(
+                    (string) $args['mailType'],
+                    (string) $args['eventId'],
+                    isset($payload['subject']) && is_string($payload['subject']) ? $payload['subject'] : null,
+                    isset($payload['bodyHtml']) && is_string($payload['bodyHtml']) ? $payload['bodyHtml'] : null,
+                    ['eventName' => (string) ($event['name'] ?? '')]
+                );
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, str_starts_with($e->getMessage(), 'unknown_mail_type') ? 'not_found' : 'validation_error', $e->getMessage(), str_starts_with($e->getMessage(), 'unknown_mail_type') ? 404 : 422);
+            }
+            return JsonResponder::ok($response, $preview);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+
+        // B-03: mail log — read-only, paginated view of the Central Mailer outbox (recipient masked).
+        // Global = admins (all rows, `lastError` included, `search` by recipient); per event = event managers
+        // (rows with contextId = the event; no lastError, no search).
+        $api->get('/admin/mail-log', function (Request $request, Response $response) use ($centralMailerOutbox, $query) {
+            $page = $centralMailerOutbox->logPage($query($request), true);
+            return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->get('/events/{eventId}/mail-log', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $centralMailerOutbox, $query) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $filters = $query($request);
+            unset($filters['search']);
+            $filters['contextId'] = (string) $args['eventId'];
+            $page = $centralMailerOutbox->logPage($filters, false);
+            return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
         // E1.10 §8 ("Przepustowość: komunikat, nie cisza") — mass-send progress

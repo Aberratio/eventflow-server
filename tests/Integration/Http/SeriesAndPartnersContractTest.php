@@ -218,8 +218,8 @@ final class SeriesAndPartnersContractTest extends HttpTestCase
         self::assertSame(200, $deleteResp->getStatusCode());
 
         $getResp = $this->request('GET', '/api/v1/partners/' . $partnerId);
-        $getPayload = $this->json($getResp);
-        self::assertNull($getPayload['data']);
+        self::assertSame(404, $getResp->getStatusCode());
+        self::assertSame('not_found', $this->json($getResp)['error']['code'] ?? null);
     }
 
     public function testFeaturedPartnersEndpointIsPublic(): void

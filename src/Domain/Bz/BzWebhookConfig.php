@@ -23,12 +23,9 @@ use ZmierzymyCzas\Support\Env;
  * `baseUrl` is a placeholder (empty string) in dev/test — see .env.example.
  * Callers must treat "not configured" as "do not attempt to send" rather than
  * making a request that could only ever fail, exactly like
- * TpayConfig/PayNowConfig/CentralMailerConfig::isConfigured(). This is doubly
- * true today: Biuro Zawodów's own webhook receiver does not exist yet (a
- * separate repo/team's backlog item, per issue 12's "Lista zmian wymaganych po
- * stronie Biura Zawodów") — BZ_WEBHOOK_BASE_URL stays empty in every real
- * deployment until that ships, and this platform must keep behaving exactly as
- * it does today (silent skip) until then.
+ * TpayConfig/PayNowConfig/CentralMailerConfig::isConfigured(). Biuro Zawodów's receiver
+ * exists (`POST /webhooks/critical-changes` in biuro_zawodow-api); leave
+ * BZ_WEBHOOK_BASE_URL empty on deployments that must not push to BZ.
  */
 final class BzWebhookConfig
 {

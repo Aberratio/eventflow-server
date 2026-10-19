@@ -32,6 +32,7 @@ interface CentralMailerClientInterface
      *   contextId?: ?string,
      *   metadata?: ?array<string, mixed>,
      *   attachments?: array<int, array<string, mixed>>,
+     *   replyTo?: ?array{email: string, name?: ?string},
      * } $email
      * @return array{id: string, status: string}
      *

@@ -14,8 +14,6 @@ final class AdminRepository extends Repository
     /** @param array<string, mixed> $filters @return array<int, array<string, mixed>> */
     public function activityLogs(array $filters = []): array
     {
-        $this->pruneExpiredActivityLogs();
-
         $where = ['timestamp >= :retentionCutoff'];
         $params = ['retentionCutoff' => $this->retentionCutoff()];
         foreach (['action' => 'action', 'userId' => 'user_id', 'targetType' => 'target_type', 'targetId' => 'target_id'] as $input => $column) {
@@ -39,20 +37,21 @@ final class AdminRepository extends Repository
     }
 
     /**
-     * Retention: entries older than RETENTION_MONTHS are dropped lazily on read. No
-     * scheduled-job runner exists in this codebase yet (checked: no cron/queue pattern
-     * to hook into), so delete-on-read from the activityLogs() read path is the simplest
-     * correct approach here — there is deliberately no endpoint to delete a single entry.
+     * R-05 retention: entries older than RETENTION_MONTHS are deleted by the scheduler job
+     * 'retention.purge' (reads only filter them out). There is deliberately no endpoint to
+     * delete a single entry. Idempotent.
      */
-    private function pruneExpiredActivityLogs(): void
+    public function purgeExpiredActivityLogs(\DateTimeImmutable $now): int
     {
         $stmt = $this->pdo->prepare('DELETE FROM activity_logs WHERE timestamp < :cutoff');
-        $stmt->execute(['cutoff' => $this->retentionCutoff()]);
+        $stmt->execute(['cutoff' => $this->retentionCutoff($now)]);
+
+        return $stmt->rowCount();
     }
 
-    private function retentionCutoff(): string
+    private function retentionCutoff(?\DateTimeImmutable $now = null): string
     {
-        return (new \DateTimeImmutable('-' . self::RETENTION_MONTHS . ' months'))->format(DATE_ATOM);
+        return ($now ?? new \DateTimeImmutable())->modify('-' . self::RETENTION_MONTHS . ' months')->format(DATE_ATOM);
     }
 
     public function securitySettings(): array

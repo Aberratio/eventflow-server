@@ -22,6 +22,7 @@ final class SchedulerJobsTest extends TestCase
             'mail.results_published',
             'mail.outbox_retry',
             'calendar.outbox_retry',
+            'retention.purge',
         ], SchedulerJobs::NAMES);
     }
 }

@@ -84,8 +84,9 @@ final class AdminRepositoryTest extends TestCase
             'targetName' => $this->prefix . '-recent-target',
         ]);
 
-        $logs = $this->admin->activityLogs();
-        $targetNames = array_column($logs, 'targetName');
+        // R-05: deletion moved from the read path to the scheduler job; reads only filter.
+        $targetNames = array_column($this->admin->activityLogs(), 'targetName');
+        $this->admin->purgeExpiredActivityLogs(new \DateTimeImmutable());
 
         self::assertNotContains($this->prefix . '-old-target', $targetNames);
         self::assertContains($this->prefix . '-recent-target', $targetNames);

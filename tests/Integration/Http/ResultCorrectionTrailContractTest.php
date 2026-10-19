@@ -183,6 +183,24 @@ final class ResultCorrectionTrailContractTest extends HttpTestCase
         self::assertArrayNotHasKey('time', $changes);
     }
 
+    public function testManualPlaceSurvivesUpdateOfAnotherResultAndNullReleasesIt(): void
+    {
+        $this->patch(['position' => 5, 'categoryPosition' => 4]);
+        $other = $this->json($this->request('POST', '/api/v1/results', [
+            'eventId' => $this->event['id'], 'distanceId' => $this->distanceId, 'userName' => 'Drugi',
+            'category' => 'Open', 'time' => '00:40:00', 'timeInSeconds' => 2400, 'status' => 'finished',
+        ], $this->auth($this->organizer)))['data'];
+        $this->request('PATCH', '/api/v1/results/' . $other['id'], ['bibNumber' => '9'], $this->auth($this->organizer));
+
+        $mine = $this->stored();
+        self::assertSame(5, (int) $mine['position']);
+        self::assertSame(4, (int) $mine['categoryPosition']);
+
+        $released = $this->json($this->patch(['position' => null]))['data'];
+        self::assertSame(2, (int) $released['position']);
+        self::assertSame(4, (int) $released['categoryPosition'], 'category place stays manual');
+    }
+
     public function testNullPlaceKeepsAutomaticRanking(): void
     {
         $patch = $this->patch(['position' => null, 'categoryPosition' => null]);
@@ -215,6 +233,15 @@ final class ResultCorrectionTrailContractTest extends HttpTestCase
         $patch = $this->patch(['status' => 'dnf', 'position' => 5]);
 
         self::assertSame(0, (int) $this->json($patch)['data']['position']);
+    }
+
+    /** @return array<string, mixed> */
+    private function stored(): array
+    {
+        $stmt = $this->pdo->prepare('SELECT position, category_position AS categoryPosition FROM results WHERE id = :id');
+        $stmt->execute(['id' => $this->resultId]);
+
+        return $stmt->fetch();
     }
 
     /** @param array<string, mixed> $payload */

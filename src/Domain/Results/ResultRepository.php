@@ -410,7 +410,8 @@ final class ResultRepository extends Repository
         }
 
         InputRules::check($data, self::INPUT_RULES, false);
-        // G-03: a place is a positive integer or null; null leaves the computed ranking alone.
+        // G-03: a place is a positive integer (manual override, flagged so renumbering keeps it) or null
+        // (releases the override - the computed ranking takes over again).
         $manualPlaces = [];
         foreach (['position' => ['position', 'Miejsce'], 'categoryPosition' => ['category_position', 'Miejsce w kategorii']] as $field => [$column, $label]) {
             if (!array_key_exists($field, $data)) {
@@ -420,8 +421,8 @@ final class ResultRepository extends Repository
                 if ((int) $data[$field] < 1) {
                     throw InputRules::invalid($field, $label);
                 }
-                $manualPlaces[$column] = (int) $data[$field];
             }
+            $manualPlaces[$column] = $data[$field] === null ? null : (int) $data[$field];
             unset($data[$field]);
         }
         $this->assertSplits($data);
@@ -431,6 +432,15 @@ final class ResultRepository extends Repository
         if (in_array($status, self::NON_CLASSIFIED_STATUSES, true)) {
             $mapped['position'] = 0;
             $mapped['category_position'] = 0;
+            $mapped['position_manual'] = 0;
+            $mapped['category_position_manual'] = 0;
+        } else {
+            foreach ($manualPlaces as $column => $place) {
+                $mapped[$column . '_manual'] = $place === null ? 0 : 1;
+                if ($place !== null) {
+                    $mapped[$column] = $place;
+                }
+            }
         }
         if ($mapped !== []) {
             $this->updateById('results', $id, $mapped);
@@ -446,12 +456,6 @@ final class ResultRepository extends Repository
             // (unusual, but the payload technically allows it) leaves its old
             // siblings with a gap - renumber that group too.
             $this->renumberEventDistance((string) $current['eventId'], (string) $current['distanceId']);
-        }
-        // G-03: an organizer's explicit place is applied after the renumbering (which would
-        // overwrite it) and holds until the next renumbering of this event+distance. Not for
-        // non-classified statuses - those keep place 0.
-        if ($manualPlaces !== [] && !in_array($status, self::NON_CLASSIFIED_STATUSES, true)) {
-            $this->updateById('results', $id, $manualPlaces);
         }
         return $this->find($id);
     }
@@ -478,7 +482,7 @@ final class ResultRepository extends Repository
     private function renumberEventDistance(string $eventId, string $distanceId): void
     {
         $stmt = $this->pdo->prepare(
-            'SELECT id, category FROM results
+            'SELECT id, category, position_manual AS positionManual, category_position_manual AS categoryManual FROM results
              WHERE event_id = :eventId AND distance_id = :distanceId AND status = "finished"
              ORDER BY time_in_seconds ASC'
         );
@@ -489,10 +493,19 @@ final class ResultRepository extends Repository
         foreach ($rows as $index => $row) {
             $category = (string) $row['category'];
             $categoryPositions[$category] = ($categoryPositions[$category] ?? 0) + 1;
-            $this->updateById('results', (string) $row['id'], [
-                'position' => $index + 1,
-                'category_position' => $categoryPositions[$category],
-            ]);
+            // G-03: a manually corrected place is left as the organizer set it. Ranks of the
+            // others are still counted over all finishers, so a manual place can coincide with
+            // an automatic one - the organizer owns that call.
+            $places = [];
+            if (!(int) $row['positionManual']) {
+                $places['position'] = $index + 1;
+            }
+            if (!(int) $row['categoryManual']) {
+                $places['category_position'] = $categoryPositions[$category];
+            }
+            if ($places !== []) {
+                $this->updateById('results', (string) $row['id'], $places);
+            }
         }
     }
 

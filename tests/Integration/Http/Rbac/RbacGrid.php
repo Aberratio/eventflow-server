@@ -333,6 +333,10 @@ final class RbacGrid
         'GET /api/v1/events/{eventId}/mail-templates' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'macierz: szablony Wydarzenia — Zespół/Moderator/Admin (plan line 3854)'],
         'PUT /api/v1/events/{eventId}/mail-templates/{mailType}' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'mailType' => 'mailType'], 'basis' => 'idem (plan line 3861)'],
         'DELETE /api/v1/events/{eventId}/mail-templates/{mailType}' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'mailType' => 'mailType'], 'basis' => 'idem (plan line 3882)'],
+        'POST /api/v1/admin/mail-templates/{mailType}/preview' => ['policy' => self::ADMIN, 'params' => ['mailType' => 'mailType'], 'basis' => 'B-03: podgląd szablonu globalnego = Admin (jak PUT)'],
+        'POST /api/v1/events/{eventId}/mail-templates/{mailType}/preview' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'mailType' => 'mailType'], 'basis' => 'B-03: podgląd szablonu Wydarzenia = zespół (jak PUT)'],
+        'GET /api/v1/admin/mail-log' => ['policy' => self::ADMIN, 'basis' => 'B-03: dziennik wysyłek globalnie = Admin'],
+        'GET /api/v1/events/{eventId}/mail-log' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'B-03: dziennik wysyłek Wydarzenia = zespół'],
         'GET /api/v1/events/{eventId}/mail-send-progress' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'event manager (owner, moderator, admin) (no extra per-row rule) (plan line 3898)'],
         ];
     }

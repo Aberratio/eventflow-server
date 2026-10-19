@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Mailer\CentralMailer;
 
+use ZmierzymyCzas\Domain\Mailer\MailRecipientMask;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
@@ -227,6 +228,77 @@ final class CentralMailerOutboxRepository extends Repository
         }
 
         return $counts;
+    }
+
+    /**
+     * B-03 mail log: a read-only, paginated, newest-first view of the outbox for admins (all rows)
+     * or one Wydarzenie's organizer (`contextId` forced by the caller). Never selects `html`,
+     * `attachments` or `idempotency_key`; the recipient is masked (MailRecipientMask) and
+     * `last_error` is returned only when `$includeError` (admin).
+     *
+     * Filters: contextId, mailType (exact), status (exact), search (admin only: recipient contains),
+     * page, pageSize (default 25, max 100 — Repository::pagination()).
+     *
+     * @param array<string, mixed> $filters
+     * @return array{data: array<int, array<string, mixed>>, total: int, page: int, pageSize: int}
+     */
+    public function listForLog(array $filters, bool $includeError): array
+    {
+        $where = [];
+        $params = [];
+        foreach (['contextId' => 'context_id', 'mailType' => 'source_entity_type', 'status' => 'status'] as $key => $column) {
+            if (isset($filters[$key]) && is_string($filters[$key]) && $filters[$key] !== '') {
+                $where[] = "{$column} = :{$key}";
+                $params[$key] = $filters[$key];
+            }
+        }
+        if (isset($filters['search']) && is_string($filters['search']) && $filters['search'] !== '') {
+            $where[] = 'recipient LIKE :search';
+            $params['search'] = '%' . addcslashes($filters['search'], '%_\\') . '%';
+        }
+        $whereSql = $where === [] ? '' : ' WHERE ' . implode(' AND ', $where);
+        $pagination = $this->pagination($filters);
+
+        $count = $this->pdo->prepare("SELECT COUNT(*) FROM central_mailer_outbox{$whereSql}");
+        $count->execute($params);
+        $total = (int) $count->fetchColumn();
+
+        $stmt = $this->pdo->prepare(
+            'SELECT id, source_entity_type AS mailType, priority, recipient, subject, context_id AS eventId, status, attempts, '
+            . 'next_attempt_at AS nextAttemptAt, last_error AS lastError, created_at AS createdAt, '
+            . 'sent_to_mailer_at AS sentToMailerAt, last_checked_at AS lastCheckedAt '
+            . "FROM central_mailer_outbox{$whereSql} ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset"
+        );
+        foreach ($params as $key => $value) {
+            $stmt->bindValue(':' . $key, $value);
+        }
+        $stmt->bindValue(':limit', $pagination['pageSize'], \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $pagination['offset'], \PDO::PARAM_INT);
+        $stmt->execute();
+
+        $data = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $entry = [
+                'id' => (string) $row['id'],
+                'mailType' => (string) $row['mailType'],
+                'priority' => (string) $row['priority'],
+                'recipient' => MailRecipientMask::mask((string) $row['recipient']),
+                'subject' => (string) $row['subject'],
+                'eventId' => $row['eventId'],
+                'status' => (string) $row['status'],
+                'attempts' => (int) $row['attempts'],
+                'nextAttemptAt' => $row['nextAttemptAt'],
+                'createdAt' => (string) $row['createdAt'],
+                'sentToMailerAt' => $row['sentToMailerAt'],
+                'lastCheckedAt' => $row['lastCheckedAt'],
+            ];
+            if ($includeError) {
+                $entry['lastError'] = $row['lastError'];
+            }
+            $data[] = $entry;
+        }
+
+        return ['data' => $data, 'total' => $total, 'page' => $pagination['page'], 'pageSize' => $pagination['pageSize']];
     }
 
     /**

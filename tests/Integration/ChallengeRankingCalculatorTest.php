@@ -264,9 +264,9 @@ final class ChallengeRankingCalculatorTest extends TestCase
             $byUserId[$entry['userId']] = $entry;
         }
 
-        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $byUserId[$userAnon['id']]['name']);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel((string) $competitorAnon['id']), $byUserId[$userAnon['id']]['name']);
         self::assertTrue($byUserId[$userAnon['id']]['isAnonymized']);
-        self::assertStringNotContainsString('Anon', $byUserId[$userAnon['id']]['name']);
+        self::assertStringNotContainsString($this->prefix, $byUserId[$userAnon['id']]['name']);
 
         self::assertStringContainsString('Visible', $byUserId[$userVisible['id']]['name']);
         self::assertFalse($byUserId[$userVisible['id']]['isAnonymized']);

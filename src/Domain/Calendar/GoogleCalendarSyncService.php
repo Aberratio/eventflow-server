@@ -20,7 +20,9 @@ use ZmierzymyCzas\Support\Env;
  * AND the service-account key is configured on the server; otherwise nothing is queued and nothing is sent.
  * The Google event id is stored on the Event (`events.google_calendar_event_id`): a later send for the same
  * Event updates that calendar entry instead of duplicating it (manual "send to calendar").
- * Not done (documented): automatic update on date change and delete on cancellation.
+ * Automatic follow-up: a changed title/date/time/place of a published Event queues an update, and a cancelled /
+ * deleted Event queues a delete (action 'delete' in the same outbox; only when the integration is active and the
+ * Event already has an entry). Google answering 404/410 to a delete counts as success.
  */
 final class GoogleCalendarSyncService
 {
@@ -84,18 +86,85 @@ final class GoogleCalendarSyncService
         }
     }
 
-    public function enqueue(string $eventId): string
+    /** Fields that end up in the calendar entry (see GoogleCalendarEventMapper); anything else never triggers a sync. */
+    private const SYNCED_FIELDS = ['name', 'slug', 'date', 'startDate', 'endDate', 'location', 'city'];
+
+    /**
+     * Auto-update: queues an update when a field shown in the calendar entry changed on a published Event that
+     * already has an entry. Never throws. Returns the outbox id, or null when nothing was queued.
+     *
+     * @param array<string, mixed> $before EventRepository::find() before the edit
+     * @param array<string, mixed>|null $after EventRepository::find() after the edit
+     */
+    public function enqueueUpdateOnChange(array $before, ?array $after): ?string
     {
-        $stmt = $this->pdo->prepare("SELECT id FROM google_calendar_outbox WHERE event_id = :e AND status IN ('queued','failed') LIMIT 1");
-        $stmt->execute(['e' => $eventId]);
+        try {
+            if ($after === null || !$this->isActive()) {
+                return null;
+            }
+            if ((string) ($after['publicationStatus'] ?? '') !== 'published' || ($after['deletedAt'] ?? null) !== null) {
+                return null;
+            }
+            if ((string) ($after['googleCalendarEventId'] ?? '') === '') {
+                return null;
+            }
+            $changed = false;
+            foreach (self::SYNCED_FIELDS as $field) {
+                if ((string) ($before[$field] ?? '') !== (string) ($after[$field] ?? '')) {
+                    $changed = true;
+                    break;
+                }
+            }
+
+            return $changed ? $this->enqueue((string) $after['id']) : null;
+        } catch (\Throwable $e) {
+            $this->logger->warning('Google Calendar update enqueue failed', ['error' => $e->getMessage()]);
+
+            return null;
+        }
+    }
+
+    /**
+     * Auto-delete: queues the removal of the calendar entry of an Event that is no longer published
+     * (cancelled, deleted, withdrawn). A still pending update for it is superseded. Never throws.
+     */
+    public function enqueueDeleteForEvent(string $eventId): ?string
+    {
+        try {
+            if (!$this->isActive()) {
+                return null;
+            }
+            $event = $this->events->find($eventId);
+            $googleId = (string) ($event['googleCalendarEventId'] ?? '');
+            if ($event === null || $googleId === '') {
+                return null;
+            }
+            if ((string) $event['publicationStatus'] === 'published' && $event['deletedAt'] === null) {
+                return null;
+            }
+            $this->pdo->prepare("UPDATE google_calendar_outbox SET status = 'abandoned', last_error = 'superseded_by_delete', next_attempt_at = NULL WHERE event_id = :e AND action = 'upsert' AND status IN ('queued','failed')")
+                ->execute(['e' => $eventId]);
+
+            return $this->enqueue($eventId, 'delete', $googleId);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Google Calendar delete enqueue failed', ['eventId' => $eventId, 'error' => $e->getMessage()]);
+
+            return null;
+        }
+    }
+
+    public function enqueue(string $eventId, string $action = 'upsert', ?string $googleEventId = null): string
+    {
+        $stmt = $this->pdo->prepare("SELECT id FROM google_calendar_outbox WHERE event_id = :e AND action = :a AND status IN ('queued','failed') LIMIT 1");
+        $stmt->execute(['e' => $eventId, 'a' => $action]);
         $existing = $stmt->fetchColumn();
         if (is_string($existing)) {
             return $existing;
         }
         $id = bin2hex(random_bytes(16));
         $id = substr($id, 0, 8) . '-' . substr($id, 8, 4) . '-4' . substr($id, 13, 3) . '-a' . substr($id, 17, 3) . '-' . substr($id, 20, 12);
-        $this->pdo->prepare('INSERT INTO google_calendar_outbox (id, event_id, status, created_at) VALUES (:id, :e, \'queued\', :now)')
-            ->execute(['id' => $id, 'e' => $eventId, 'now' => date('Y-m-d H:i:s')]);
+        $this->pdo->prepare('INSERT INTO google_calendar_outbox (id, event_id, action, google_event_id, status, created_at) VALUES (:id, :e, :a, :g, \'queued\', :now)')
+            ->execute(['id' => $id, 'e' => $eventId, 'a' => $action, 'g' => $googleEventId, 'now' => date('Y-m-d H:i:s')]);
 
         return $id;
     }
@@ -155,8 +224,11 @@ final class GoogleCalendarSyncService
         if ($this->client === null || !$s['enabled'] || $s['calendarId'] === '') {
             return 'google_calendar_inactive';
         }
+        if ((string) ($row['action'] ?? 'upsert') === 'delete') {
+            return $this->attemptDelete($row, $s['calendarId'], $now);
+        }
         $event = $this->events->find((string) $row['event_id']);
-        if ($event === null || ($event['publicationStatus'] ?? '') !== 'published') {
+        if ($event === null || ($event['publicationStatus'] ?? '') !== 'published' || $event['deletedAt'] !== null) {
             $this->finish($id, 'abandoned', 'event_not_published', null, (int) $row['attempts']);
 
             return null;
@@ -179,21 +251,54 @@ final class GoogleCalendarSyncService
                     ->execute(['g' => $googleId, 'id' => $event['id']]);
             }
         } catch (\Throwable $e) {
-            $message = substr($e->getMessage(), 0, 480);
-            if ($attempts >= self::MAX_ATTEMPTS) {
-                $this->finish($id, 'abandoned', $message, null, $attempts);
-            } else {
-                $next = $now->modify('+' . (self::BASE_BACKOFF_MINUTES * (2 ** ($attempts - 1))) . ' minutes');
-                $this->finish($id, 'failed', $message, $next, $attempts);
-            }
-            $this->logger->warning('Google Calendar send failed', ['outboxId' => $id, 'attempts' => $attempts]);
-
-            return $message;
+            return $this->fail($id, $e, $attempts, $now);
         }
         $this->finish($id, 'sent', null, null, $attempts, $now);
         $this->settings->touchLastSync($now);
 
         return null;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return string|null the error message, null on success
+     */
+    private function attemptDelete(array $row, string $calendarId, \DateTimeImmutable $now): ?string
+    {
+        $id = (string) $row['id'];
+        $googleId = (string) ($row['google_event_id'] ?? '');
+        $attempts = (int) $row['attempts'] + 1;
+        if ($googleId === '') {
+            $this->finish($id, 'abandoned', 'no_google_event_id', null, $attempts);
+
+            return null;
+        }
+        try {
+            $this->client?->deleteEvent($calendarId, $googleId);
+        } catch (\Throwable $e) {
+            return $this->fail($id, $e, $attempts, $now);
+        }
+        // Forget the id only if it is still the deleted one (the Event may have been given a new entry since).
+        $this->pdo->prepare('UPDATE events SET google_calendar_event_id = NULL WHERE id = :id AND google_calendar_event_id = :g')
+            ->execute(['id' => $row['event_id'], 'g' => $googleId]);
+        $this->finish($id, 'sent', null, null, $attempts, $now);
+        $this->settings->touchLastSync($now);
+
+        return null;
+    }
+
+    private function fail(string $id, \Throwable $e, int $attempts, \DateTimeImmutable $now): string
+    {
+        $message = substr($e->getMessage(), 0, 480);
+        if ($attempts >= self::MAX_ATTEMPTS) {
+            $this->finish($id, 'abandoned', $message, null, $attempts);
+        } else {
+            $next = $now->modify('+' . (self::BASE_BACKOFF_MINUTES * (2 ** ($attempts - 1))) . ' minutes');
+            $this->finish($id, 'failed', $message, $next, $attempts);
+        }
+        $this->logger->warning('Google Calendar send failed', ['outboxId' => $id, 'attempts' => $attempts]);
+
+        return $message;
     }
 
     private function finish(string $id, string $status, ?string $error, ?\DateTimeImmutable $next, int $attempts, ?\DateTimeImmutable $sentAt = null): void

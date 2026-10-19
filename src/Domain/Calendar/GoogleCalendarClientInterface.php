@@ -19,4 +19,11 @@ interface GoogleCalendarClientInterface
      * @throws \RuntimeException on a non-2xx response or a transport failure
      */
     public function updateEvent(string $calendarId, string $googleEventId, array $event): void;
+
+    /**
+     * Removes the calendar entry. An entry that is already gone (HTTP 404 / 410) counts as success.
+     *
+     * @throws \RuntimeException on any other non-2xx response or a transport failure
+     */
+    public function deleteEvent(string $calendarId, string $googleEventId): void;
 }

@@ -47,6 +47,11 @@ final class GoogleCalendarOutboxRetryTest extends TestCase
                 return 'g-1';
             }
 
+            public function deleteEvent(string $calendarId, string $googleEventId): void
+            {
+                $this->calls[] = ['delete', $googleEventId, []];
+            }
+
             public function updateEvent(string $calendarId, string $googleEventId, array $event): void
             {
                 $this->calls[] = ['update', $googleEventId, $event];

@@ -156,6 +156,68 @@ final class GoogleCalendarContractTest extends HttpTestCase
         self::assertSame(0, $this->outboxCount($event['id']));
     }
 
+    public function testEditingDateOfPublishedEventWithEntryQueuesUpdateButInternalDescriptionDoesNotWithKey(): void
+    {
+        $this->patch(['enabled' => true, 'calendarId' => 'zawody@group.calendar.google.com']);
+        $event = $this->publishedEventWithEntry();
+
+        $this->patchEvent($event['id'], ['description' => '<p>tylko opis</p>']);
+        self::assertSame(0, $this->outboxCount($event['id']));
+
+        $this->patchEvent($event['id'], ['date' => '2027-10-05']);
+        $this->patchEvent($event['id'], ['location' => 'Nowe miejsce']);
+        self::assertSame(1, $this->outboxCount($event['id'], 'queued'), 'one pending task, no duplicates');
+    }
+
+    public function testCancellingPublishedEventWithEntryQueuesDeleteWithKey(): void
+    {
+        $this->patch(['enabled' => true, 'calendarId' => 'zawody@group.calendar.google.com']);
+        $event = $this->publishedEventWithEntry();
+
+        $response = $this->request('POST', '/api/v1/events/' . $event['id'] . '/cancel', [], $this->adminAuth());
+        self::assertSame(200, $response->getStatusCode());
+        $stmt = $this->pdo->prepare("SELECT action, google_event_id FROM google_calendar_outbox WHERE event_id = :id AND status = 'queued'");
+        $stmt->execute(['id' => $event['id']]);
+        self::assertSame([['action' => 'delete', 'google_event_id' => 'g-existing']], $stmt->fetchAll());
+    }
+
+    public function testDeletingEventWithEntryQueuesDeleteWithKey(): void
+    {
+        $this->patch(['enabled' => true, 'calendarId' => 'zawody@group.calendar.google.com']);
+        $event = $this->publishedEventWithEntry();
+
+        $response = $this->request('DELETE', '/api/v1/events/' . $event['id'], [], $this->adminAuth());
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame(1, $this->outboxCount($event['id'], 'queued'));
+    }
+
+    public function testEditingEventWithoutKeyQueuesNothing(): void
+    {
+        $event = $this->publishedEventWithEntry();
+
+        $this->patchEvent($event['id'], ['date' => '2027-10-05']);
+        self::assertSame(0, $this->outboxCount($event['id']));
+    }
+
+    /** @return array<string, mixed> */
+    private function publishedEventWithEntry(): array
+    {
+        $event = $this->submittedEvent();
+        $this->pdo->prepare("UPDATE events SET publication_status = 'published', google_calendar_event_id = 'g-existing' WHERE id = :id")
+            ->execute(['id' => $event['id']]);
+
+        return $event;
+    }
+
+    /** @param array<string, mixed> $body */
+    private function patchEvent(string $eventId, array $body): \Psr\Http\Message\ResponseInterface
+    {
+        $response = $this->request('PATCH', '/api/v1/events/' . $eventId, $body, $this->adminAuth());
+        self::assertSame(200, $response->getStatusCode(), (string) $response->getBody());
+
+        return $response;
+    }
+
     private function get(): \Psr\Http\Message\ResponseInterface
     {
         return $this->request('GET', '/api/v1/calendar/settings', [], $this->adminAuth());

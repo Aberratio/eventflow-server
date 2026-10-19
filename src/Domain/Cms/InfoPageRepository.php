@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Cms;
 
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Support\HtmlSanitizer;
 use ZmierzymyCzas\Support\InputRules;
 
 final class InfoPageRepository extends Repository
@@ -57,7 +58,7 @@ final class InfoPageRepository extends Repository
             'slug' => $data['slug'],
             'icon' => $data['icon'] ?? 'FileText',
             'description' => $data['description'] ?? '',
-            'content' => json_encode($data['content'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'content' => json_encode(self::normalizeContent($data['content'] ?? []), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             'published' => (int) ($data['published'] ?? false),
             'show_in_footer' => (int) ($data['showInFooter'] ?? false),
             'show_in_header' => (int) ($data['showInHeader'] ?? false),
@@ -88,7 +89,7 @@ final class InfoPageRepository extends Repository
             }
         }
         if (array_key_exists('content', $data)) {
-            $mapped['content'] = json_encode($data['content'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $mapped['content'] = json_encode(self::normalizeContent($data['content']), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         }
         $mapped['updated_at'] = date(DATE_ATOM);
         $this->updateById('info_pages', $id, $mapped);
@@ -112,10 +113,35 @@ final class InfoPageRepository extends Repository
     /** @param array<string, mixed> $row */
     private function hydrate(array $row): array
     {
-        $row['content'] = $row['content'] ? json_decode((string) $row['content'], true) : [];
+        $row['content'] = self::normalizeContent($row['content'] ? json_decode((string) $row['content'], true) : [], false);
         $row['published'] = (bool) $row['published'];
         $row['showInFooter'] = (bool) $row['showInFooter'];
         $row['showInHeader'] = (bool) $row['showInHeader'];
         return $row;
+    }
+
+    /**
+     * B-08: text blocks carry `format`: "html" (CMS rich-text editor, sanitized on write with the same
+     * HtmlSanitizer as event descriptions) or "text" (legacy plain text, the default for blocks without it).
+     *
+     * @return mixed same shape as the input; non-list content passes through
+     */
+    private static function normalizeContent(mixed $content, bool $sanitize = true): mixed
+    {
+        if (!is_array($content)) {
+            return $content;
+        }
+        foreach ($content as $i => $block) {
+            if (!is_array($block) || ($block['type'] ?? null) !== 'text') {
+                continue;
+            }
+            $html = ($block['format'] ?? null) === 'html';
+            $block['format'] = $html ? 'html' : 'text';
+            if ($html && $sanitize && isset($block['content'])) {
+                $block['content'] = HtmlSanitizer::cleanNullable($block['content']);
+            }
+            $content[$i] = $block;
+        }
+        return $content;
     }
 }

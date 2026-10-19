@@ -213,6 +213,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             rtrim((string) Env::get('APP_URL', ''), '/') . '/challenges/' . $completion['challengeId'] . '/reward'
         );
     };
+    // G-02 (spec 15 §3): result writes (create / correction / delete / official publication /
+    // import commit) recompute the Wyzwania progress of that Event's participants and fire the
+    // same idempotent completion gate (+ mail #13) as join and manual review.
+    $syncChallengesForEvent = static function (string $eventId) use ($challenges, $notifyChallengeCompletion): void {
+        foreach ($challenges->syncForEvent($eventId) as $participation) {
+            $notifyChallengeCompletion($participation);
+        }
+    };
     $pages = new InfoPageRepository($pdo);
     $partners = new PartnerRepository($pdo);
     $admin = new AdminRepository($pdo);
@@ -465,7 +473,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // PP.20: a cheap round trip on the connection index.php already opened.
             try {
@@ -2692,7 +2700,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         });
         $api->get('/events/{eventId}/results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->byEvent($args['eventId'], $request->getQueryParams()['distanceId'] ?? null)));
         $api->get('/users/{userId}/results', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $results->byUser($args['userId'])));
-        $api->post('/results', function (Request $request, Response $response) use ($events, $results, $body, $canUploadResults, $logActivity) {
+        $api->post('/results', function (Request $request, Response $response) use ($events, $results, $body, $canUploadResults, $logActivity, $syncChallengesForEvent) {
             $payload = $body($request);
             $event = $events->find((string) ($payload['eventId'] ?? ''));
             $auth = (array) $request->getAttribute('auth');
@@ -2700,11 +2708,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
             }
             $created = $results->create($payload);
+            $syncChallengesForEvent((string) ($created['eventId'] ?? $payload['eventId'] ?? ''));
             $logActivity($auth, 'result_created', 'Dodano wynik', 'result', (string) ($created['id'] ?? ''), (string) ($created['userName'] ?? ''));
             return JsonResponder::ok($response, $created, 'Result created', 201);
         })
             ->add(new AuthMiddleware($jwt, $eventManagerRoles));
-        $api->patch('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $body, $canUploadResults, $logActivity) {
+        $api->patch('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $body, $canUploadResults, $logActivity, $syncChallengesForEvent) {
             $result = $results->find((string) $args['id']);
             if (!$result) {
                 return JsonResponder::error($response, 'not_found', 'Result not found', 404);
@@ -2727,6 +2736,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             unset($payload['reason']);
             $updated = $results->update($args['id'], $payload);
             $results->recordCorrection($result, $updated ?? $result, (string) ($auth['sub'] ?? ''), $correctionReason);
+            $syncChallengesForEvent((string) ($updated['eventId'] ?? $result['eventId']));
+            if ((string) ($updated['eventId'] ?? $result['eventId']) !== (string) $result['eventId']) {
+                $syncChallengesForEvent((string) $result['eventId']);
+            }
             // Spec 14 sekcja 6: "Korekta jest możliwa zawsze ... ze śladem: kto
             // zmienił, kiedy, z jakiego na jaki czas" - ten sam "zakoduj diff w
             // opisie" wzorzec co korekta snapshotu formularza (patrz
@@ -2767,13 +2780,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // $canUploadResults co reszta mutacji /results/* (organizator/
         // admin/moderator danego wydarzenia, tylko dla published/finished
         // eventow), nie surowe $canManageEvent.
-        $api->post('/events/{eventId}/distances/{distanceId}/results/publish-official', function (Request $request, Response $response, array $args) use ($events, $results, $resultsMailRequests, $canUploadResults, $logActivity) {
+        $api->post('/events/{eventId}/distances/{distanceId}/results/publish-official', function (Request $request, Response $response, array $args) use ($events, $results, $resultsMailRequests, $canUploadResults, $logActivity, $syncChallengesForEvent) {
             $event = $events->find((string) $args['eventId']);
             $auth = (array) $request->getAttribute('auth');
             if (!$canUploadResults($event, $auth)) {
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be published only for active or past events you manage.', 403);
             }
             $updatedCount = $results->markOfficial((string) $args['eventId'], (string) $args['distanceId']);
+            $syncChallengesForEvent((string) $args['eventId']);
             if ($updatedCount > 0) {
                 // PP.19: only records the request (O(1), no mail inline); the scheduler's mail.results_published
                 // job fans out to the participants.
@@ -2795,7 +2809,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             ]);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
-        $api->delete('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults, $logActivity) {
+        $api->delete('/results/{id}', function (Request $request, Response $response, array $args) use ($events, $results, $canUploadResults, $logActivity, $syncChallengesForEvent) {
             $result = $results->find((string) $args['id']);
             if (!$result) {
                 return JsonResponder::error($response, 'not_found', 'Result not found', 404);
@@ -2806,6 +2820,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be deleted only for active or past events you manage.', 403);
             }
             $results->delete($args['id']);
+            $syncChallengesForEvent((string) $result['eventId']);
             $logActivity($auth, 'result_deleted', 'Usunięto wynik', 'result', (string) $args['id'], (string) ($result['userName'] ?? ''));
             return JsonResponder::ok($response, null);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
@@ -2978,7 +2993,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
-        $api->post('/result-imports/{id}/commit', function (Request $request, Response $response, array $args) use ($events, $resultImports, $canUploadResults) {
+        $api->post('/result-imports/{id}/commit', function (Request $request, Response $response, array $args) use ($events, $resultImports, $canUploadResults, $syncChallengesForEvent) {
             $batch = $resultImports->find((string) $args['id']);
             if (!$batch) {
                 return JsonResponder::error($response, 'not_found', 'Import not found', 404);
@@ -2987,7 +3002,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'result_event_not_open', 'Results can be uploaded only for active or past events you manage.', 403);
             }
             try {
-                return JsonResponder::ok($response, $resultImports->commit((string) $args['id']), 'Wyniki zapisane');
+                $committed = $resultImports->commit((string) $args['id']);
+                $syncChallengesForEvent((string) $batch['eventId']);
+                return JsonResponder::ok($response, $committed, 'Wyniki zapisane');
             } catch (RuntimeException $e) {
                 $code = DomainErrorCode::of($e);
                 $messages = [

@@ -283,6 +283,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $publicEventStatuses = ['published', 'finished'];
     $isSuperAdmin = static fn (Request $request): bool => ((string) (((array) $request->getAttribute('auth'))['role'] ?? '')) === 'superadmin';
     $isStaffRole = static fn (string $role): bool => in_array($role, ['admin', 'superadmin', 'moderator'], true);
+    // D-01: detail routes answer 404 (standard error shape) for an unknown resource, never 200 with data:null.
+    $okOrNotFound = static fn (Response $response, mixed $found, string $message) => $found === null
+        ? JsonResponder::error($response, 'not_found', $message, 404)
+        : JsonResponder::ok($response, $found);
     // PP.1/PP.2: identity helpers. "self" is a strict JWT-subject match, never a body field.
     $isSelf = static fn (string $userId, array $auth): bool =>
         $userId !== '' && (string) ($auth['sub'] ?? '') === $userId;
@@ -456,7 +460,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // PP.20: a cheap round trip on the connection index.php already opened.
             try {
@@ -2957,8 +2961,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $page = $series->list($filters);
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
         });
-        $api->get('/series/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->findBySlug($args['slug'])));
-        $api->get('/series/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $series->find($args['id'])));
+        $api->get('/series/slug/{slug}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $series->findBySlug($args['slug']), 'Nie znaleziono serii.'));
+        $api->get('/series/{id}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $series->find($args['id']), 'Nie znaleziono serii.'));
         // E6.6 (issue 15 §6): "Klasyfikacja Serii jest widoczna publicznie" —
         // a Series has no participations of its own, so its ranking is the
         // union of its linked Wyzwania's participants (ChallengeRepository::
@@ -3098,7 +3102,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
         $api->get('/shop/orders', fn (Request $request, Response $response) => JsonResponder::ok($response, $orders->list($query($request))))
             ->add(new AuthMiddleware($jwt, $staffRoles));
-        $api->get('/shop/orders/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $orders->find($args['id'])))
+        $api->get('/shop/orders/{id}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $orders->find($args['id']), 'Nie znaleziono zamówienia.'))
             ->add(new AuthMiddleware($jwt, $staffRoles));
         // PP.17 (macierz §3 "Zamówienia sklepowe — Uczestnik: własne"): the caller's own orders.
         // Identity is auth.sub only — there is no userId input (a ?userId= query is ignored).
@@ -3222,16 +3226,16 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $page = $shop->products($filters);
             return JsonResponder::paginated($response, $page['data'], $page['total'], $page['page'], $page['pageSize']);
         });
-        $api->get('/shop/products/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $shop->findProductBySlug($args['slug'])));
-        $api->get('/shop/products/{id}', function (Request $request, Response $response, array $args) use ($shop, $optionalAuth, $isStaffRole) {
+        $api->get('/shop/products/slug/{slug}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $shop->findProductBySlug($args['slug']), 'Nie znaleziono produktu.'));
+        $api->get('/shop/products/{id}', function (Request $request, Response $response, array $args) use ($shop, $optionalAuth, $isStaffRole, $okOrNotFound) {
             $product = $shop->findProduct((string) $args['id']);
             // Archived products are staff-only, same visibility rule as the
             // catalog listing's `includeArchived` filter above — a direct ID
             // lookup must not let the public route around it.
             if ($product !== null && ($product['status'] ?? 'active') !== 'active' && !$isStaffRole((string) ($optionalAuth($request)['role'] ?? ''))) {
-                return JsonResponder::ok($response, null);
+                $product = null;
             }
-            return JsonResponder::ok($response, $product);
+            return $okOrNotFound($response, $product, 'Nie znaleziono produktu.');
         });
         $api->post('/shop/products', function (Request $request, Response $response) use ($shop, $body, $logActivity, $validateShopProduct) {
             $payload = $body($request);
@@ -3289,8 +3293,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
             return JsonResponder::ok($response, $challenges->list($filters));
         });
-        $api->get('/challenges/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->findBySlug($args['slug'])));
-        $api->get('/challenges/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $challenges->find($args['id'])));
+        $api->get('/challenges/slug/{slug}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $challenges->findBySlug($args['slug']), 'Nie znaleziono wyzwania.'));
+        $api->get('/challenges/{id}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $challenges->find($args['id']), 'Nie znaleziono wyzwania.'));
         $api->post('/challenges', function (Request $request, Response $response) use ($challenges, $body) {
             $auth = (array) $request->getAttribute('auth');
             $payload = $body($request);
@@ -3490,7 +3494,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         })->add(new AuthMiddleware($jwt, $staffRoles));
 
         $api->get('/info-pages', fn (Request $request, Response $response) => JsonResponder::ok($response, $pages->list()));
-        $api->get('/info-pages/slug/{slug}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $pages->findBySlug($args['slug'])));
+        $api->get('/info-pages/slug/{slug}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $pages->findBySlug($args['slug']), 'Nie znaleziono strony.'));
         $api->post('/info-pages', function (Request $request, Response $response) use ($pages, $body, $logActivity) {
             $auth = (array) $request->getAttribute('auth');
             $payload = $body($request);
@@ -3534,7 +3538,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
         $api->get('/partners', fn (Request $request, Response $response) => JsonResponder::ok($response, $partners->list()));
         $api->get('/partners/featured', fn (Request $request, Response $response) => JsonResponder::ok($response, $partners->featured()));
-        $api->get('/partners/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $partners->find((string) $args['id'])));
+        $api->get('/partners/{id}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $partners->find((string) $args['id']), 'Nie znaleziono partnera.'));
         $api->post('/partners', function (Request $request, Response $response) use ($partners, $body, $logActivity) {
             $payload = $body($request);
             if (trim((string) ($payload['name'] ?? '')) === '' || trim((string) ($payload['logoUrl'] ?? '')) === '') {
@@ -3582,7 +3586,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         })->add(new AuthMiddleware($jwt, $adminRoles));
 
         $api->get('/event-backgrounds', fn (Request $request, Response $response) => JsonResponder::ok($response, $backgrounds->list()));
-        $api->get('/event-backgrounds/{id}', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $backgrounds->find($args['id'])));
+        $api->get('/event-backgrounds/{id}', fn (Request $request, Response $response, array $args) => $okOrNotFound($response, $backgrounds->find($args['id']), 'Nie znaleziono tła.'));
         $api->get('/event-backgrounds/{id}/usages', fn (Request $request, Response $response, array $args) => JsonResponder::ok($response, $backgrounds->usages($args['id'])))
             ->add(new AuthMiddleware($jwt, $staffRoles));
         $api->post('/uploads/event-backgrounds', function (Request $request, Response $response) use ($uploads) {

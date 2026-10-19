@@ -15,7 +15,7 @@ final class UserRepository extends Repository
     // (consume/refund). Exposed on every read as a seam for E5.7 (purchase ->
     // Organizer role) and for a future client "your credits" display, without this
     // ticket building either.
-    private const PUBLIC_COLUMNS = 'id, name, email, (email_verified_at IS NOT NULL) AS emailVerified, role, avatar, phone, birth_year AS birthYear, birth_date AS birthDate, gender, club, company_name AS companyName, nip, website, description, address, sos_contacts AS sosContacts, status, event_limit AS eventLimit, organizer_package_credits AS organizerPackageCredits';
+    private const PUBLIC_COLUMNS = 'id, name, email, (email_verified_at IS NOT NULL) AS emailVerified, role, avatar, phone, birth_year AS birthYear, birth_date AS birthDate, gender, club, company_name AS companyName, nip, website, description, address, sos_contacts AS sosContacts, status, event_limit AS eventLimit, organizer_package_credits AS organizerPackageCredits, last_login_at AS lastLoginAt';
 
     /**
      * @param array<string, mixed> $filters
@@ -73,6 +73,10 @@ final class UserRepository extends Repository
         if (array_key_exists('emailVerified', $row)) {
             $row['emailVerified'] = (bool) $row['emailVerified'];
         }
+        if (array_key_exists('lastLoginAt', $row) && $row['lastLoginAt'] !== null) {
+            // G-07: DATETIME (server time zone, like date(DATE_ATOM) elsewhere) -> ISO 8601.
+            $row['lastLoginAt'] = (new \DateTimeImmutable((string) $row['lastLoginAt']))->format(DATE_ATOM);
+        }
         if (isset($row['address']) && is_string($row['address'])) {
             $row['address'] = json_decode($row['address'], true);
         }
@@ -80,6 +84,12 @@ final class UserRepository extends Repository
             $row['sosContacts'] = json_decode($row['sosContacts'], true);
         }
         return $row;
+    }
+
+    /** G-07: persist the moment of a successful login (users.last_login_at). */
+    public function recordLogin(string $id): void
+    {
+        $this->pdo->prepare('UPDATE users SET last_login_at = NOW() WHERE id = :id')->execute(['id' => $id]);
     }
 
     public function find(string $id): ?array

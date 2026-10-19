@@ -315,6 +315,7 @@ final class RbacGrid
         'GET /api/v1/admin/security-settings' => ['policy' => self::ADMIN, 'basis' => 'admin-only (macierz section 3) (no extra per-row rule) (plan line 3223)'],
         'PATCH /api/v1/admin/security-settings' => ['policy' => self::ADMIN, 'basis' => 'admin-only (macierz section 3) (no extra per-row rule) (plan line 3225)'],
         'GET /api/v1/admin/online-sessions' => ['policy' => self::ADMIN, 'basis' => 'H10 (plan line 3231)'],
+        'GET /api/v1/admin/sales-stats' => ['policy' => self::ADMIN, 'basis' => 'admin-only (G-05, same as platform-stats)'],
         'GET /api/v1/admin/platform-stats' => ['policy' => self::ADMIN, 'basis' => 'admin-only (macierz section 3) (no extra per-row rule) (plan line 3239)'],
         'GET /api/v1/users/{userId}/tickets' => ['policy' => self::SELF_OR_STAFF, 'params' => ['userId' => 'owner'], 'override' => ['owner' => self::OK], 'basis' => 'PP.2 (plan line 3244)'],
         'GET /api/v1/users/{userId}/certificates' => ['policy' => self::SELF_OR_STAFF, 'params' => ['userId' => 'owner'], 'override' => ['owner' => self::OK], 'basis' => 'PP.2 (plan line 3251)'],

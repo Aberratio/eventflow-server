@@ -195,6 +195,22 @@ if ($env === 'local') {
     echo "Demo logins: jan@example.com / marek@timing.pl / admin@zmierzymyczas.pl (password: demo1234)\n";
 } else {
     // PP.90: staging is reachable from the internet; the seeders' well-known password must not survive there.
-    $scrubbed = DemoAccountPasswords::scrub($pdo);
-    echo "Scrubbed the demo password of {$scrubbed} seeded account(s): they have no usable password.\n";
+    // SEED_DEMO_PASSWORD (this server's .env only) gives the demo accounts a secret password instead.
+    $demoPassword = (string) Env::get('SEED_DEMO_PASSWORD', '');
+    if ($demoPassword === '') {
+        $scrubbed = DemoAccountPasswords::scrub($pdo);
+        echo "Scrubbed the demo password of {$scrubbed} seeded account(s): they have no usable password.\n";
+        echo "Set SEED_DEMO_PASSWORD in .env to give them a usable one instead.\n";
+    } else {
+        try {
+            $assigned = DemoAccountPasswords::assign($pdo, $demoPassword);
+        } catch (InvalidArgumentException $e) {
+            // Fail closed: never leave the well-known demo password behind.
+            $scrubbed = DemoAccountPasswords::scrub($pdo);
+            fwrite(STDERR, "SEED_DEMO_PASSWORD rejected: {$e->getMessage()}\n");
+            fwrite(STDERR, "Scrubbed the demo password of {$scrubbed} seeded account(s) instead.\n");
+            exit(1);
+        }
+        echo "Demo logins: jan@example.com / marek@timing.pl / admin@zmierzymyczas.pl (password: SEED_DEMO_PASSWORD from .env) - {$assigned} account(s).\n";
+    }
 }

@@ -142,4 +142,60 @@ final class DemoAccountPasswordsTest extends TestCase
         self::assertGreaterThanOrEqual(1, $count);
         self::assertSame($before, $this->row((string) $manifest['id']));
     }
+
+    public function testAssignSetsThePasswordOnManifestAndKnownHashAccountsOnly(): void
+    {
+        $manifest = $this->user('manifest', 'demo1234');
+        $this->track((string) $manifest['id']);
+        $knownHash = $this->user('knownhash', 'something-else-1');
+        $this->setHash((string) $knownHash['id'], DemoAccountPasswords::KNOWN_DEMO_HASHES[0]);
+        $real = $this->user('real', 'a-real-password');
+        $realBefore = $this->row((string) $real['id']);
+
+        $count = DemoAccountPasswords::assign($this->pdo, 'staging-secret-1');
+
+        self::assertGreaterThanOrEqual(2, $count);
+        foreach ([$manifest, $knownHash] as $user) {
+            $row = $this->row((string) $user['id']);
+            self::assertTrue(password_verify('staging-secret-1', $row['hash']));
+            self::assertFalse(password_verify('demo1234', $row['hash']));
+            self::assertSame(1, $row['tv'], 'sessions ended');
+        }
+        self::assertSame($realBefore, $this->row((string) $real['id']));
+    }
+
+    public function testAssignAfterAssignStillReachesManifestAccounts(): void
+    {
+        $manifest = $this->user('manifest', 'demo1234');
+        $this->track((string) $manifest['id']);
+
+        DemoAccountPasswords::assign($this->pdo, 'staging-secret-1');
+        DemoAccountPasswords::assign($this->pdo, 'staging-secret-2');
+
+        self::assertTrue(password_verify('staging-secret-2', $this->row((string) $manifest['id'])['hash']));
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function rejectedPasswords(): iterable
+    {
+        yield 'too short' => ['short'];
+        yield 'demo1234' => ['demo1234'];
+        yield 'demo1234 upper' => ['DEMO1234'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('rejectedPasswords')]
+    public function testAssignRejectsWeakOrWellKnownPasswordsWithoutWriting(string $password): void
+    {
+        $manifest = $this->user('manifest', 'demo1234');
+        $this->track((string) $manifest['id']);
+        $before = $this->row((string) $manifest['id']);
+
+        try {
+            DemoAccountPasswords::assign($this->pdo, $password);
+            self::fail('assign() accepted ' . $password);
+        } catch (\InvalidArgumentException) {
+        }
+
+        self::assertSame($before, $this->row((string) $manifest['id']));
+    }
 }

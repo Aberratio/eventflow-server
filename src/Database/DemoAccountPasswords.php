@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Database;
 
 use PDO;
+use ZmierzymyCzas\Domain\Auth\PasswordRule;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 
 /**
@@ -33,6 +34,49 @@ final class DemoAccountPasswords
      */
     public static function scrub(PDO $pdo, bool $deep = false, bool $dryRun = false, ?callable $progress = null): int
     {
+        $selected = self::targets($pdo, $deep, $progress);
+
+        if (!$dryRun) {
+            // One hash for the whole run: bcrypt per row would take minutes for thousands of demo accounts, and
+            // nobody knows the secret behind it, so sharing it between the scrubbed accounts reveals nothing.
+            self::setHash($pdo, $selected, UserRepository::unusablePasswordHash());
+        }
+
+        return count($selected);
+    }
+
+    /**
+     * Sets $password on the accounts scrub() would target (non-deep): seed-manifest users and users still
+     * carrying the seeders' demo hash. Used by bin/seed.php outside local when SEED_DEMO_PASSWORD is set, so
+     * dev/staging get demo logins with a secret that lives only in that server's .env, never in the repo.
+     * Bumps token_version like scrub() does.
+     *
+     * @return int number of accounts updated
+     * @throws \InvalidArgumentException when the password breaks PasswordRule or is a well-known demo password
+     */
+    public static function assign(PDO $pdo, string $password): int
+    {
+        $violation = PasswordRule::violation($password, null);
+        if ($violation !== null) {
+            throw new \InvalidArgumentException($violation['message']);
+        }
+        if (in_array(strtolower($password), self::DEMO_PASSWORDS, true)) {
+            throw new \InvalidArgumentException('The well-known demo password is not allowed outside local.');
+        }
+
+        $selected = self::targets($pdo, false, null);
+        // One hash for the whole run, as in scrub(): every target shares the same password anyway.
+        self::setHash($pdo, $selected, password_hash($password, PASSWORD_DEFAULT));
+
+        return count($selected);
+    }
+
+    /**
+     * @param callable(int): void|null $progress
+     * @return list<string>
+     */
+    private static function targets(PDO $pdo, bool $deep, ?callable $progress): array
+    {
         $targets = array_fill_keys(self::manifestUserIds($pdo), true);
 
         $rows = $pdo->query('SELECT id, password_hash FROM users')->fetchAll(PDO::FETCH_ASSOC);
@@ -60,17 +104,16 @@ final class DemoAccountPasswords
             }
         }
 
-        if (!$dryRun) {
-            $update = $pdo->prepare('UPDATE users SET password_hash = :hash, token_version = token_version + 1 WHERE id = :id');
-            // One hash for the whole run: bcrypt per row would take minutes for thousands of demo accounts, and
-            // nobody knows the secret behind it, so sharing it between the scrubbed accounts reveals nothing.
-            $hash = UserRepository::unusablePasswordHash();
-            foreach ($selected as $id) {
-                $update->execute(['hash' => $hash, 'id' => $id]);
-            }
-        }
+        return $selected;
+    }
 
-        return count($selected);
+    /** @param list<string> $ids */
+    private static function setHash(PDO $pdo, array $ids, string $hash): void
+    {
+        $update = $pdo->prepare('UPDATE users SET password_hash = :hash, token_version = token_version + 1 WHERE id = :id');
+        foreach ($ids as $id) {
+            $update->execute(['hash' => $hash, 'id' => $id]);
+        }
     }
 
     /** @return list<string> */

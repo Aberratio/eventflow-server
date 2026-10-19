@@ -18,6 +18,8 @@ use ZmierzymyCzas\Support\Env;
 final class AppConfig
 {
     public const ENV_LOCAL = 'local';
+    /** Hosted, internet-reachable test instance: same rules as staging. */
+    public const ENV_DEV = 'dev';
     public const ENV_STAGING = 'staging';
     public const ENV_PRODUCTION = 'production';
 
@@ -49,7 +51,7 @@ final class AppConfig
     ];
 
     /**
-     * Refused in staging/production (exact match, plus any value starting
+     * Refused outside local (exact match, plus any value starting
      * with "change-me", case-insensitive).
      *
      * @var list<string>
@@ -83,10 +85,10 @@ final class AppConfig
 
         $rawAppEnv = self::str($env, 'APP_ENV');
         $appEnv = $rawAppEnv ?? self::ENV_PRODUCTION;
-        $validEnvs = [self::ENV_LOCAL, self::ENV_STAGING, self::ENV_PRODUCTION];
+        $validEnvs = [self::ENV_LOCAL, self::ENV_DEV, self::ENV_STAGING, self::ENV_PRODUCTION];
         if (!in_array($appEnv, $validEnvs, true)) {
             $errors[] = sprintf(
-                "APP_ENV must be one of local, staging, production (got '%s').",
+                "APP_ENV must be one of local, dev, staging, production (got '%s').",
                 $appEnv
             );
             // Apply the strictest (production) rules for the remaining checks.

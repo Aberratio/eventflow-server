@@ -131,6 +131,23 @@ final class DevSeedEventContractTest extends HttpTestCase
         }
     }
 
+    public function testDevFollowsTheStagingRules(): void
+    {
+        Env::set('APP_ENV', 'dev');
+        $organizer = $this->account('organizer');
+
+        self::assertSame(403, $this->seed()->getStatusCode(), 'no session');
+
+        $response = $this->seed($this->bearer((string) $organizer['id'], 'organizer', (string) $organizer['email']));
+
+        self::assertSame(201, $response->getStatusCode(), (string) $response->getBody());
+        $ids = $this->seededUserIds();
+        self::assertNotSame([], $ids);
+        foreach ($ids as $id) {
+            self::assertFalse(password_verify('demo123', $this->passwordOf($id)), $id);
+        }
+    }
+
     public function testStagingStaffCallCreatesAnOrganizerWithoutAKnownPassword(): void
     {
         Env::set('APP_ENV', 'staging');

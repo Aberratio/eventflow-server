@@ -3703,12 +3703,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         })
             ->add(new AuthMiddleware($jwt, []));
 
-        // ── Dev seed endpoint (local; staging for a live organizer/staff session; seeded accounts get a known password on local only) ──────────────
+        // ── Dev seed endpoint (local; dev/staging for a live organizer/staff session; seeded accounts get a known password on local only) ──────────────
         // Everything it creates is recorded in `seed_records`, so bin/prune-demo.php
         // and a seed refresh remove it along with the file-based demo data.
         $api->post('/dev/seed-event', function (Request $request, Response $response) use ($pdo, $jwt, $users, $events, $registrations, $results, $body) {
             $env = (string) Env::get('APP_ENV', 'production');
-            if (!in_array($env, ['local', 'staging'], true)) {
+            if (!in_array($env, ['local', 'dev', 'staging'], true)) {
                 return JsonResponder::error($response, 'forbidden', 'Dev endpoint is disabled in this environment', 403);
             }
 
@@ -3729,7 +3729,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 }
             }
 
-            // Staging is reachable from the internet, so APP_ENV is not a boundary there:
+            // Dev and staging are reachable from the internet, so APP_ENV is not a boundary there:
             // require a live token from someone who could create these events anyway.
             if ($env !== 'local') {
                 $callerRole = (string) ($auth['role'] ?? '');

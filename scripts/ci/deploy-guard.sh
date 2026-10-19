@@ -10,7 +10,7 @@ set -Eeuo pipefail
 
 op="${GUARD_OPERATION:-}"              # deploy | rollback
 event="${GUARD_EVENT:-}"               # github.event_name
-target="${GUARD_TARGET:-}"             # staging | production
+target="${GUARD_TARGET:-}"             # dev | staging | production
 confirm="${GUARD_CONFIRM:-}"           # exact token, no trimming
 ref="${GUARD_REF:-}"                   # github.ref
 prod_ref="${GUARD_PRODUCTION_REF:-}"   # refs/heads/master (server) | refs/heads/main (client)
@@ -36,8 +36,8 @@ case "$prod_ref" in
 esac
 
 case "$target" in
-  staging | production) ;;
-  *) refuse 60 "Deploy target must be staging or production." ;;
+  dev | staging | production) ;;
+  *) refuse 60 "Deploy target must be dev, staging or production." ;;
 esac
 
 case "$event" in

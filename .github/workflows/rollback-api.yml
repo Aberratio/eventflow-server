@@ -11,6 +11,7 @@ on:
         default: staging
         type: choice
         options:
+          - dev
           - staging
           - production
       snapshot:

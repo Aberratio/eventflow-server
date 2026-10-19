@@ -1692,6 +1692,72 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 throw $e;
             }
         })->add(new AuthMiddleware($jwt));
+        // G-04: the roster a captain / the Event's manager chooses the member to swap out of.
+        // Same gate as the swap itself (captain or $canManageEvent); a stranger gets 403, no roster.
+        $api->get('/teams/{teamId}/members', function (Request $request, Response $response, array $args) use ($registrations, $teams, $events, $canManageEvent) {
+            $auth = (array) $request->getAttribute('auth');
+            $team = $teams->find((string) $args['teamId']);
+            if ($team === null) {
+                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+            }
+            if (!TeamRepository::isCaptain($team, (string) ($auth['sub'] ?? '')) && !$canManageEvent($events->find((string) $team['eventId']), $auth)) {
+                return JsonResponder::error($response, 'team_not_captain', 'Tylko kapitan drużyny lub organizator wydarzenia widzi skład z możliwością wymiany.', 403);
+            }
+
+            return JsonResponder::ok($response, $registrations->teamMembers((string) $args['teamId']));
+        })->add(new AuthMiddleware($jwt));
+        // G-04 (spec 23 Answer §2 / spec 20 "Transfer"): swap the Zawodnik on a relay member's
+        // Zapis. Per-resource check, not a role gate: the Drużyna's captain (until the Dystans's
+        // swap deadline) or the Event's manager ($canManageEvent: owner, plus moderator/admin as
+        // co-managers on a published Event; no deadline). The repository owns every rule, this
+        // route only resolves "is the caller a manager of THIS Event" and writes the activity-log
+        // entry (who, when, from whom to whom).
+        $api->post('/teams/{teamId}/members/{registrationId}/swap', function (Request $request, Response $response, array $args) use ($registrations, $teams, $events, $canManageEvent, $logActivity, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $team = $teams->find((string) $args['teamId']);
+            if ($team === null) {
+                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+            }
+            $isManager = $canManageEvent($events->find((string) $team['eventId']), $auth);
+            try {
+                $result = $registrations->swapTeamMember(
+                    (string) $args['teamId'],
+                    (string) $args['registrationId'],
+                    $body($request),
+                    ['id' => (string) ($auth['sub'] ?? ''), 'email' => (string) ($auth['email'] ?? ''), 'isManager' => $isManager]
+                );
+            } catch (RuntimeException $e) {
+                $errors = [
+                    'team_not_found' => ['Team was not found.', 404],
+                    'registration_not_found' => ['Nie znaleziono zapisu w tej drużynie.', 404],
+                    'team_not_captain' => ['Tylko kapitan drużyny lub organizator wydarzenia może wymienić zawodnika.', 403],
+                    'not_authorized_to_register' => ['Nie masz upoważnienia (Opieki) do zapisania tego zawodnika.', 403],
+                    'team_swap_deadline_passed' => ['Termin wymiany zawodnika w drużynie minął — skontaktuj się z organizatorem.', 409],
+                    'team_swap_registration_inactive' => ['Nie można wymienić zawodnika na anulowanym zapisie.', 409],
+                    'team_swap_competitor_already_registered' => ['Ta osoba jest już zapisana na to wydarzenie.', 409],
+                    'team_swap_same_person' => ['To ten sam zawodnik, który jest już na tym zapisie.', 422],
+                    'team_swap_person_required' => ['Podaj istniejącego zawodnika (competitorId) albo dane nowej osoby (newPerson: imię i nazwisko).', 422],
+                    'team_swap_competitor_not_found' => ['Nie znaleziono zawodnika.', 404],
+                    'registration_distance_invalid' => ['Selected distance is invalid.', 422],
+                ];
+                if (isset($errors[$e->getMessage()])) {
+                    [$message, $status] = $errors[$e->getMessage()];
+                    return JsonResponder::error($response, $e->getMessage(), $message, $status);
+                }
+                throw $e;
+            }
+            $logActivity(
+                $auth,
+                'team_member_swapped',
+                sprintf('Wymieniono zawodnika w drużynie „%s”: %s -> %s', (string) ($team['name'] ?? ''), $result['from']['name'], $result['to']['name']),
+                'registration',
+                (string) $args['registrationId'],
+                (string) $result['to']['name'],
+                ['teamId' => (string) $args['teamId'], 'from' => $result['from'], 'to' => $result['to'], 'byManager' => $isManager]
+            );
+
+            return JsonResponder::ok($response, $result['registration'], 'Team member swapped');
+        })->add(new AuthMiddleware($jwt));
         // PP.2: middleware alone only checked global role membership — an organizer of
         // event B could read event A's full registration list. $canManageEvent scopes
         // it to the caller's own event (or staff on a published/finished/cancelled one).

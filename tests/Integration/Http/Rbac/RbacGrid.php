@@ -41,6 +41,7 @@ final class RbacGrid
     public const CARE_OR_STAFF = 'CARE_OR_STAFF';
     public const CARE_REVOKE = 'CARE_REVOKE';
     public const CAPTAIN_ONLY = 'CAPTAIN_ONLY';
+    public const CAPTAIN_OR_MANAGER = 'CAPTAIN_OR_MANAGER';
     public const SELF_ONLY = 'SELF_ONLY';
     public const API_KEY = 'API_KEY';
     public const SIGNED_WEBHOOK = 'SIGNED_WEBHOOK';
@@ -74,6 +75,7 @@ final class RbacGrid
             self::CARE_OR_STAFF => [401, 403, $P, 403, 403, $P, $P, $P],
             self::CARE_REVOKE => [401, 404, $P, 404, 404, 404, 404, 404],
             self::CAPTAIN_ONLY => [401, 403, $P, 403, 403, 403, 403, 403],
+            self::CAPTAIN_OR_MANAGER => [401, 403, $P, 403, $P, $P, $P, $P],
             self::SELF_ONLY => [401, 404, self::OK, 404, 404, 404, 404, 404],
             self::API_KEY => [401, 401, 401, 401, 401, 401, 401, 401],
             self::SIGNED_WEBHOOK => [400, 400, 400, 400, 400, 400, 400, 400],
@@ -191,6 +193,8 @@ final class RbacGrid
         'GET /api/v1/teams/{teamId}' => ['policy' => self::PUBLIC, 'params' => ['teamId' => 'team'], 'basis' => 'PP.54 (NEW-C note) (plan line 1254)'],
         'GET /api/v1/teams/{teamId}/invite' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['teamId' => 'team'], 'basis' => 'PP.54: captain or Event manager (plan line 1265)'],
         'PATCH /api/v1/teams/{teamId}/special-category' => ['policy' => self::CAPTAIN_ONLY, 'params' => ['teamId' => 'team'], 'basis' => 'E7.5 (plan line 1291)'],
+        'GET /api/v1/teams/{teamId}/members' => ['policy' => self::CAPTAIN_OR_MANAGER, 'params' => ['teamId' => 'team'], 'basis' => 'G-04: skład do wymiany — kapitan (owner) lub Zespół Wydarzenia (spec 23 §2)'],
+        'POST /api/v1/teams/{teamId}/members/{registrationId}/swap' => ['policy' => self::CAPTAIN_OR_MANAGER, 'params' => ['teamId' => 'team', 'registrationId' => 'teamMember'], 'basis' => 'G-04: spec 23 §2 + spec 20 transfer — kapitan (owner) lub Zespół Wydarzenia; moderator = współzarządzający (macierz §3, spec 09)'],
         'GET /api/v1/events/{eventId}/registrations' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'PP.2 (plan line 1321)'],
         'GET /api/v1/events/{eventId}/start-list' => ['policy' => self::PUBLIC, 'params' => ['eventId' => 'event'], 'override' => self::allActors(self::OK), 'basis' => 'PP.3 public DTO (plan line 1332)'],
         'GET /api/v1/events/{eventId}/bz/participants' => ['policy' => self::API_KEY, 'params' => ['eventId' => 'event'], 'basis' => 'E3.3 (plan line 1362)'],

@@ -40,6 +40,7 @@ final class RbacGrid
     public const CARE_HOLDER = 'CARE_HOLDER';
     public const CARE_OR_STAFF = 'CARE_OR_STAFF';
     public const CARE_REVOKE = 'CARE_REVOKE';
+    public const CARE_OR_MANAGER_ROLE = 'CARE_OR_MANAGER_ROLE';
     public const CAPTAIN_ONLY = 'CAPTAIN_ONLY';
     public const CAPTAIN_OR_MANAGER = 'CAPTAIN_OR_MANAGER';
     public const SELF_ONLY = 'SELF_ONLY';
@@ -74,6 +75,7 @@ final class RbacGrid
             self::CARE_HOLDER => [401, 403, $P, 403, 403, 403, 403, 403],
             self::CARE_OR_STAFF => [401, 403, $P, 403, 403, $P, $P, $P],
             self::CARE_REVOKE => [401, 404, $P, 404, 404, 404, 404, 404],
+            self::CARE_OR_MANAGER_ROLE => [401, 403, $P, $P, $P, $P, $P, $P],
             self::CAPTAIN_ONLY => [401, 403, $P, 403, 403, 403, 403, 403],
             self::CAPTAIN_OR_MANAGER => [401, 403, $P, 403, $P, $P, $P, $P],
             self::SELF_ONLY => [401, 404, self::OK, 404, 404, 404, 404, 404],
@@ -334,6 +336,8 @@ final class RbacGrid
         'DELETE /api/v1/care/{id}' => ['policy' => self::CARE_REVOKE, 'params' => ['id' => 'care'], 'basis' => 'E1.12 (plan line 3687)'],
         'POST /api/v1/competitors/{id}/rotate-identity-code' => ['policy' => self::CARE_HOLDER, 'params' => ['id' => 'child'], 'basis' => 'spec 11 §2 (plan line 3707)'],
         'POST /api/v1/competitors/{id}/anonymization' => ['policy' => self::CARE_HOLDER, 'params' => ['id' => 'child'], 'basis' => 'E6.6 (plan line 3729)'],
+        'POST /api/v1/competitors/{id}/duplicate-reports' => ['policy' => self::CARE_OR_MANAGER_ROLE, 'params' => ['id' => 'child'], 'basis' => 'R-08 (spec 22): opiekun albo organizator/staff'],
+        'GET /api/v1/admin/competitors/duplicate-reports' => ['policy' => self::STAFF, 'basis' => 'R-08: kolejka zgłoszeń = Moderator/Admin, jak scalanie'],
         'GET /api/v1/admin/competitors/search' => ['policy' => self::STAFF, 'basis' => 'macierz: Scalanie — Moderator ✔ (500 before PP.14 still = PASS) (plan line 3756)'],
         'GET /api/v1/admin/competitors/{idA}/merge-comparison/{idB}' => ['policy' => self::STAFF, 'params' => ['idA' => 'child', 'idB' => 'competitorB'], 'basis' => 'idem (plan line 3764)'],
         'POST /api/v1/admin/competitors/merge' => ['policy' => self::STAFF, 'basis' => 'idem (empty body → 422) (plan line 3778)'],

@@ -343,6 +343,35 @@ final class RegistrationContractTest extends HttpTestCase
         ]);
     }
 
+    public function testRegistrationDtoExposesPaymentExpiresAtInMyRegistrations(): void
+    {
+        $created = $this->registrations->create($this->registrationPayload());
+        $auth = $this->bearer($this->participant['id'], 'participant', $this->participant['email']);
+
+        $list = $this->json($this->request('GET', '/api/v1/users/' . $this->participant['id'] . '/registrations', [], $auth));
+        $row = array_values(array_filter($list['data'], static fn (array $r): bool => $r['id'] === $created['id']))[0];
+
+        self::assertNotNull($row['paymentExpiresAt']);
+        self::assertNotFalse(strtotime((string) $row['paymentExpiresAt']));
+        self::assertGreaterThan(time(), strtotime((string) $row['paymentExpiresAt']));
+
+    }
+
+    public function testRetryPaymentOnPendingBankTransferRegistrationReturns409WithClearCode(): void
+    {
+        $pending = $this->pendingBankTransferRegistration();
+
+        $response = $this->request(
+            'POST',
+            '/api/v1/registrations/' . $pending['id'] . '/retry-payment',
+            [],
+            $this->bearer($this->participant['id'], 'participant', $this->participant['email'])
+        );
+
+        self::assertSame(409, $response->getStatusCode());
+        self::assertSame('retry_not_available_for_bank_transfer', $this->json($response)['error']['code']);
+    }
+
     /**
      * E1.8: registration transfer title is a pure `ZC-{id}` derivation, always
      * present regardless of route, exactly like a computed ticket/QR field.

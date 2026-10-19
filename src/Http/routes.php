@@ -2325,6 +2325,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             } catch (RuntimeException $e) {
                 $errors = [
                     'retry_requires_expired_registration' => ['retry_requires_expired_registration', 'Only an expired registration can be retried.', 409],
+                    'retry_not_available_for_bank_transfer' => ['retry_not_available_for_bank_transfer', 'Payment by bank transfer has no gateway link to retry.', 409],
                     'registration_capacity_exceeded' => ['registration_capacity_exceeded', 'This distance has reached its participant limit.', 409],
                     'registration_distance_invalid' => ['registration_distance_invalid', 'Selected distance is invalid.', 422],
                 ];

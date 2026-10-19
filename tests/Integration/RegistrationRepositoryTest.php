@@ -1312,11 +1312,12 @@ final class RegistrationRepositoryTest extends TestCase
         self::assertEqualsWithDelta($expectedAt->getTimestamp(), $newExpiresAt->getTimestamp(), 30);
     }
 
-    /** Retrying a Zapis that never expired (still pending/confirmed) must be rejected. */
+    /** B-05: only expired and still-pending (gateway) Zapisy can be retried; a confirmed one is rejected. */
     public function testRetryPaymentRejectsNonExpiredRegistration(): void
     {
-        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-retry-not-expired']));
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-retry-confirmed']));
         $registration = $this->registrations->create($this->registrationPayload($event, ''));
+        $this->pdo->prepare("UPDATE registrations SET status = 'confirmed' WHERE id = :id")->execute(['id' => $registration['id']]);
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('retry_requires_expired_registration');

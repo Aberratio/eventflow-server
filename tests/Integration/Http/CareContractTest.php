@@ -109,6 +109,26 @@ final class CareContractTest extends HttpTestCase
         self::assertCount(1, $list['myCompetitors']);
     }
 
+    public function testCareListExposesIsAnonymizedOfEachWard(): void
+    {
+        $auth = $this->bearer($this->parent1['id'], 'participant', $this->parent1['email']);
+        $added = $this->json($this->request(
+            'POST',
+            '/api/v1/care',
+            ['firstName' => 'Zosia', 'lastName' => $this->prefix, 'birthDate' => '2018-05-01'],
+            $auth
+        ));
+        $wardId = $added['data']['competitor']['id'];
+
+        $before = $this->json($this->request('GET', '/api/v1/care', [], $auth))['data']['myCompetitors'][0];
+        self::assertFalse($before['isAnonymized']);
+
+        $this->competitors->setAnonymization($wardId, true);
+
+        $after = $this->json($this->request('GET', '/api/v1/care', [], $auth))['data']['myCompetitors'][0];
+        self::assertTrue($after['isAnonymized']);
+    }
+
     public function testGrantingCareByEmailAllowsRegisteringSelf(): void
     {
         $response = $this->request(

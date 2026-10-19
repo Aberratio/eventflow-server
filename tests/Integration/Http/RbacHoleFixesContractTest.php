@@ -240,6 +240,37 @@ final class RbacHoleFixesContractTest extends HttpTestCase
         self::assertSame(409, $locked->getStatusCode());
     }
 
+    /**
+     * PP.4 admin (owner decision): Admin MAY hand over a published Event (override of
+     * published_organizer_locked) and the handover lands in the activity log; the owning
+     * organizer stays locked out (409) and nothing changes.
+     */
+    public function testAdminMayTransferPublishedEventWithAuditButOrganizerStaysLocked(): void
+    {
+        $target = (string) self::$fx->values['foreignOrganizer'];
+        self::$sharedPdo->prepare('UPDATE users SET event_limit = 99 WHERE id = :id')->execute(['id' => $target]);
+        $owner = (string) self::$fx->values['organizer'];
+
+        $live = $this->newEvent();
+        self::$sharedPdo->prepare("UPDATE events SET publication_status = 'published' WHERE id = :id")->execute(['id' => $live['id']]);
+
+        $locked = $this->request('PATCH', '/api/v1/events/' . $live['id'], ['organizerId' => $target], $this->as('organizer'));
+        self::assertSame(409, $locked->getStatusCode());
+        self::assertStringContainsString('published_organizer_locked', (string) $locked->getBody());
+        self::assertSame($owner, $this->scalar('SELECT organizer_id FROM events WHERE id = :id', ['id' => $live['id']]));
+
+        $admin = $this->request('PATCH', '/api/v1/events/' . $live['id'], ['organizerId' => $target], $this->as('admin'));
+        self::assertSame(200, $admin->getStatusCode(), (string) $admin->getBody());
+        self::assertSame($target, $this->scalar('SELECT organizer_id FROM events WHERE id = :id', ['id' => $live['id']]));
+        self::assertSame('published', $this->scalar('SELECT publication_status FROM events WHERE id = :id', ['id' => $live['id']]));
+
+        $adminId = self::$fx->actors['admin']['id'];
+        self::assertSame(1, (int) $this->scalar(
+            "SELECT COUNT(*) FROM activity_logs WHERE action = 'event_ownership_transferred' AND target_type = 'event' AND target_id = :id AND user_id = :uid",
+            ['id' => $live['id'], 'uid' => $adminId]
+        ));
+    }
+
     public function testMoneyOperationsAreOwnerOrAdminOnly(): void
     {
         $event = $this->newEvent('organizer', 'active', ['paymentConfig' => ['type' => 'organizer_bank', 'bankAccountHolder' => 'Rbac']]);

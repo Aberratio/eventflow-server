@@ -1994,6 +1994,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 if ($field === null || $field['eventId'] !== $args['eventId']) {
                     return JsonResponder::error($response, 'not_found', 'Nie znaleziono pozycji formularza.', 404);
                 }
+                if (array_key_exists('fieldType', $payload) || array_key_exists('options', $payload)) {
+                    // B-02: type / variants edited in place; 409 when it would orphan stored answers.
+                    $field = $formFields->updateDefinition((string) $args['fieldId'], $payload);
+                }
                 if (array_key_exists('state', $payload)) {
                     $field = $formFields->updateState((string) $args['fieldId'], (string) $payload['state']);
                 }
@@ -2010,6 +2014,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 if (array_key_exists('visibleToBz', $payload)) {
                     $field = $formFields->updateBzVisibility((string) $args['fieldId'], (bool) $payload['visibleToBz']);
                 }
+            } catch (\ZmierzymyCzas\Domain\FormFields\FormFieldConflictException $e) {
+                return JsonResponder::error($response, $e->errorCode, $e->getMessage(), 409);
             } catch (\InvalidArgumentException $e) {
                 return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
             }

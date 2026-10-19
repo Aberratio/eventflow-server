@@ -9,8 +9,9 @@ replace `<...>` placeholders. Nothing here needs more than SSH access to the hos
 |---|---|
 | API repo | `Aberratio/eventflow-server` (this repo), default branch `master` |
 | Frontend repo | `Aberratio/eventflow-platform`, default branch `main` |
-| Environments | `staging`, `production` (GitHub Environments of the same names) |
+| Environments | `dev`, `staging`, `production` (GitHub Environments of the same names) |
 | Host | shared hosting, SSH + `scp`; API unpacked in place into `BACKEND_REMOTE_DIR` |
+| Dev | `workflow_dispatch` only (`deploy_target=dev`), any branch; host `.env` has `APP_ENV=dev` |
 | Staging | deploys **automatically** on every push to `master`/`main` |
 | Production | **`workflow_dispatch` only**, typed confirmation, from `master` (or a `rollback-*` tag) |
 
@@ -21,6 +22,9 @@ remote deploy. A push can never reach production; `scripts/ci/deploy-guard.sh` r
 ## 2. Deploy (API)
 
 **Staging:** merge or push to `master`. Watch Actions, workflow "Deploy API".
+
+**Dev:** Actions, "Deploy API", "Run workflow", any branch, `deploy_target=dev`. Needs the `dev`
+GitHub Environment with the secrets from section 9.
 
 **Production:** Actions, "Deploy API", "Run workflow", branch `master`, `deploy_target=production`,
 `migration_mode=run`, `confirm_production=DEPLOY_PRODUCTION`. With the CLI:

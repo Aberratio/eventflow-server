@@ -63,7 +63,7 @@ final class AppConfigTest extends TestCase
      */
     public static function missingJwtSecretProvider(): iterable
     {
-        foreach ([AppConfig::ENV_LOCAL, AppConfig::ENV_STAGING, AppConfig::ENV_PRODUCTION, null] as $env) {
+        foreach ([AppConfig::ENV_LOCAL, AppConfig::ENV_DEV, AppConfig::ENV_STAGING, AppConfig::ENV_PRODUCTION, null] as $env) {
             $label = $env ?? 'unset';
             yield "$label / missing key" => [$env, null];
             yield "$label / empty string" => [$env, ''];
@@ -127,7 +127,7 @@ final class AppConfigTest extends TestCase
             'Change-Me-anything-' . str_repeat('x', 21),
         ];
         foreach ($placeholders as $secret) {
-            foreach ([AppConfig::ENV_STAGING, AppConfig::ENV_PRODUCTION] as $env) {
+            foreach ([AppConfig::ENV_DEV, AppConfig::ENV_STAGING, AppConfig::ENV_PRODUCTION] as $env) {
                 yield "$secret / $env" => [$secret, $env];
             }
         }
@@ -189,10 +189,13 @@ final class AppConfigTest extends TestCase
         }
     }
 
-    public function testStagingAllowsSandboxAndHttpOrigin(): void
+    /**
+     * @dataProvider stagingLikeEnvProvider
+     */
+    public function testStagingLikeEnvAllowsSandboxAndHttpOrigin(string $appEnv): void
     {
         $env = [
-            'APP_ENV' => AppConfig::ENV_STAGING,
+            'APP_ENV' => $appEnv,
             'JWT_SECRET' => str_repeat('k', 64),
             'APP_CORS_ORIGIN' => 'http://localhost:8080',
         ];
@@ -202,6 +205,17 @@ final class AppConfigTest extends TestCase
         self::assertTrue($config->tpaySandbox);
         self::assertTrue($config->paynowSandbox);
         self::assertSame(['http://localhost:8080'], $config->corsOrigins);
+        self::assertSame($appEnv, $config->appEnv);
+        self::assertFalse($config->isProduction());
+    }
+
+    /**
+     * @return iterable<string, array{0: string}>
+     */
+    public static function stagingLikeEnvProvider(): iterable
+    {
+        yield 'dev' => [AppConfig::ENV_DEV];
+        yield 'staging' => [AppConfig::ENV_STAGING];
     }
 
     public function testUnsetAppEnvUsesProductionRules(): void
@@ -253,6 +267,7 @@ final class AppConfigTest extends TestCase
      */
     public static function corsRequiredEnvProvider(): iterable
     {
+        yield 'dev' => [AppConfig::ENV_DEV];
         yield 'staging' => [AppConfig::ENV_STAGING];
         yield 'production' => [AppConfig::ENV_PRODUCTION];
     }
@@ -291,7 +306,7 @@ final class AppConfigTest extends TestCase
      */
     public static function wildcardCorsProvider(): iterable
     {
-        foreach ([AppConfig::ENV_STAGING, AppConfig::ENV_PRODUCTION] as $env) {
+        foreach ([AppConfig::ENV_DEV, AppConfig::ENV_STAGING, AppConfig::ENV_PRODUCTION] as $env) {
             yield "$env / *" => [$env, '*'];
             yield "$env / mixed" => [$env, 'https://a.pl,*'];
         }

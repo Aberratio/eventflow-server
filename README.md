@@ -85,8 +85,8 @@ along with it.
 
 | Command | What it does | Where |
 | --- | --- | --- |
-| `composer seed` | purge previous demo rows, migrate, load a fresh set | local, staging |
-| `composer seed:purge` | remove demo rows and stop | local, staging |
+| `composer seed` | purge previous demo rows, migrate, load a fresh set | local, dev, staging |
+| `composer seed:purge` | remove demo rows and stop | local, dev, staging |
 | `composer seed:fresh` | drop all tables, migrate, seed | local only |
 | `composer prune-demo` | report demo rows found; `php bin/prune-demo.php --force` deletes them | any, production included |
 | `composer migrate` | schema only; on `APP_ENV=production` it also removes demo rows | any |
@@ -209,7 +209,7 @@ Keep (or create) a real staff account first: the demo `admin@`/`superadmin@zmier
 `POST /api/v1/dev/seed-event` builds a single event with participants, registrations
 and results. The DevToolbox in the frontend calls it. It is available when
 `APP_ENV=local` (no auth needed, for expired dev tokens; accounts it creates use `demo123`) and when
-`APP_ENV=staging` (a live organizer/moderator/admin/superadmin session is required; accounts it creates
+`APP_ENV=dev` or `staging` (a live organizer/moderator/admin/superadmin session is required; accounts it creates
 get no usable password). Disabled everywhere else.
 
 ## Configuration and boot guard
@@ -231,17 +231,17 @@ Rules (see `src/Config/AppConfig.php` for the exact messages):
 
 | Variable | Rule |
 |---|---|
-| `APP_ENV` | One of `local`, `staging`, `production`. Unset defaults to `production` (the strictest rules); an unrecognized value refuses to boot. |
-| `JWT_SECRET` | Required in **every** environment, at least 32 bytes. In staging/production it must also not be a `change-me...` placeholder. No fallback exists — this was previously a literal in the repo, which is a critical vulnerability. |
-| `APP_CORS_ORIGIN` | Comma-separated allowlist of exact front-end origins (`scheme://host[:port]`, no path, no trailing slash). Required in staging/production, where `*` is forbidden and production additionally requires `https://`. Unset in local falls back to the standard dev origins. `Access-Control-Allow-Credentials` is never sent — the client authenticates with a Bearer token only. |
+| `APP_ENV` | One of `local`, `dev`, `staging`, `production`. `dev` is a hosted test instance and follows exactly the `staging` rules everywhere below. Unset defaults to `production` (the strictest rules); an unrecognized value refuses to boot. |
+| `JWT_SECRET` | Required in **every** environment, at least 32 bytes. Outside local it must also not be a `change-me...` placeholder. No fallback exists — this was previously a literal in the repo, which is a critical vulnerability. |
+| `APP_CORS_ORIGIN` | Comma-separated allowlist of exact front-end origins (`scheme://host[:port]`, no path, no trailing slash). Required outside local, where `*` is forbidden and production additionally requires `https://`. Unset in local falls back to the standard dev origins. `Access-Control-Allow-Credentials` is never sent — the client authenticates with a Bearer token only. |
 | `APP_DEBUG` | Boolean. Refused (boot fails) when `true` and `APP_ENV=production`. |
 | `TPAY_SANDBOX` / `PAYNOW_SANDBOX` | Boolean, default `true` (unset means sandbox — fail-closed toward *not* moving real money by accident, but this means unset also blocks production boot). Must be explicitly `false` when `APP_ENV=production`. |
 
 Per-environment required variables (also in `.env.example`):
 
-| Variable | Staging | Production |
+| Variable | Dev / Staging | Production |
 |---|---|---|
-| `APP_ENV` | `staging` (exact) | `production` (exact) |
+| `APP_ENV` | `dev` or `staging` (exact) | `production` (exact) |
 | `JWT_SECRET` | random, 32+ bytes, different from production | random, 32+ bytes, never reused from staging/repo |
 | `APP_CORS_ORIGIN` | explicit origin(s), no `*` | explicit **https** origin(s), no `*`, no http |
 | `APP_DEBUG` | `false` recommended (not enforced) | `false` or unset — `true` refuses to boot |
@@ -328,7 +328,7 @@ by `ZmierzymyCzas\Http\Middleware\SecurityHeadersMiddleware`:
 | `X-Frame-Options` | `DENY` (kept for legacy browsers alongside `frame-ancestors 'none'`) |
 | `Referrer-Policy` | `no-referrer` |
 | `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=()` |
-| `Strict-Transport-Security` | `max-age=31536000`, only when `APP_ENV` is `staging` or `production` (never on `local`). No `includeSubDomains`/`preload` yet — the production domain is not finalized. |
+| `Strict-Transport-Security` | `max-age=31536000`, on every `APP_ENV` except `local`. No `includeSubDomains`/`preload` yet — the production domain is not finalized. |
 
 Headers are set only if the response does not already carry them (`withHeader` after a
 `hasHeader` check), so a future route can opt into its own policy without a conflict.

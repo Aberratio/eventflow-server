@@ -23,6 +23,9 @@ assert_exit 0 guard deploy push staging '' refs/heads/feature
 assert_exit 0 guard deploy $D staging '' $M
 assert_exit 0 guard deploy $D staging '' $M false run
 assert_exit 0 guard deploy $D staging '' $M false skip
+assert_exit 0 guard deploy $D dev '' $M
+assert_exit 0 guard deploy $D dev '' refs/heads/feature false skip
+assert_exit 0 guard rollback $D dev '' $M false '' list
 assert_exit 0 guard deploy $D production DEPLOY_PRODUCTION $M
 assert_exit 0 guard deploy $D production DEPLOY_PRODUCTION $M false run
 assert_exit 0 guard deploy $D production DEPLOY_PRODUCTION refs/tags/rollback-x
@@ -50,6 +53,7 @@ assert_exit 61 guard deploy pull_request staging '' $M
 assert_exit 61 guard deploy schedule staging '' $M
 assert_exit 61 guard deploy '' staging '' $M
 assert_exit 61 guard deploy push production DEPLOY_PRODUCTION $M
+assert_exit 61 guard deploy push dev '' $M
 assert_exit 61 guard rollback push staging '' $M false '' list
 
 # 62: production confirmation is exact

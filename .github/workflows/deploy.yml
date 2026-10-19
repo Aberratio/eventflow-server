@@ -13,6 +13,7 @@ on:
         default: staging
         type: choice
         options:
+          - dev
           - staging
           - production
       migration_mode:

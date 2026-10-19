@@ -186,7 +186,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $virtualResults = new VirtualResultRepository($pdo);
     $series = new SeriesRepository($pdo);
     $shop = new ShopRepository($pdo);
-    $challenges = new ChallengeRepository($pdo);
+    $challenges = new ChallengeRepository($pdo, $onlinePaymentGatewayConfigured);
     $challengePointsSettings = new ChallengePointsSettingsRepository($pdo);
     $challengePointThresholdScorer = new ChallengePointThresholdScorer($pdo, $challengePointsSettings);
     // E6.6 (issue 15 §6): shared ranking collaborator for both the Wyzwanie

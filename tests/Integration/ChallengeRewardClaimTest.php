@@ -268,6 +268,30 @@ final class ChallengeRewardClaimTest extends TestCase
         self::assertSame(0.0, (float) $order['totalPrice']);
     }
 
+    public function testRewardOrderWithCardIsRejectedWhenNoGatewayIsConfigured(): void
+    {
+        $challenges = new ChallengeRepository($this->pdo, false);
+        $challenges->join($this->challengeId, $this->competitor);
+        $this->approveEntry();
+        $product = $this->shop->createProduct($this->productData('nogw-card', 199.0, 2));
+        $this->linkRewardProduct($product);
+
+        try {
+            $challenges->claimReward($this->challengeId, $product['id'], $this->defaultOrderFields(), $this->competitor['id']);
+            self::fail('card must be rejected without a gateway');
+        } catch (\RuntimeException $e) {
+            // Same code as POST /shop/orders (OrderRepository, G-06b).
+            self::assertSame('order_invalid_payment_method', $e->getMessage());
+        }
+
+        // The claim is rolled back, so it can be retried with an offered method.
+        $participation = $challenges->claimReward($this->challengeId, $product['id'], [
+            'deliveryMethod' => ['id' => 'pickup'],
+            'paymentMethod' => ['id' => 'bank'],
+        ], $this->competitor['id']);
+        self::assertTrue($participation['rewardGranted']);
+    }
+
     public function testCannotClaimAProductNotLinkedAsAChallengeReward(): void
     {
         $this->challenges->join($this->challengeId, $this->competitor);

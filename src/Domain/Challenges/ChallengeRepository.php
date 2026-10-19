@@ -50,6 +50,16 @@ final class ChallengeRepository extends Repository
      */
     private ?OrderRepository $orders = null;
 
+    /**
+     * G-06b: whether an online gateway (Tpay/PayNow) is configured. Passed on to the
+     * OrderRepository used for reward orders so they apply the same payment-method
+     * rule as POST /shop/orders (card/BLIK only with a gateway).
+     */
+    public function __construct(\PDO $pdo, private readonly bool $onlineGatewayConfigured = true)
+    {
+        parent::__construct($pdo);
+    }
+
     /** @param array<string, mixed> $filters @return array<int, array<string, mixed>> */
     public function list(array $filters = []): array
     {
@@ -634,7 +644,7 @@ final class ChallengeRepository extends Repository
     private function orders(): OrderRepository
     {
         if ($this->orders === null) {
-            $this->orders = new OrderRepository($this->pdo);
+            $this->orders = new OrderRepository($this->pdo, null, $this->onlineGatewayConfigured);
         }
         return $this->orders;
     }

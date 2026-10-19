@@ -115,6 +115,55 @@ final class StartListExportContractTest extends HttpTestCase
         self::assertStringContainsString('CSV', (string) $row['description']);
     }
 
+    public function testXmlFormatIsServedAsUtf8WithTheSameColumnsAsCsvAndIsLogged(): void
+    {
+        [$eventId, $distanceId] = $this->createEventWithRegistration();
+        $auth = $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email']);
+        $base = '/api/v1/events/' . $eventId . '/distances/' . $distanceId . '/start-list-export';
+
+        $response = $this->request('GET', $base . '?format=xml', [], $auth);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertStringContainsString('application/xml', $response->getHeaderLine('Content-Type'));
+        self::assertStringContainsString('utf-8', strtolower($response->getHeaderLine('Content-Type')));
+        self::assertStringContainsString('attachment', $response->getHeaderLine('Content-Disposition'));
+        self::assertStringContainsString('.xml', $response->getHeaderLine('Content-Disposition'));
+        $doc = new \SimpleXMLElement((string) $response->getBody());
+        self::assertGreaterThanOrEqual(1, count($doc->entry));
+        $xmlLabels = [];
+        foreach ($doc->entry[0]->field as $field) {
+            $xmlLabels[] = (string) $field['label'];
+        }
+        self::assertContains('Numer startowy', $xmlLabels);
+        self::assertContains('Status płatności', $xmlLabels);
+
+        $csv = $this->request('GET', $base . '?format=csv', [], $auth);
+        $csvHeader = str_getcsv((string) strtok((string) iconv('Windows-1250', 'UTF-8', (string) $csv->getBody()), "\n"), ';', '"', '\\');
+        self::assertSame($csvHeader, $xmlLabels, 'XML must carry exactly the CSV columns, in the same order.');
+
+        $stmt = $this->pdo->prepare(
+            "SELECT description, user_id FROM activity_logs WHERE action = 'startlist_exported' AND target_id = :id AND description LIKE '%XML%' ORDER BY timestamp DESC LIMIT 1"
+        );
+        $stmt->execute(['id' => $eventId]);
+        $row = $stmt->fetch();
+        self::assertNotFalse($row, 'An XML export must write an activity_logs entry like CSV/XLSX.');
+        self::assertSame($this->organizer['id'], $row['user_id']);
+    }
+
+    public function testStrangerOrganizerCannotExportXml(): void
+    {
+        [$eventId, $distanceId] = $this->createEventWithRegistration();
+
+        $response = $this->request(
+            'GET',
+            '/api/v1/events/' . $eventId . '/distances/' . $distanceId . '/start-list-export?format=xml',
+            [],
+            $this->bearer($this->stranger['id'], 'organizer', $this->stranger['email'])
+        );
+
+        self::assertSame(403, $response->getStatusCode());
+    }
+
     public function testXlsxFormatIsAlsoServedWithTheCorrectContentType(): void
     {
         [$eventId, $distanceId] = $this->createEventWithRegistration();

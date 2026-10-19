@@ -36,7 +36,7 @@ final class PublicEventPresenter
     /** Manager-only keys, dropped. Documentation + the completeness unit test; not used at runtime. */
     public const WITHHELD_KEYS = [
         'deletedAt', 'rejectionReason', 'submittedAt', 'approvedAt', 'approvedBy',
-        'publishedAt', 'publishedBy', 'createdBy', 'eventCreditKind',
+        'publishedAt', 'publishedBy', 'createdBy', 'eventCreditKind', 'googleCalendarEventId',
     ];
 
     /** Per discount code: everything the client price preview needs (pricing.ts), never `usedBy` (PII). */

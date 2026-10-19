@@ -88,6 +88,7 @@ is_virtual AS isVirtual, event_credit_kind AS eventCreditKind, start_date AS sta
 rules_html AS rulesHtml, organizers_html AS organizersHtml,
 insurance_option AS insuranceOption,
 bz_integration_enabled AS bzIntegrationEnabled, bz_organization_token AS bzOrganizationToken,
+google_calendar_event_id AS googleCalendarEventId,
 enable_merchandise_in_registration AS enableMerchandiseInRegistration,
 final_acceptance_html AS finalAcceptanceHtml,
 require_final_acceptance AS requireFinalAcceptance, is_private AS isPrivate, access_code AS accessCode,

@@ -21,6 +21,7 @@ final class SchedulerJobsTest extends TestCase
             'mail.outbox_reconcile',
             'mail.results_published',
             'mail.outbox_retry',
+            'calendar.outbox_retry',
         ], SchedulerJobs::NAMES);
     }
 }

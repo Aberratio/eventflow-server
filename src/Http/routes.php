@@ -1666,6 +1666,20 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 throw $e;
             }
         })->add(new AuthMiddleware($jwt));
+        // G-04: the roster a captain / the Event's manager chooses the member to swap out of.
+        // Same gate as the swap itself (captain or $canManageEvent); a stranger gets 403, no roster.
+        $api->get('/teams/{teamId}/members', function (Request $request, Response $response, array $args) use ($registrations, $teams, $events, $canManageEvent) {
+            $auth = (array) $request->getAttribute('auth');
+            $team = $teams->find((string) $args['teamId']);
+            if ($team === null) {
+                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+            }
+            if (!TeamRepository::isCaptain($team, (string) ($auth['sub'] ?? '')) && !$canManageEvent($events->find((string) $team['eventId']), $auth)) {
+                return JsonResponder::error($response, 'team_not_captain', 'Tylko kapitan drużyny lub organizator wydarzenia widzi skład z możliwością wymiany.', 403);
+            }
+
+            return JsonResponder::ok($response, $registrations->teamMembers((string) $args['teamId']));
+        })->add(new AuthMiddleware($jwt));
         // G-04 (spec 23 Answer §2 / spec 20 "Transfer"): swap the Zawodnik on a relay member's
         // Zapis. Per-resource check, not a role gate: the Drużyna's captain (until the Dystans's
         // swap deadline) or the Event's manager ($canManageEvent: owner, plus moderator/admin as

@@ -2667,6 +2667,24 @@ SQL;
         ];
     }
 
+    /**
+     * G-04: the roster the captain (or the Event's manager) picks the person to swap out of —
+     * active Zapisy of the Drużyna only (a cancelled/expired/removed one holds no place).
+     *
+     * @return list<array{registrationId: string, name: string, status: string, bibNumber: ?string, competitorId: ?string}>
+     */
+    public function teamMembers(string $teamId): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT id AS registrationId, user_name AS name, status, bib_number AS bibNumber, competitor_id AS competitorId
+             FROM registrations WHERE team_id = :teamId AND status NOT IN ('cancelled', 'removed', 'expired')
+             ORDER BY registered_at ASC, id ASC"
+        );
+        $stmt->execute(['teamId' => $teamId]);
+
+        return array_values($stmt->fetchAll());
+    }
+
     private function teamIdOf(string $registrationId): ?string
     {
         $stmt = $this->pdo->prepare('SELECT team_id FROM registrations WHERE id = :id');

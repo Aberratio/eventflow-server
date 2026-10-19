@@ -265,6 +265,29 @@ final class TeamMemberSwapContractTest extends HttpTestCase
         self::assertSame('team_swap_registration_inactive', $this->json($cancelled)['error']['code']);
     }
 
+    public function testMembersListIsForCaptainAndEventManagerOnlyAndSkipsCancelledZapisy(): void
+    {
+        [$teamId, $memberRegId] = $this->teamWithMember();
+        $path = '/api/v1/teams/' . $teamId . '/members';
+
+        self::assertSame(401, $this->request('GET', $path)->getStatusCode());
+        self::assertSame(403, $this->request('GET', $path, [], $this->bearer($this->stranger['id'], 'participant', $this->stranger['email']))->getStatusCode());
+        self::assertSame(404, $this->request('GET', '/api/v1/teams/nope/members', [], $this->bearer($this->captain['id'], 'participant', $this->captain['email']))->getStatusCode());
+
+        foreach ([$this->captain, $this->organizer] as $actor) {
+            $response = $this->request('GET', $path, [], $this->bearer($actor['id'], (string) $actor['role'], $actor['email']));
+            self::assertSame(200, $response->getStatusCode());
+            $rows = $this->json($response)['data'];
+            self::assertCount(2, $rows);
+            self::assertContains($memberRegId, array_column($rows, 'registrationId'));
+            self::assertSame(['registrationId', 'name', 'status', 'bibNumber', 'competitorId'], array_keys($rows[0]));
+        }
+
+        $this->pdo->prepare("UPDATE registrations SET status = 'cancelled' WHERE id = :id")->execute(['id' => $memberRegId]);
+        $after = $this->json($this->request('GET', $path, [], $this->bearer($this->captain['id'], 'participant', $this->captain['email'])))['data'];
+        self::assertCount(1, $after);
+    }
+
     public function testOrganizerOfAnotherEventCannotSwap(): void
     {
         [$teamId, $memberRegId] = $this->teamWithMember();

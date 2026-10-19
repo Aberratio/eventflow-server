@@ -227,6 +227,7 @@ final class RbacGrid
         'GET /api/v1/users/{userId}/results' => ['policy' => self::PUBLIC, 'params' => ['userId' => 'owner'], 'basis' => 'athlete profile (PP.1 note :700-702) (plan line 2279)'],
         'POST /api/v1/results' => ['policy' => self::EVENT_MANAGER, 'body' => ['eventId' => '@event', 'distanceId' => '@dist'], 'basis' => '$canUploadResults reads the body\'s Event (plan line 2280)'],
         'PATCH /api/v1/results/{id}' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'result'], 'basis' => 'H7 in targeted test (plan line 2292)'],
+        'GET /api/v1/results/{id}/corrections' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'result'], 'basis' => 'G-03: same right as editing the result (spec 14 pkt 6)'],
         'POST /api/v1/events/{eventId}/distances/{distanceId}/results/publish-official' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'distanceId' => 'dist'], 'basis' => 'event manager (owner, moderator, admin) (no extra per-row rule) (plan line 2330)'],
         'DELETE /api/v1/results/{id}' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'result'], 'basis' => 'event manager (owner, moderator, admin) (no extra per-row rule) (plan line 2353)'],
         'GET /api/v1/users/{userId}/personal-records' => ['policy' => self::PUBLIC, 'params' => ['userId' => 'owner'], 'basis' => 'public records (plan line 2367)'],

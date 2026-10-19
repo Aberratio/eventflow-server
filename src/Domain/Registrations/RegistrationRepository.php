@@ -1760,14 +1760,9 @@ SQL;
             // (createTeam truthy) is always priced normally, in both modes.
             // B-07: form answers + identity values of the Zapis's form (the HTTP layer sets
             // `enforceRegistrationForm`; internal/office callers skip the form).
-            $form = null;
-            if (!empty($data['enforceRegistrationForm'])) {
-                $form = (new RegistrationFormService($this->pdo))->prepare($data);
-                $data['formModifierItems'] = $form['modifierItems'];
-            }
             $isJoiningExistingTeam = $team['teamId'] !== null && empty($data['createTeam']);
-            $suppressStartFee = $isJoiningExistingTeam && ($distanceRow['teamPricingMode'] ?? 'per_person') === 'per_team';
-            $pricing = $this->pricingForRegistration($data, $distanceRow, $suppressStartFee);
+            // B-02: the one pricing path — quote() runs exactly this, minus every write.
+            ['data' => $data, 'form' => $form, 'pricing' => $pricing] = $this->priceRegistration($data, $distanceRow, $isJoiningExistingTeam);
             $paymentDetails = $data['paymentDetails'] ?? null;
             $startFeePaid = is_array($paymentDetails) && (bool) ($paymentDetails['startFeePaid'] ?? false);
             $nothingDue = $confirmWhenNothingDue && $this->amountDueFromItems($pricing['settlementItems']) <= 0.0;
@@ -1883,6 +1878,73 @@ SQL;
     }
 
     /**
+     * B-02: the Rozliczenie a Zapis with this payload would get right now, WITHOUT creating it.
+     * Same input as create() (the HTTP layer prepares it identically for both), same pricing code
+     * (priceRegistration()), so the total equals the one of the Zapis created from the same data.
+     * Writes nothing and takes no lock: no Zapis, no answers, no counter bump, no discount use, no
+     * team. Capacity is not checked (a price is not an availability promise) and neither is the
+     * team invitation (create() does that when the Zapis is really made).
+     *
+     * @param array<string, mixed> $data
+     * @return array{eventName: string, distanceName: string, settlementItems: array<int, array{name: string, basis: string, amount: float}>, totalAmount: float, discountCode: ?string}
+     */
+    public function quote(array $data): array
+    {
+        $distanceRow = $this->lockDistanceForRegistration((string) $data['eventId'], (string) $data['distanceId'], false);
+
+        $teamId = isset($data['teamId']) ? trim((string) $data['teamId']) : '';
+        $isJoiningExistingTeam = $teamId !== '' && empty($data['createTeam']);
+        if ($isJoiningExistingTeam && (new TeamRepository($this->pdo))->find($teamId) === null) {
+            throw new \RuntimeException('registration_team_not_found');
+        }
+
+        $pricing = $this->priceRegistration($data, $distanceRow, $isJoiningExistingTeam)['pricing'];
+        // Rounded per line exactly like createSettlementItems() stores them, so the total is the
+        // one hydrate() would report for the stored Zapis.
+        $items = array_map(static fn (array $item): array => [
+            'name' => (string) $item['name'],
+            'basis' => (string) $item['basis'],
+            'amount' => $item['amount'],
+        ], $pricing['settlementItems']);
+        foreach ($items as &$item) {
+            $item['amount'] = $this->roundMoney((float) $item['amount']);
+        }
+        unset($item);
+
+        return [
+            'eventName' => $pricing['eventName'],
+            'distanceName' => $pricing['distanceName'],
+            'settlementItems' => $items,
+            'totalAmount' => $this->amountDueFromItems($items),
+            'discountCode' => $pricing['discountCode'],
+        ];
+    }
+
+    /**
+     * Shared by create() and quote(): form answers -> modifier lines (B-07), then the six-step
+     * Rozliczenie. Reads only (RegistrationFormService::prepare() validates, persist() writes later).
+     *
+     * @param array<string, mixed> $data
+     * @param array<string, mixed> $distanceRow
+     * @return array{data: array<string, mixed>, form: ?array<string, mixed>, pricing: array<string, mixed>}
+     */
+    private function priceRegistration(array $data, array $distanceRow, bool $isJoiningExistingTeam): array
+    {
+        $form = null;
+        if (!empty($data['enforceRegistrationForm'])) {
+            $form = (new RegistrationFormService($this->pdo))->prepare($data);
+            $data['formModifierItems'] = $form['modifierItems'];
+        }
+        $suppressStartFee = $isJoiningExistingTeam && ($distanceRow['teamPricingMode'] ?? 'per_person') === 'per_team';
+
+        return [
+            'data' => $data,
+            'form' => $form,
+            'pricing' => $this->pricingForRegistration($data, $distanceRow, $suppressStartFee),
+        ];
+    }
+
+    /**
      * E1.3: statuses that count against a Dystans's capacity limit and price-tier
      * threshold — "nieanulowane" (rozstrzygnięcie 4 w 07-model-cenowy-zapisu.md).
      * Defined as everything *except* the two terminal not-counted statuses (rather
@@ -1939,7 +2001,7 @@ SQL;
      *
      * @return array<string, mixed>
      */
-    private function lockDistanceForRegistration(string $eventId, string $distanceId): array
+    private function lockDistanceForRegistration(string $eventId, string $distanceId, bool $forUpdate = true): array
     {
         $stmt = $this->pdo->prepare(
             'SELECT e.name AS eventName, e.date AS eventDate, e.payment_config AS paymentConfig,
@@ -1952,8 +2014,9 @@ SQL;
                     d.team_pricing_mode AS teamPricingMode,
                     d.categories AS categories, d.age_categories AS ageCategories
              FROM events e INNER JOIN event_distances d ON d.event_id = e.id
-             WHERE e.id = :eventId AND d.id = :distanceId
-             FOR UPDATE'
+             WHERE e.id = :eventId AND d.id = :distanceId'
+            // quote() reads the same row without the lock — it never writes.
+            . ($forUpdate ? ' FOR UPDATE' : '')
         );
         $stmt->execute(['eventId' => $eventId, 'distanceId' => $distanceId]);
         $row = $stmt->fetch();

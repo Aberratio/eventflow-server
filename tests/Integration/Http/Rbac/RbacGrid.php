@@ -212,6 +212,7 @@ final class RbacGrid
         'GET /api/v1/registrations/{registrationId}/form-field-answers' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['registrationId' => 'registration'], 'basis' => 'PP.2 (plan line 1700)'],
         'GET /api/v1/users/{userId}/registrations' => ['policy' => self::SELF_OR_STAFF, 'params' => ['userId' => 'owner'], 'override' => ['owner' => self::OK], 'basis' => 'PP.2 (plan line 1710)'],
         'POST /api/v1/registrations' => ['policy' => self::AUTH, 'basis' => 'PP.52 (Opieka); H11 in targeted test (plan line 1717)'],
+        'POST /api/v1/registrations/quote' => ['policy' => self::AUTH, 'basis' => 'B-02: same gate as POST /registrations (Opieka, event visibility); writes nothing'],
         'PATCH /api/v1/registrations/{id}' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'PP.2 (plan line 1830)'],
         'POST /api/v1/registrations/{id}/cancel' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'PP.2 (plan line 1849)'],
         'PATCH /api/v1/registrations/{id}/payment-details' => ['policy' => self::REG_MONEY, 'params' => ['id' => 'registration'], 'basis' => 'H6 (plan line 1860)'],

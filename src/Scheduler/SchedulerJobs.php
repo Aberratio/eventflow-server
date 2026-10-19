@@ -17,6 +17,7 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxRepository;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
+use ZmierzymyCzas\Domain\Mailer\CriticalMails\EventReplyToResolver;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
 use ZmierzymyCzas\Domain\Mailer\Http\CurlHttpClient as MailerCurlHttpClient;
 use ZmierzymyCzas\Domain\Mailer\ResultsPublication\ResultsPublicationMailRequests;
@@ -58,7 +59,7 @@ final class SchedulerJobs
         $mailerConfig = CentralMailerConfig::fromEnv();
         $mailerClient = new CentralMailerClient(new MailerCurlHttpClient(), $mailerConfig);
         $outbox = new CentralMailerOutboxService($mailerClient, $outboxRepo = new CentralMailerOutboxRepository($pdo), $logger);
-        $mailer = new CriticalMailer($mailerConfig, $outbox, new MailTemplateRepository($pdo));
+        $mailer = new CriticalMailer($mailerConfig, $outbox, new MailTemplateRepository($pdo), replyToResolver: new EventReplyToResolver($pdo));
         $bzConfig = BzWebhookConfig::fromEnv();
         $bzOutbox = $bzConfig->isConfigured()
             ? new BzWebhookOutboxService(

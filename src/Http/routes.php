@@ -1965,8 +1965,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
 
             $format = strtolower((string) ($request->getQueryParams()['format'] ?? 'csv'));
-            if (!in_array($format, ['csv', 'xlsx'], true)) {
-                return JsonResponder::error($response, 'validation_error', 'Nieobsługiwany format eksportu. Dozwolone: csv, xlsx.', 422);
+            if (!in_array($format, ['csv', 'xlsx', 'xml'], true)) {
+                return JsonResponder::error($response, 'validation_error', 'Nieobsługiwany format eksportu. Dozwolone: csv, xlsx, xml.', 422);
             }
 
             $eventId = (string) $args['eventId'];
@@ -1974,9 +1974,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $export = $registrations->startListExportRows($eventId, $distanceId);
 
             try {
-                $fileContent = $format === 'xlsx'
-                    ? StartListExportFormatter::toXlsx($export['columns'], $export['rows'])
-                    : StartListExportFormatter::toCsv($export['columns'], $export['rows']);
+                $fileContent = match ($format) {
+                    'xlsx' => StartListExportFormatter::toXlsx($export['columns'], $export['rows']),
+                    'xml' => StartListExportFormatter::toXml($export['columns'], $export['rows']),
+                    default => StartListExportFormatter::toCsv($export['columns'], $export['rows']),
+                };
             } catch (\RuntimeException $e) {
                 if ($e->getMessage() === 'xlsx_not_supported') {
                     return JsonResponder::error($response, 'xlsx_not_supported', 'Serwer PHP nie obsluguje zapisu XLSX (brak rozszerzenia ZipArchive). Uzyj eksportu CSV.', 500);
@@ -2005,6 +2007,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return $response
                     ->withHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
                     ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.xlsx"');
+            }
+
+            if ($format === 'xml') {
+                $response->getBody()->write($fileContent);
+                return $response
+                    ->withHeader('Content-Type', 'application/xml; charset=utf-8')
+                    ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.xml"');
             }
 
             $response->getBody()->write($fileContent);

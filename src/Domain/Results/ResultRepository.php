@@ -225,8 +225,8 @@ final class ResultRepository extends Repository
         'timeInSeconds' => [InputRules::NUMBER, 'Czas w sekundach'],
         'netTime' => [InputRules::TEXT_NULLABLE, 'Czas netto'],
         'netTimeInSeconds' => [InputRules::NUMBER_NULLABLE, 'Czas netto w sekundach'],
-        'position' => [InputRules::INT, 'Miejsce'],
-        'categoryPosition' => [InputRules::INT, 'Miejsce w kategorii'],
+        'position' => [InputRules::INT_NULLABLE, 'Miejsce'],
+        'categoryPosition' => [InputRules::INT_NULLABLE, 'Miejsce w kategorii'],
         'gender' => [InputRules::ENUM_NULLABLE, 'Płeć', ['M', 'K']],
         'birthYear' => [InputRules::INT_NULLABLE, 'Rok urodzenia'],
         'splits' => [InputRules::OBJECTS_NULLABLE, 'Międzyczasy'],
@@ -262,6 +262,12 @@ final class ResultRepository extends Repository
     public function create(array $data): array
     {
         InputRules::check($data, self::INPUT_RULES, true);
+        // Places are NOT NULL columns; null means "not given" (renumbering computes them).
+        foreach (['position', 'categoryPosition'] as $placeField) {
+            if (array_key_exists($placeField, $data) && $data[$placeField] === null) {
+                unset($data[$placeField]);
+            }
+        }
         $this->assertSplits($data);
         $status = (string) ($data['status'] ?? 'finished');
         if ($status === 'finished') {
@@ -404,6 +410,20 @@ final class ResultRepository extends Repository
         }
 
         InputRules::check($data, self::INPUT_RULES, false);
+        // G-03: a place is a positive integer or null; null leaves the computed ranking alone.
+        $manualPlaces = [];
+        foreach (['position' => ['position', 'Miejsce'], 'categoryPosition' => ['category_position', 'Miejsce w kategorii']] as $field => [$column, $label]) {
+            if (!array_key_exists($field, $data)) {
+                continue;
+            }
+            if ($data[$field] !== null) {
+                if ((int) $data[$field] < 1) {
+                    throw InputRules::invalid($field, $label);
+                }
+                $manualPlaces[$column] = (int) $data[$field];
+            }
+            unset($data[$field]);
+        }
         $this->assertSplits($data);
         $mapped = $this->map($id, $data, false);
         unset($mapped['id']);
@@ -426,6 +446,12 @@ final class ResultRepository extends Repository
             // (unusual, but the payload technically allows it) leaves its old
             // siblings with a gap - renumber that group too.
             $this->renumberEventDistance((string) $current['eventId'], (string) $current['distanceId']);
+        }
+        // G-03: an organizer's explicit place is applied after the renumbering (which would
+        // overwrite it) and holds until the next renumbering of this event+distance. Not for
+        // non-classified statuses - those keep place 0.
+        if ($manualPlaces !== [] && !in_array($status, self::NON_CLASSIFIED_STATUSES, true)) {
+            $this->updateById('results', $id, $manualPlaces);
         }
         return $this->find($id);
     }

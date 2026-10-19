@@ -1653,15 +1653,33 @@ SQL;
      */
     public function ticketsByUser(string $userId): array
     {
+        $events = [];
+        $eventStmt = $this->pdo->prepare('SELECT date, location FROM events WHERE id = :id');
+
         return array_map(
-            fn (array $registration): array => $this->asTicket($registration),
+            function (array $registration) use (&$events, $eventStmt): array {
+                $eventId = (string) $registration['eventId'];
+                if (!array_key_exists($eventId, $events)) {
+                    $eventStmt->execute(['id' => $eventId]);
+                    $events[$eventId] = $eventStmt->fetch() ?: ['date' => '', 'location' => ''];
+                }
+                return $this->asTicket($registration, $events[$eventId]);
+            },
             $this->byUser($userId)
         );
     }
 
-    /** @param array<string, mixed> $registration */
-    private function asTicket(array $registration): array
+    /**
+     * @param array<string, mixed> $registration
+     * @param array<string, mixed> $event `date` / `location` of the Zapis' Wydarzenie
+     */
+    private function asTicket(array $registration, array $event): array
     {
+        // Spec 11 pkt 4: the Kod startowy is shown only for a paid/confirmed Zapis.
+        $startCodeVisible = $registration['status'] === 'confirmed'
+            || (bool) ($registration['paymentDetails']['startFeePaid'] ?? false);
+        $qrCode = $startCodeVisible && ($registration['qrCode'] ?? '') !== '' ? (string) $registration['qrCode'] : null;
+
         // E1.4: an expired Zapis never got paid and never will (it must be re-created
         // from scratch to try again) — the same terminal, "nothing to show up for"
         // shape as cancelled/removed from the Bilet's point of view.
@@ -1675,8 +1693,16 @@ SQL;
             'userId' => $registration['userId'],
             'eventId' => $registration['eventId'],
             'eventName' => $registration['eventName'],
+            'eventDate' => (string) $event['date'],
+            'location' => (string) $event['location'],
+            'distanceId' => $registration['distanceId'],
             'distanceName' => $registration['distanceName'],
+            'participantName' => $registration['userName'],
+            'participantId' => $registration['userId'],
+            'category' => $registration['category'],
             'bibNumber' => $registration['bibNumber'],
+            'qrCode' => $qrCode,
+            'registrationStatus' => $registration['status'],
             'status' => $status,
             'checkedInAt' => $registration['checkedInAt'],
             // E3.6 (issue 12 §4): "kto potwierdził" — BZ's own opaque

@@ -264,6 +264,32 @@ final class RegistrationAccessContractTest extends HttpTestCase
         }
     }
 
+    public function testTicketsCarryFrontendTicketFieldsAndGateStartCodeByPayment(): void
+    {
+        $path = '/api/v1/users/' . $this->participantP['id'] . '/tickets';
+        $auth = $this->bearer($this->participantP['id'], 'participant', $this->participantP['email']);
+        $this->pdo->prepare("UPDATE registrations SET status = 'pending' WHERE id = :id")->execute(['id' => $this->registrationRP['id']]);
+        $this->pdo->prepare('UPDATE registrations SET qr_code = :qr WHERE id = :id')->execute(['qr' => 'pqr_' . str_repeat('a', 48), 'id' => $this->registrationRP['id']]);
+
+        $unpaid = json_decode((string) $this->request('GET', $path, [], $auth)->getBody(), true)['data'][0] ?? [];
+        foreach (['eventDate', 'location', 'participantName', 'distanceId', 'participantId', 'category', 'registrationStatus', 'qrCode'] as $key) {
+            self::assertArrayHasKey($key, $unpaid, $key);
+        }
+        self::assertSame($this->eventA['date'], $unpaid['eventDate']);
+        self::assertSame($this->eventA['location'], $unpaid['location']);
+        self::assertSame($this->participantP['name'], $unpaid['participantName']);
+        self::assertSame($this->participantP['id'], $unpaid['participantId']);
+        self::assertSame($this->eventA['distances'][0]['id'], $unpaid['distanceId']);
+        self::assertSame('Open', $unpaid['category']);
+        self::assertSame('pending', $unpaid['registrationStatus']);
+        self::assertNull($unpaid['qrCode'], 'start code must stay hidden until the Zapis is paid/confirmed (spec 11 pkt 4)');
+
+        $this->pdo->prepare("UPDATE registrations SET status = 'confirmed' WHERE id = :id")->execute(['id' => $this->registrationRP['id']]);
+        $paid = json_decode((string) $this->request('GET', $path, [], $auth)->getBody(), true)['data'][0] ?? [];
+        self::assertSame('confirmed', $paid['registrationStatus']);
+        self::assertSame('pqr_' . str_repeat('a', 48), $paid['qrCode']);
+    }
+
     public function testGlobalRegistrationListIsStaffOnly(): void
     {
         $participantResp = $this->request('GET', '/api/v1/registrations', [], $this->bearer($this->participantP['id'], 'participant', $this->participantP['email']));

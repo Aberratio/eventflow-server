@@ -178,8 +178,11 @@ ones so a series shows both results and a next date. Existing links are never di
 ### Logins
 
 Demo users seeded by `composer seed` on a **local** database (`APP_ENV=local`) all use password `demo1234`.
-On any other environment (dev, staging) `bin/seed.php` scrubs those passwords right after seeding, so the accounts
-exist but nobody can sign in to them (use "Nie pamiętam hasła" on a real account instead):
+On any other environment (staging) `bin/seed.php` scrubs those passwords right after seeding, so the accounts
+exist but nobody can sign in to them (use "Nie pamiętam hasła" on a real account instead). To keep the demo
+logins usable on dev/staging, set `SEED_DEMO_PASSWORD` in that server's `.env` (at least 8 characters, not
+`demo123`/`demo1234`): the seed then gives every seeded account that password instead of scrubbing it. A rejected
+value scrubs the accounts and fails the seed. A later `bin/scrub-demo-passwords.php` run removes it again.
 
 - `jan@example.com` participant
 - `marek@timing.pl` organizer

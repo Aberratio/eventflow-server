@@ -393,6 +393,27 @@ final class OrderRepository extends Repository
      * @param array<string, array<string, mixed>> $catalog
      * @return array<string, mixed>
      */
+    /**
+     * G-06: the payment methods the shop can really take, as `{id, name}` rows.
+     * Card and BLIK are online-gateway methods, so they are offered only when a
+     * gateway (Tpay or PayNow) is configured; bank transfer needs no gateway.
+     * Same catalog as create() accepts (PAYMENT_METHODS).
+     *
+     *  list<array{id: string, name: string}>
+     */
+    public function availablePaymentMethods(bool $onlineGatewayConfigured): array
+    {
+        $methods = [];
+        foreach (self::PAYMENT_METHODS as $id => $method) {
+            if (!$onlineGatewayConfigured && $id !== 'bank') {
+                continue;
+            }
+            $methods[] = ['id' => $method['id'], 'name' => $method['name']];
+        }
+
+        return $methods;
+    }
+
     private function resolveMethod(array $submitted, array $catalog, string $errorCode): array
     {
         $methodId = (string) ($submitted['id'] ?? '');

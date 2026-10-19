@@ -111,6 +111,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $payNowHttp = new CurlHttpClient();
     $payNowGateway = $payNowConfig->isConfigured() ? new PayNowGateway($payNowHttp, $payNowConfig) : null;
     $payNowNotificationVerifier = new PayNowNotificationVerifier($payNowConfig);
+    // G-06: card/BLIK are offered in the shop only when an online gateway is configured.
+    $onlinePaymentGatewayConfigured = $tpayConfig->isConfigured() || $payNowConfig->isConfigured();
     // E1.10: Central Mailer-backed critical mail sending, built on top of E1.9's
     // outbox service. Same "isConfigured() gates whether sending is even
     // attempted" stance as Tpay/PayNow above — CriticalMailer checks
@@ -456,7 +458,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $onlinePaymentGatewayConfigured): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // PP.20: a cheap round trip on the connection index.php already opened.
             try {
@@ -618,6 +620,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 'tv' => $users->tokenVersion((string) $user['id']),
                 'jti' => JwtService::newJti(),
             ]);
+            $users->recordLogin((string) $user['id']);
+            $user = $users->find((string) $user['id']) ?? $user;
             return JsonResponder::ok($response, ['user' => $user, 'token' => $token]);
         });
 
@@ -3053,11 +3057,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             ['id' => 'paczkomat', 'name' => 'Paczkomat', 'price' => 12.99, 'estimatedDays' => '1-2 dni'],
             ['id' => 'pickup', 'name' => 'Odbior osobisty', 'price' => 0, 'estimatedDays' => 'w dniu zawodow'],
         ]));
-        $api->get('/shop/payment-methods', static fn (Request $request, Response $response) => JsonResponder::ok($response, [
-            ['id' => 'card', 'name' => 'Karta platnicza'],
-            ['id' => 'blik', 'name' => 'BLIK'],
-            ['id' => 'bank', 'name' => 'Przelew bankowy'],
-        ]));
+        $api->get('/shop/payment-methods', static fn (Request $request, Response $response) => JsonResponder::ok($response, $orders->availablePaymentMethods($onlinePaymentGatewayConfigured)));
 
         $api->get('/insurance/settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $insurance->getSettings()));
         $api->patch('/insurance/settings', function (Request $request, Response $response) use ($insurance, $body, $logActivity) {
@@ -3683,6 +3683,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // ticket's literal "zestawienia dla admina platformy" — this is a
         // platform-wide aggregate, not an Event-scoped operational view like
         // online-sessions/activity-logs above that moderator also needs.
+        // G-05: sales dashboard (monthly revenue, top products, orders by status) - admin-only like platform-stats.
+        $api->get('/admin/sales-stats', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->salesStats()))
+            ->add(new AuthMiddleware($jwt, $adminRoles));
         $api->get('/admin/platform-stats', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->platformStats()))
             ->add(new AuthMiddleware($jwt, $adminRoles));
 

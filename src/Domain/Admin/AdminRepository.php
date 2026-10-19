@@ -132,6 +132,59 @@ final class AdminRepository extends Repository
     }
 
     /**
+     * G-05: sales dashboard for the admin overview. Revenue counts orders that
+     * were actually paid (paid / shipped / delivered); the last 12 calendar
+     * months are always returned (zero-filled), oldest first. `fill` is the
+     * chart colour of the status slice.
+     *
+     *  array{monthlyRevenue: array<int, array{month: string, revenue: float}>, topProducts: array<int, array{id: string, name: string, sold: int, revenue: float}>, ordersByStatus: array<int, array{status: string, count: int, fill: string}>}
+     */
+    public function salesStats(): array
+    {
+        $paid = "('paid','shipped','delivered')";
+
+        $from = (new \DateTimeImmutable('first day of this month'))->modify('-11 months')->setTime(0, 0);
+        $stmt = $this->pdo->prepare(
+            "SELECT DATE_FORMAT(created_at, '%Y-%m') AS month, SUM(total_price) AS revenue FROM shop_orders WHERE status IN {$paid} AND created_at >= :from GROUP BY month"
+        );
+        $stmt->execute(['from' => $from->format('Y-m-d H:i:s')]);
+        $byMonth = array_column($stmt->fetchAll(), 'revenue', 'month');
+        $monthlyRevenue = [];
+        for ($i = 0; $i < 12; $i++) {
+            $month = $from->modify("+{$i} months")->format('Y-m');
+            $monthlyRevenue[] = ['month' => $month, 'revenue' => round((float) ($byMonth[$month] ?? 0), 2)];
+        }
+
+        $stmt = $this->pdo->query(
+            "SELECT i.product_id AS id, MAX(i.product_name) AS name, SUM(i.quantity) AS sold, SUM(i.quantity * i.price) AS revenue FROM shop_order_items i JOIN shop_orders o ON o.id = i.order_id WHERE o.status IN {$paid} GROUP BY i.product_id ORDER BY revenue DESC, sold DESC LIMIT 5"
+        );
+        $topProducts = array_map(static fn (array $r): array => [
+            'id' => (string) $r['id'],
+            'name' => (string) $r['name'],
+            'sold' => (int) $r['sold'],
+            'revenue' => round((float) $r['revenue'], 2),
+        ], $stmt->fetchAll());
+
+        $labels = [
+            'pending' => ['Oczekujące', '#f59e0b'],
+            'paid' => ['Opłacone', '#22c55e'],
+            'shipped' => ['Wysłane', '#3b82f6'],
+            'delivered' => ['Dostarczone', '#14b8a6'],
+            'cancelled' => ['Anulowane', '#ef4444'],
+            'refunded' => ['Zwrócone', '#a855f7'],
+        ];
+        $counts = array_column($this->pdo->query('SELECT status, COUNT(*) AS cnt FROM shop_orders GROUP BY status')->fetchAll(), 'cnt', 'status');
+        $ordersByStatus = [];
+        foreach ($labels as $status => [$label, $fill]) {
+            if ((int) ($counts[$status] ?? 0) > 0) {
+                $ordersByStatus[] = ['status' => $label, 'count' => (int) $counts[$status], 'fill' => $fill];
+            }
+        }
+
+        return ['monthlyRevenue' => $monthlyRevenue, 'topProducts' => $topProducts, 'ordersByStatus' => $ordersByStatus];
+    }
+
+    /**
      * E8.3 (spec 21 Answer §6): the minimal, explicitly-closed platform-admin
      * cross-section over Events/Organizers — "liczba Wydarzeń wg statusu
      * publikacyjnego z ticketu 08 [E1.1], liczba Organizatorów, liczba

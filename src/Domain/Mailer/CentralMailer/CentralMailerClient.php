@@ -65,6 +65,15 @@ final class CentralMailerClient implements CentralMailerClientInterface
         if (!empty($email['attachments'])) {
             $payload['attachments'] = $email['attachments'];
         }
+        // Per-message Reply-To (spec 17 §4); Central Mailer falls back to its global one when absent.
+        $replyToEmail = trim((string) ($email['replyTo']['email'] ?? ''));
+        if ($replyToEmail !== '') {
+            $payload['replyTo'] = ['email' => $replyToEmail];
+            $replyToName = trim((string) ($email['replyTo']['name'] ?? ''));
+            if ($replyToName !== '') {
+                $payload['replyTo']['name'] = $replyToName;
+            }
+        }
 
         $headers = [
             'X-API-Key' => $this->config->apiKey,

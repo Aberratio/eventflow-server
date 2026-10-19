@@ -57,6 +57,7 @@ final class CentralMailerOutboxService
      *   contextId?: ?string,
      *   metadata?: ?array<string, mixed>,
      *   attachments?: ?list<array<string, mixed>>,
+     *   replyTo?: ?array{email: string, name?: ?string},
      * } $message
      * @return array<string, mixed> the outbox row (existing, if this idempotency
      *         key was already recorded — nothing is sent twice)
@@ -155,6 +156,7 @@ final class CentralMailerOutboxService
             // normalise key order, and Central Mailer hashes json_encode(metadata).
             'metadata' => self::canonical($message['metadata'] ?? null),
             'attachments' => $message['attachments'] ?? null,
+            'replyTo' => $message['replyTo'] ?? null,
             'attempts' => $attempts,
             'nextAttemptAt' => $nextAttemptAtUtc,
         ]);
@@ -180,6 +182,10 @@ final class CentralMailerOutboxService
         ];
         if (is_array($row['attachments'] ?? null) && $row['attachments'] !== []) {
             $payload['attachments'] = $row['attachments'];
+        }
+        // From the stored row, like everything else, so a retry resends the identical replyTo.
+        if (is_array($row['replyTo'] ?? null)) {
+            $payload['replyTo'] = $row['replyTo'];
         }
 
         try {

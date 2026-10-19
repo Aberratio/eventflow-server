@@ -54,6 +54,37 @@ final class CentralMailerClientTest extends TestCase
         self::assertArrayNotHasKey('category', $sent);
     }
 
+    public function testEnqueueSendsReplyToWhenGiven(): void
+    {
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'em-r', 'status' => 'pending'])));
+
+        $this->client->enqueue([
+            'to' => 'runner@example.test',
+            'subject' => 'S',
+            'html' => '<p>hi</p>',
+            'replyTo' => ['email' => 'organizer@club.test', 'name' => 'Klub Biegowy'],
+        ], 'k-reply');
+
+        $sent = json_decode((string) $this->http->calls[0]['body'], true);
+        self::assertSame(['email' => 'organizer@club.test', 'name' => 'Klub Biegowy'], $sent['replyTo']);
+    }
+
+    public function testEnqueueOmitsReplyToWhenAbsentOrBlankAndNameWhenEmpty(): void
+    {
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'em-1', 'status' => 'pending'])));
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'em-2', 'status' => 'pending'])));
+        $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'em-3', 'status' => 'pending'])));
+        $base = ['to' => 'runner@example.test', 'subject' => 'S', 'html' => '<p>hi</p>'];
+
+        $this->client->enqueue($base, 'k1');
+        $this->client->enqueue($base + ['replyTo' => ['email' => '']], 'k2');
+        $this->client->enqueue($base + ['replyTo' => ['email' => 'organizer@club.test', 'name' => null]], 'k3');
+
+        self::assertArrayNotHasKey('replyTo', json_decode((string) $this->http->calls[0]['body'], true));
+        self::assertArrayNotHasKey('replyTo', json_decode((string) $this->http->calls[1]['body'], true));
+        self::assertSame(['email' => 'organizer@club.test'], json_decode((string) $this->http->calls[2]['body'], true)['replyTo']);
+    }
+
     public function testEnqueueOmitsIdempotencyKeyHeaderWhenNoneGiven(): void
     {
         $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'em-1', 'status' => 'pending'])));

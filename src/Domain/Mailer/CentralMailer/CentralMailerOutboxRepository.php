@@ -16,7 +16,8 @@ final class CentralMailerOutboxRepository extends Repository
 {
     private const COLUMNS = 'id, source_entity_type AS sourceEntityType, source_entity_id AS sourceEntityId, '
         . 'idempotency_key AS idempotencyKey, priority, recipient, subject, html, context_id AS contextId, '
-        . 'metadata, attachments, central_mailer_email_id AS centralMailerEmailId, status, attempts, '
+        . 'metadata, attachments, reply_to_email AS replyToEmail, reply_to_name AS replyToName, '
+        . 'central_mailer_email_id AS centralMailerEmailId, status, attempts, '
         . 'next_attempt_at AS nextAttemptAt, last_error AS lastError, '
         . 'created_at AS createdAt, sent_to_mailer_at AS sentToMailerAt, last_checked_at AS lastCheckedAt';
 
@@ -39,6 +40,7 @@ final class CentralMailerOutboxRepository extends Repository
      *   contextId?: ?string,
      *   metadata?: ?array<string, mixed>,
      *   attachments?: ?list<array<string, mixed>>,
+     *   replyTo?: ?array{email: string, name?: ?string},
      *   attempts?: int,
      *   nextAttemptAt?: ?string,
      * } $data
@@ -63,6 +65,8 @@ final class CentralMailerOutboxRepository extends Repository
             'attachments' => $attachments !== null && $attachments !== []
                 ? json_encode($attachments, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)
                 : null,
+            'reply_to_email' => $data['replyTo']['email'] ?? null,
+            'reply_to_name' => $data['replyTo']['name'] ?? null,
             'status' => 'queued',
             'attempts' => $data['attempts'] ?? 0,
             'next_attempt_at' => $data['nextAttemptAt'] ?? null,
@@ -261,6 +265,11 @@ final class CentralMailerOutboxRepository extends Repository
             if (!is_array($decoded['attachments'])) {
                 $decoded['attachments'] = null;
             }
+            $replyToEmail = $decoded['replyToEmail'] ?? null;
+            $decoded['replyTo'] = is_string($replyToEmail) && $replyToEmail !== ''
+                ? ['email' => $replyToEmail, 'name' => is_string($decoded['replyToName'] ?? null) ? $decoded['replyToName'] : null]
+                : null;
+            unset($decoded['replyToEmail'], $decoded['replyToName']);
         }
 
         return $decoded;

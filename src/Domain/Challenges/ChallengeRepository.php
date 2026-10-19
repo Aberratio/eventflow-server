@@ -902,6 +902,35 @@ final class ChallengeRepository extends Repository
         return $row;
     }
 
+    /**
+     * G-02 (spec 15 §3): result-derived progress follows the results. Called by the write paths
+     * that publish or change results of an Event (new result, correction, delete, preliminary /
+     * official publication, import commit). Recomputes - for every participant of every Wyzwanie
+     * that contains the Event and has a result there (or a result-derived entry left from one) -
+     * the result-sourced entries, and returns those participations so the caller can run the
+     * idempotent completion check (checkCompletion() + mail #13).
+     *
+     * @return array<int, array{challengeId: string, userId: string}>
+     */
+    public function syncForEvent(string $eventId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT cp.challenge_id AS challengeId, cp.user_id AS userId
+             FROM challenge_participations cp
+             INNER JOIN challenge_events ce ON ce.challenge_id = cp.challenge_id AND ce.event_id = :eventId1
+             WHERE EXISTS (SELECT 1 FROM results r WHERE r.event_id = ce.event_id AND r.user_id = cp.user_id)
+                OR EXISTS (SELECT 1 FROM challenge_entries e WHERE e.challenge_id = cp.challenge_id AND e.user_id = cp.user_id AND e.event_id = ce.event_id AND e.source = \'result\')'
+        );
+        $stmt->execute(['eventId1' => $eventId]);
+        $touched = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $this->syncResultEntries((string) $row['challengeId'], (string) $row['userId']);
+            $touched[] = ['challengeId' => (string) $row['challengeId'], 'userId' => (string) $row['userId']];
+        }
+
+        return $touched;
+    }
+
     private function entryFor(string $challengeId, string $userId, string $eventId): ?array
     {
         $stmt = $this->pdo->prepare('SELECT id FROM challenge_entries WHERE challenge_id = :challengeId AND user_id = :userId AND event_id = :eventId');
@@ -945,6 +974,14 @@ final class ChallengeRepository extends Repository
                 'source' => 'result',
             ]);
         }
+        // G-02: a correction (or deletion) can take a result out of "finished"; the entry it
+        // produced must go with it. Only system-derived entries are touched - a manual entry
+        // approved by a reviewer stays.
+        $this->pdo->prepare(
+            "DELETE e FROM challenge_entries e
+             WHERE e.challenge_id = :challengeId AND e.user_id = :userId AND e.source = 'result'
+               AND NOT EXISTS (SELECT 1 FROM results r WHERE r.event_id = e.event_id AND r.user_id = e.user_id AND r.status = 'finished')"
+        )->execute(['challengeId' => $challengeId, 'userId' => $userId]);
     }
 
     /** @param array<string, mixed> $data @return array<string, mixed> */

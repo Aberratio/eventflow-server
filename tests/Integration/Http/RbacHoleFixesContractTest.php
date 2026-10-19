@@ -108,7 +108,7 @@ final class RbacHoleFixesContractTest extends HttpTestCase
         $created = $this->request('POST', '/api/v1/shop/orders', [
             'items' => [['productId' => $product['id'], 'productName' => $product['name'], 'quantity' => 1, 'price' => 50]],
             'deliveryMethod' => ['id' => 'courier', 'name' => 'Kurier', 'price' => 0],
-            'paymentMethod' => ['id' => 'blik', 'name' => 'BLIK'],
+            'paymentMethod' => ['id' => 'bank', 'name' => 'Przelew bankowy'],
             'shippingAddress' => ['fullName' => 'Jan Kowalski', 'street' => 'Testowa 1', 'city' => 'Warszawa', 'postalCode' => '00-001'],
         ], $this->as('owner'));
         self::assertSame(201, $created->getStatusCode());
@@ -206,6 +206,38 @@ final class RbacHoleFixesContractTest extends HttpTestCase
         $own = $this->request('PATCH', '/api/v1/events/' . $id, ['paymentConfig' => ['type' => 'organizer_bank', 'bankAccountNumber' => '11 1111']], $this->as('organizer'));
         self::assertSame(200, $own->getStatusCode());
         self::assertStringContainsString('11 1111', (string) $this->scalar('SELECT payment_config FROM events WHERE id = :id', ['id' => $id]));
+    }
+
+    /**
+     * G-10 (macierz §2: przekazanie własności = zastrzeżone dla Właściciela, "jedyna droga wyjścia,
+     * gdy Właściciel odchodzi"; Admin może wymusić). Moderator = Współzarządzający: 403 (covered above).
+     */
+    public function testOwnerAndAdminMayTransferOwnershipButForeignOrganizerMayNot(): void
+    {
+        $target = (string) self::$fx->values['foreignOrganizer'];
+        self::$sharedPdo->prepare('UPDATE users SET event_limit = 99 WHERE id = :id')->execute(['id' => $target]);
+
+        $mine = $this->newEvent();
+        self::$sharedPdo->prepare("UPDATE events SET publication_status = 'draft' WHERE id = :id")->execute(['id' => $mine['id']]);
+        $foreign = $this->request('PATCH', '/api/v1/events/' . $mine['id'], ['organizerId' => $target], $this->as('foreignOrganizer'));
+        self::assertSame(403, $foreign->getStatusCode());
+        self::assertSame(self::$fx->values['organizer'], $this->scalar('SELECT organizer_id FROM events WHERE id = :id', ['id' => $mine['id']]));
+
+        $owner = $this->request('PATCH', '/api/v1/events/' . $mine['id'], ['organizerId' => $target], $this->as('organizer'));
+        self::assertSame(200, $owner->getStatusCode(), (string) $owner->getBody());
+        self::assertSame($target, $this->scalar('SELECT organizer_id FROM events WHERE id = :id', ['id' => $mine['id']]));
+
+        $forced = $this->newEvent();
+        self::$sharedPdo->prepare("UPDATE events SET publication_status = 'cancelled' WHERE id = :id")->execute(['id' => $forced['id']]);
+        $admin = $this->request('PATCH', '/api/v1/events/' . $forced['id'], ['organizerId' => $target], $this->as('admin'));
+        self::assertSame(200, $admin->getStatusCode(), (string) $admin->getBody());
+        self::assertSame($target, $this->scalar('SELECT organizer_id FROM events WHERE id = :id', ['id' => $forced['id']]));
+
+        // The existing PP.4 stance stays: a live (published) Event cannot be handed over by anyone.
+        $live = $this->newEvent();
+        self::$sharedPdo->prepare("UPDATE events SET publication_status = 'published' WHERE id = :id")->execute(['id' => $live['id']]);
+        $locked = $this->request('PATCH', '/api/v1/events/' . $live['id'], ['organizerId' => $target], $this->as('organizer'));
+        self::assertSame(409, $locked->getStatusCode());
     }
 
     public function testMoneyOperationsAreOwnerOrAdminOnly(): void

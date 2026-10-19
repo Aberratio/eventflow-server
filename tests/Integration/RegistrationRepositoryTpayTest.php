@@ -152,6 +152,56 @@ final class RegistrationRepositoryTpayTest extends TestCase
         self::assertNotNull($this->rawGatewayTransaction('TX-second'));
     }
 
+    public function testRetryPaymentOnPendingGatewayRegistrationStartsANewSessionWithoutChangingTheWindow(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-retry-pending']));
+        $this->gateway->nextSession = ['transactionId' => 'TX-p1', 'redirectUrl' => 'https://pay.example.test/p1'];
+        $registration = $this->registrations->create($this->registrationPayload($event));
+        $windowBefore = $this->registrations->find($registration['id'])['paymentExpiresAt'];
+        self::assertNotNull($windowBefore);
+
+        $this->gateway->nextSession = ['transactionId' => 'TX-p2', 'redirectUrl' => 'https://pay.example.test/p2'];
+        $retried = $this->registrations->retryPayment($registration['id']);
+
+        self::assertSame('pending', $retried['status']);
+        self::assertSame($registration['id'], $retried['id']);
+        self::assertSame('TX-p2', $retried['paymentSession']['transactionId']);
+        self::assertSame($windowBefore, $retried['paymentExpiresAt']);
+        self::assertSame(80.0, $this->gateway->startSessionCalls[1]['amount']);
+        self::assertSame($registration['id'], $this->gateway->startSessionCalls[1]['registrationId']);
+        self::assertSame($registration['id'], $this->rawGatewayTransaction('TX-p2')['registrationId']);
+    }
+
+    public function testPayingBothSessionsOfARetriedPendingRegistrationConfirmsItOnlyOnce(): void
+    {
+        $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-retry-twice']));
+        $this->gateway->nextSession = ['transactionId' => 'TX-t1', 'redirectUrl' => 'https://pay.example.test/t1'];
+        $registration = $this->registrations->create($this->registrationPayload($event));
+        $this->gateway->nextSession = ['transactionId' => 'TX-t2', 'redirectUrl' => 'https://pay.example.test/t2'];
+        $this->registrations->retryPayment($registration['id']);
+
+        $first = $this->registrations->applyGatewayNotification('TX-t1', true, 8000);
+        $second = $this->registrations->applyGatewayNotification('TX-t2', true, 8000);
+
+        self::assertSame('confirmed', $this->rawStatus($registration['id']));
+        self::assertSame($registration['id'], $first['registrationId']);
+        self::assertSame($registration['id'], $second['registrationId']);
+        self::assertSame(1, $this->rawRegisteredCount($event['distances'][0]['id']));
+    }
+
+    public function testRetryPaymentOnPendingBankTransferRegistrationIsRejected(): void
+    {
+        $event = $this->events->create($this->payload([
+            'slug' => $this->slugPrefix . '-retry-bank',
+            'paymentConfig' => ['type' => 'organizer_bank', 'bankAccountHolder' => 'Org'],
+        ]));
+        $registration = $this->registrations->create($this->registrationPayload($event));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('retry_not_available_for_bank_transfer');
+        $this->registrations->retryPayment($registration['id']);
+    }
+
     public function testApplyGatewayNotificationConfirmsAPendingRegistration(): void
     {
         $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-notif']));

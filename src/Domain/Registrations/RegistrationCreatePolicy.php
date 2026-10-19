@@ -22,6 +22,8 @@ final class RegistrationCreatePolicy
         'teamName', 'teamId', 'teamInviteToken', 'createTeam', 'specialCategory',
         'pricingVariantId', 'discountCode', 'merchandise', 'merchandiseOrders',
         'insuranceVariantId',
+        // B-07: answers to the Event's form (validated and priced server-side by RegistrationFormService).
+        'formFieldAnswers', 'identity',
     ];
 
     /** Flags inside `paymentDetails` that assert a payment happened. */

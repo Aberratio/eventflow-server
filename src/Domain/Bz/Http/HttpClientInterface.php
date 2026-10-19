@@ -8,8 +8,8 @@ namespace ZmierzymyCzas\Domain\Bz\Http;
  * The seam every real outbound call to Biuro Zawodów's webhook receiver goes
  * through — BzWebhookClient depends on this interface, never on curl directly.
  * Tests inject a fake implementation (tests/Support/FakeBzHttpClient.php) so
- * nothing in this repo's test suite ever opens a real socket — there is no live
- * BZ receiver to call anyway (see BzWebhookClient's doc comment).
+ * nothing in this repo's test suite ever opens a real socket (see
+ * BzWebhookClient's doc comment).
  */
 interface HttpClientInterface
 {

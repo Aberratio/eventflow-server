@@ -15,7 +15,7 @@ final class CompetitorRepository extends Repository
 {
     private const COLUMNS = <<<'SQL'
 id, first_name AS firstName, last_name AS lastName, birth_date AS birthDate, gender,
-email, phone, club, identity_code AS identityCode, status, merged_into_competitor_id AS mergedIntoCompetitorId,
+email, phone, club, country, city, postal_code AS postalCode, voivodeship, address, identity_code AS identityCode, status, merged_into_competitor_id AS mergedIntoCompetitorId,
 is_anonymized AS isAnonymized, user_id AS userId, created_at AS createdAt, updated_at AS updatedAt
 SQL;
 

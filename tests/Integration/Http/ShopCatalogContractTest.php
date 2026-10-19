@@ -248,13 +248,15 @@ final class ShopCatalogContractTest extends HttpTestCase
         $staffIds = array_column($staffList['data'], 'id');
         self::assertContains($productId, $staffIds);
 
-        // Slug lookup (public product page) must 404-equivalent (null data).
-        $slugResp = $this->json($this->request('GET', '/api/v1/shop/products/slug/' . $slug));
-        self::assertNull($slugResp['data']);
+        // Slug lookup (public product page) must 404 (D-01).
+        $slugResp = $this->request('GET', '/api/v1/shop/products/slug/' . $slug);
+        self::assertSame(404, $slugResp->getStatusCode());
+        self::assertSame('not_found', $this->json($slugResp)['error']['code'] ?? null);
 
         // Direct ID lookup must also hide the archived product from the public.
-        $idResp = $this->json($this->request('GET', '/api/v1/shop/products/' . $productId));
-        self::assertNull($idResp['data']);
+        $idResp = $this->request('GET', '/api/v1/shop/products/' . $productId);
+        self::assertSame(404, $idResp->getStatusCode());
+        self::assertSame('not_found', $this->json($idResp)['error']['code'] ?? null);
 
         // ...but staff fetching by ID (e.g. the admin edit screen) still gets it.
         $staffIdResp = $this->json($this->request(

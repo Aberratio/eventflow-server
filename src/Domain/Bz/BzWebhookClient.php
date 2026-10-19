@@ -9,8 +9,7 @@ use ZmierzymyCzas\Domain\Bz\Http\HttpClientInterface;
 /**
  * Real HTTP client for BZ's critical-change webhook — every call here is a
  * genuine outbound POST; only the destination (BzWebhookConfig::baseUrl, from
- * env) and the fact that nothing is listening on the other end yet are
- * placeholders (see BzWebhookClientInterface's doc comment).
+ * env) is a deployment setting (see BzWebhookClientInterface's doc comment).
  *
  * Payload discipline (issue 12 §5, "bez kwot"): this class never adds anything
  * to the payload beyond what BzWebhookOutboxService already built — no

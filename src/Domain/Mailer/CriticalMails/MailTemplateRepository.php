@@ -73,6 +73,46 @@ final class MailTemplateRepository extends Repository
         ];
     }
 
+    /**
+     * B-03 preview: renders a template with the SAME MailRenderer the send path uses
+     * (CriticalMailer::send()), over example variables of the mail type. Nothing is written.
+     * `$subject`/`$bodyHtml` are the unsaved draft; a null part falls back to the effective
+     * saved template (event override > global > catalog default). A placeholder outside the
+     * mail type's closed list is not an error here (a save would reject it): it is reported in
+     * `unknownVariables` and left visibly unreplaced, exactly as a send would leave it.
+     *
+     * @param array<string, string> $sampleOverrides
+     * @return array{mailType: string, eventId: ?string, source: string, subject: string, bodyHtml: string,
+     *               template: array{subject: string, bodyHtml: string}, variables: array<string, string>,
+     *               unknownVariables: array<int, string>}
+     * @throws \InvalidArgumentException unknown mail type, or a per-event preview of a non-overridable type
+     */
+    public function preview(string $mailType, ?string $eventId, ?string $subject, ?string $bodyHtml, array $sampleOverrides = []): array
+    {
+        $definition = MailCatalog::get($mailType);
+        if ($eventId !== null && !$definition['overridable']) {
+            throw new \InvalidArgumentException('mail_type_not_overridable: ' . $mailType);
+        }
+
+        $effective = $this->resolve($mailType, $eventId);
+        $draft = $subject !== null || $bodyHtml !== null;
+        $templateSubject = $subject ?? $effective['subject'];
+        $templateBody = $bodyHtml ?? $effective['bodyHtml'];
+        $variables = MailSampleData::for($mailType, $sampleOverrides);
+        $used = array_unique(array_merge(MailRenderer::extractVariables($templateSubject), MailRenderer::extractVariables($templateBody)));
+
+        return [
+            'mailType' => $mailType,
+            'eventId' => $eventId,
+            'source' => $draft ? 'draft' : $effective['source'],
+            'subject' => $this->renderer->render($templateSubject, $variables),
+            'bodyHtml' => $this->renderer->render($templateBody, $variables),
+            'template' => ['subject' => $templateSubject, 'bodyHtml' => $templateBody],
+            'variables' => $variables,
+            'unknownVariables' => array_values(array_diff($used, $definition['variables'])),
+        ];
+    }
+
     /** @return array<string, mixed>|null */
     public function findRow(string $mailType, string $eventId): ?array
     {

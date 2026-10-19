@@ -41,6 +41,7 @@ final class RbacGrid
     public const CARE_OR_STAFF = 'CARE_OR_STAFF';
     public const CARE_REVOKE = 'CARE_REVOKE';
     public const CAPTAIN_ONLY = 'CAPTAIN_ONLY';
+    public const CAPTAIN_OR_MANAGER = 'CAPTAIN_OR_MANAGER';
     public const SELF_ONLY = 'SELF_ONLY';
     public const API_KEY = 'API_KEY';
     public const SIGNED_WEBHOOK = 'SIGNED_WEBHOOK';
@@ -74,6 +75,7 @@ final class RbacGrid
             self::CARE_OR_STAFF => [401, 403, $P, 403, 403, $P, $P, $P],
             self::CARE_REVOKE => [401, 404, $P, 404, 404, 404, 404, 404],
             self::CAPTAIN_ONLY => [401, 403, $P, 403, 403, 403, 403, 403],
+            self::CAPTAIN_OR_MANAGER => [401, 403, $P, 403, $P, $P, $P, $P],
             self::SELF_ONLY => [401, 404, self::OK, 404, 404, 404, 404, 404],
             self::API_KEY => [401, 401, 401, 401, 401, 401, 401, 401],
             self::SIGNED_WEBHOOK => [400, 400, 400, 400, 400, 400, 400, 400],
@@ -191,6 +193,8 @@ final class RbacGrid
         'GET /api/v1/teams/{teamId}' => ['policy' => self::PUBLIC, 'params' => ['teamId' => 'team'], 'basis' => 'PP.54 (NEW-C note) (plan line 1254)'],
         'GET /api/v1/teams/{teamId}/invite' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['teamId' => 'team'], 'basis' => 'PP.54: captain or Event manager (plan line 1265)'],
         'PATCH /api/v1/teams/{teamId}/special-category' => ['policy' => self::CAPTAIN_ONLY, 'params' => ['teamId' => 'team'], 'basis' => 'E7.5 (plan line 1291)'],
+        'GET /api/v1/teams/{teamId}/members' => ['policy' => self::CAPTAIN_OR_MANAGER, 'params' => ['teamId' => 'team'], 'basis' => 'G-04: skład do wymiany — kapitan (owner) lub Zespół Wydarzenia (spec 23 §2)'],
+        'POST /api/v1/teams/{teamId}/members/{registrationId}/swap' => ['policy' => self::CAPTAIN_OR_MANAGER, 'params' => ['teamId' => 'team', 'registrationId' => 'teamMember'], 'basis' => 'G-04: spec 23 §2 + spec 20 transfer — kapitan (owner) lub Zespół Wydarzenia; moderator = współzarządzający (macierz §3, spec 09)'],
         'GET /api/v1/events/{eventId}/registrations' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'PP.2 (plan line 1321)'],
         'GET /api/v1/events/{eventId}/start-list' => ['policy' => self::PUBLIC, 'params' => ['eventId' => 'event'], 'override' => self::allActors(self::OK), 'basis' => 'PP.3 public DTO (plan line 1332)'],
         'GET /api/v1/events/{eventId}/bz/participants' => ['policy' => self::API_KEY, 'params' => ['eventId' => 'event'], 'basis' => 'E3.3 (plan line 1362)'],
@@ -227,6 +231,7 @@ final class RbacGrid
         'GET /api/v1/users/{userId}/results' => ['policy' => self::PUBLIC, 'params' => ['userId' => 'owner'], 'basis' => 'athlete profile (PP.1 note :700-702) (plan line 2279)'],
         'POST /api/v1/results' => ['policy' => self::EVENT_MANAGER, 'body' => ['eventId' => '@event', 'distanceId' => '@dist'], 'basis' => '$canUploadResults reads the body\'s Event (plan line 2280)'],
         'PATCH /api/v1/results/{id}' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'result'], 'basis' => 'H7 in targeted test (plan line 2292)'],
+        'GET /api/v1/results/{id}/corrections' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'result'], 'basis' => 'G-03: same right as editing the result (spec 14 pkt 6)'],
         'POST /api/v1/events/{eventId}/distances/{distanceId}/results/publish-official' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'distanceId' => 'dist'], 'basis' => 'event manager (owner, moderator, admin) (no extra per-row rule) (plan line 2330)'],
         'DELETE /api/v1/results/{id}' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'result'], 'basis' => 'event manager (owner, moderator, admin) (no extra per-row rule) (plan line 2353)'],
         'GET /api/v1/users/{userId}/personal-records' => ['policy' => self::PUBLIC, 'params' => ['userId' => 'owner'], 'basis' => 'public records (plan line 2367)'],
@@ -254,6 +259,9 @@ final class RbacGrid
         'DELETE /api/v1/shop/categories/{id}' => ['policy' => self::ADMIN, 'basis' => 'idem (plan line 2636)'],
         'GET /api/v1/shop/delivery-methods' => ['policy' => self::PUBLIC, 'basis' => 'public read/endpoint (no extra per-row rule) (plan line 2657)'],
         'GET /api/v1/shop/payment-methods' => ['policy' => self::PUBLIC, 'basis' => 'public read/endpoint (no extra per-row rule) (plan line 2662)'],
+        'GET /api/v1/calendar/settings' => ['policy' => self::ADMIN, 'basis' => 'R-17: Google Calendar settings = Admin (umowa 5.9)'],
+        'PATCH /api/v1/calendar/settings' => ['policy' => self::ADMIN, 'basis' => 'R-17: idem'],
+        'POST /api/v1/calendar/events' => ['policy' => self::ADMIN, 'basis' => 'R-17: manual send to calendar = Admin'],
         'GET /api/v1/insurance/settings' => ['policy' => self::PUBLIC, 'basis' => 'read by the registration form (plan line 2668)'],
         'PATCH /api/v1/insurance/settings' => ['policy' => self::ADMIN, 'basis' => 'macierz: Ustawienia globalne (NNW) = Admin (plan line 2669)'],
         'GET /api/v1/insurance/variants' => ['policy' => self::PUBLIC, 'basis' => 'public read/endpoint (no extra per-row rule) (plan line 2680)'],
@@ -314,6 +322,7 @@ final class RbacGrid
         'GET /api/v1/admin/security-settings' => ['policy' => self::ADMIN, 'basis' => 'admin-only (macierz section 3) (no extra per-row rule) (plan line 3223)'],
         'PATCH /api/v1/admin/security-settings' => ['policy' => self::ADMIN, 'basis' => 'admin-only (macierz section 3) (no extra per-row rule) (plan line 3225)'],
         'GET /api/v1/admin/online-sessions' => ['policy' => self::ADMIN, 'basis' => 'H10 (plan line 3231)'],
+        'GET /api/v1/admin/sales-stats' => ['policy' => self::ADMIN, 'basis' => 'admin-only (G-05, same as platform-stats)'],
         'GET /api/v1/admin/platform-stats' => ['policy' => self::ADMIN, 'basis' => 'admin-only (macierz section 3) (no extra per-row rule) (plan line 3239)'],
         'GET /api/v1/users/{userId}/tickets' => ['policy' => self::SELF_OR_STAFF, 'params' => ['userId' => 'owner'], 'override' => ['owner' => self::OK], 'basis' => 'PP.2 (plan line 3244)'],
         'GET /api/v1/users/{userId}/certificates' => ['policy' => self::SELF_OR_STAFF, 'params' => ['userId' => 'owner'], 'override' => ['owner' => self::OK], 'basis' => 'PP.2 (plan line 3251)'],
@@ -332,6 +341,10 @@ final class RbacGrid
         'GET /api/v1/events/{eventId}/mail-templates' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'macierz: szablony Wydarzenia — Zespół/Moderator/Admin (plan line 3854)'],
         'PUT /api/v1/events/{eventId}/mail-templates/{mailType}' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'mailType' => 'mailType'], 'basis' => 'idem (plan line 3861)'],
         'DELETE /api/v1/events/{eventId}/mail-templates/{mailType}' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'mailType' => 'mailType'], 'basis' => 'idem (plan line 3882)'],
+        'POST /api/v1/admin/mail-templates/{mailType}/preview' => ['policy' => self::ADMIN, 'params' => ['mailType' => 'mailType'], 'basis' => 'B-03: podgląd szablonu globalnego = Admin (jak PUT)'],
+        'POST /api/v1/events/{eventId}/mail-templates/{mailType}/preview' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'mailType' => 'mailType'], 'basis' => 'B-03: podgląd szablonu Wydarzenia = zespół (jak PUT)'],
+        'GET /api/v1/admin/mail-log' => ['policy' => self::ADMIN, 'basis' => 'B-03: dziennik wysyłek globalnie = Admin'],
+        'GET /api/v1/events/{eventId}/mail-log' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'B-03: dziennik wysyłek Wydarzenia = zespół'],
         'GET /api/v1/events/{eventId}/mail-send-progress' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'event manager (owner, moderator, admin) (no extra per-row rule) (plan line 3898)'],
         ];
     }

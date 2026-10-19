@@ -48,6 +48,8 @@ final class CorsMiddlewareTest extends TestCase
 
         self::assertSame('https://b.pl', $response->getHeaderLine('Access-Control-Allow-Origin'));
         self::assertNotSame('', $response->getHeaderLine('Access-Control-Allow-Methods'));
+        // D-04: the API has PUT routes, so preflight must allow PUT.
+        self::assertContains('PUT', array_map('trim', explode(',', $response->getHeaderLine('Access-Control-Allow-Methods'))));
         self::assertTrue($called);
     }
 

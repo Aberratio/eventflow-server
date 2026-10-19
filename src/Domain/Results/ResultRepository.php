@@ -334,6 +334,67 @@ final class ResultRepository extends Repository
         return $data;
     }
 
+    /** Fields whose change counts as a correction (spec 14 pkt 6) and is kept in the trail. */
+    private const CORRECTION_FIELDS = ['time', 'netTime', 'status', 'position', 'categoryPosition'];
+
+    /**
+     * G-03 (spec 14 pkt 6): stores who/when/what for one correction of a result - the previous and
+     * new value of every tracked field that actually changed. Nothing is stored when none did.
+     *
+     * @param array<string, mixed> $before the result before the update
+     * @param array<string, mixed> $after the result after the update (positions already renumbered)
+     * @return bool whether a trail row was written
+     */
+    public function recordCorrection(array $before, array $after, string $userId, ?string $reason): bool
+    {
+        $changes = [];
+        foreach (self::CORRECTION_FIELDS as $field) {
+            $from = $before[$field] ?? null;
+            $to = $after[$field] ?? null;
+            if (in_array($field, ['position', 'categoryPosition'], true)) {
+                $from = $from === null ? null : (int) $from;
+                $to = $to === null ? null : (int) $to;
+            }
+            if ($from !== $to) {
+                $changes[$field] = ['from' => $from, 'to' => $to];
+            }
+        }
+        if ($changes === []) {
+            return false;
+        }
+        $reason = $reason !== null ? trim($reason) : null;
+        $this->insert('result_corrections', [
+            'id' => $this->id(),
+            'result_id' => (string) $before['id'],
+            'event_id' => (string) $before['eventId'],
+            'corrected_by' => $userId,
+            'corrected_at' => date(DATE_ATOM),
+            'reason' => $reason !== null && $reason !== '' ? mb_substr($reason, 0, 500) : null,
+            'was_official' => ($before['publicationStatus'] ?? '') === 'official' ? 1 : 0,
+            'changes' => json_encode($changes, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ]);
+
+        return true;
+    }
+
+    /** @return array<int, array<string, mixed>> newest first */
+    public function corrections(string $resultId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT c.id, c.result_id AS resultId, c.corrected_by AS correctedBy, u.name AS correctedByName,
+                    c.corrected_at AS correctedAt, c.reason, c.was_official AS wasOfficial, c.changes
+             FROM result_corrections c LEFT JOIN users u ON u.id = c.corrected_by
+             WHERE c.result_id = :id ORDER BY c.corrected_at DESC, c.id DESC'
+        );
+        $stmt->execute(['id' => $resultId]);
+
+        return array_map(static function (array $row): array {
+            $row['wasOfficial'] = (bool) $row['wasOfficial'];
+            $row['changes'] = json_decode((string) $row['changes'], true) ?? [];
+            return $row;
+        }, $stmt->fetchAll());
+    }
+
     /** @param array<string, mixed> $data */
     public function update(string $id, array $data): ?array
     {

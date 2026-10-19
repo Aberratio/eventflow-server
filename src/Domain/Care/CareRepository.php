@@ -20,14 +20,18 @@ final class CareRepository extends Repository
             'SELECT cr.id, cr.zawodnik_id AS competitorId, cr.created_at AS createdAt,
                     c.first_name AS firstName, c.last_name AS lastName, c.birth_date AS birthDate,
                     c.gender, c.email, c.phone, c.club, c.identity_code AS identityCode,
-                    c.user_id AS competitorUserId
+                    c.user_id AS competitorUserId, c.is_anonymized AS isAnonymized
              FROM care_relations cr
              JOIN competitors c ON c.id = cr.zawodnik_id
              WHERE cr.konto_id = :kontoId
              ORDER BY c.last_name, c.first_name'
         );
         $stmt->execute(['kontoId' => $kontoId]);
-        return $stmt->fetchAll();
+        return array_map(static function (array $row): array {
+            $row['isAnonymized'] = (bool) $row['isAnonymized'];
+
+            return $row;
+        }, $stmt->fetchAll());
     }
 
     /** Konta, które sprawują opiekę nad danym Zawodnikiem (mogą go zapisywać). */

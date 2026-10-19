@@ -167,7 +167,7 @@ user_name AS userName,
 user_email AS userEmail, distance_id AS distanceId, distance_name AS distanceName, category,
 registered_at AS registeredAt, status, bib_number AS bibNumber, qr_code AS qrCode, team_name AS teamName, team_id AS teamId,
 discount_code AS discountCode, removed_at AS removedAt, checked_in_at AS checkedInAt, checked_in_by AS checkedInBy,
-registered_by_id AS registeredById
+registered_by_id AS registeredById, payment_expires_at AS paymentExpiresAt
 SQL;
 
     private const COLUMNS_R = <<<'SQL'
@@ -176,7 +176,7 @@ r.user_name AS userName,
 r.user_email AS userEmail, r.distance_id AS distanceId, r.distance_name AS distanceName, r.category,
 r.registered_at AS registeredAt, r.status, r.bib_number AS bibNumber, r.qr_code AS qrCode, r.team_name AS teamName, r.team_id AS teamId,
 r.discount_code AS discountCode, r.removed_at AS removedAt, r.checked_in_at AS checkedInAt, r.checked_in_by AS checkedInBy,
-r.registered_by_id AS registeredById
+r.registered_by_id AS registeredById, r.payment_expires_at AS paymentExpiresAt
 SQL;
 
     /**
@@ -1596,9 +1596,12 @@ SQL;
             'gender' => $competitor['gender'] ?? null,
             'phone' => $competitor['phone'] ?? null,
             'club' => $competitor['club'] ?? null,
-            // country/city/postal_code/voivodeship/address/anonymization: no
-            // storage column exists for these anywhere yet — see this
-            // method's caller's docblock.
+            // B-07: the address fields live on competitors (migration 085).
+            'country' => $competitor['country'] ?? null,
+            'city' => $competitor['city'] ?? null,
+            'postal_code' => $competitor['postalCode'] ?? null,
+            'voivodeship' => $competitor['voivodeship'] ?? null,
+            'address' => $competitor['address'] ?? null,
             default => null,
         };
     }
@@ -1653,15 +1656,33 @@ SQL;
      */
     public function ticketsByUser(string $userId): array
     {
+        $events = [];
+        $eventStmt = $this->pdo->prepare('SELECT date, location FROM events WHERE id = :id');
+
         return array_map(
-            fn (array $registration): array => $this->asTicket($registration),
+            function (array $registration) use (&$events, $eventStmt): array {
+                $eventId = (string) $registration['eventId'];
+                if (!array_key_exists($eventId, $events)) {
+                    $eventStmt->execute(['id' => $eventId]);
+                    $events[$eventId] = $eventStmt->fetch() ?: ['date' => '', 'location' => ''];
+                }
+                return $this->asTicket($registration, $events[$eventId]);
+            },
             $this->byUser($userId)
         );
     }
 
-    /** @param array<string, mixed> $registration */
-    private function asTicket(array $registration): array
+    /**
+     * @param array<string, mixed> $registration
+     * @param array<string, mixed> $event `date` / `location` of the Zapis' Wydarzenie
+     */
+    private function asTicket(array $registration, array $event): array
     {
+        // Spec 11 pkt 4: the Kod startowy is shown only for a paid/confirmed Zapis.
+        $startCodeVisible = $registration['status'] === 'confirmed'
+            || (bool) ($registration['paymentDetails']['startFeePaid'] ?? false);
+        $qrCode = $startCodeVisible && ($registration['qrCode'] ?? '') !== '' ? (string) $registration['qrCode'] : null;
+
         // E1.4: an expired Zapis never got paid and never will (it must be re-created
         // from scratch to try again) — the same terminal, "nothing to show up for"
         // shape as cancelled/removed from the Bilet's point of view.
@@ -1675,8 +1696,16 @@ SQL;
             'userId' => $registration['userId'],
             'eventId' => $registration['eventId'],
             'eventName' => $registration['eventName'],
+            'eventDate' => (string) $event['date'],
+            'location' => (string) $event['location'],
+            'distanceId' => $registration['distanceId'],
             'distanceName' => $registration['distanceName'],
+            'participantName' => $registration['userName'],
+            'participantId' => $registration['userId'],
+            'category' => $registration['category'],
             'bibNumber' => $registration['bibNumber'],
+            'qrCode' => $qrCode,
+            'registrationStatus' => $registration['status'],
             'status' => $status,
             'checkedInAt' => $registration['checkedInAt'],
             // E3.6 (issue 12 §4): "kto potwierdził" — BZ's own opaque
@@ -1699,7 +1728,7 @@ SQL;
      *
      * @param array<string, mixed> $data
      */
-    public function create(array $data, bool $confirmWhenNothingDue = false): array
+    public function create(array $data, bool $confirmWhenNothingDue = false, bool $dryRun = false): array
     {
         // E1.4: free up any slots an overdue Zapis of THIS Dystans is still holding before
         // this new one checks capacity/tier thresholds below — this is exactly the
@@ -1729,6 +1758,13 @@ SQL;
             // other member — but only for a Zapis actually JOINING an
             // existing team (teamId set, createTeam not truthy). The captain
             // (createTeam truthy) is always priced normally, in both modes.
+            // B-07: form answers + identity values of the Zapis's form (the HTTP layer sets
+            // `enforceRegistrationForm`; internal/office callers skip the form).
+            $form = null;
+            if (!empty($data['enforceRegistrationForm'])) {
+                $form = (new RegistrationFormService($this->pdo))->prepare($data);
+                $data['formModifierItems'] = $form['modifierItems'];
+            }
             $isJoiningExistingTeam = $team['teamId'] !== null && empty($data['createTeam']);
             $suppressStartFee = $isJoiningExistingTeam && ($distanceRow['teamPricingMode'] ?? 'per_person') === 'per_team';
             $pricing = $this->pricingForRegistration($data, $distanceRow, $suppressStartFee);
@@ -1769,6 +1805,9 @@ SQL;
             // kept as the atomic affected-rows check (belt-and-braces, see above).
             $this->incrementRegisteredCount((string) $distanceRow['distanceId']);
             $this->createSettlementItems($id, $pricing['settlementItems'], date(DATE_ATOM));
+            if ($form !== null) {
+                (new RegistrationFormService($this->pdo))->persist($id, isset($data['competitorId']) ? (string) $data['competitorId'] : null, $form);
+            }
             if ($pricing['discountId'] !== null) {
                 $this->markDiscountUsed($pricing['discountId'], $id, $data, $pricing);
             }
@@ -1795,9 +1834,19 @@ SQL;
                     'insuranceAmount' => $computed['insuranceAmount'],
                 ]);
             }
+            if ($dryRun) {
+                // G-08 (spec 08 axis 3): a test-mode Zapis is never real. Everything above ran
+                // (validation, pricing, capacity), so the organizer sees the true outcome; the
+                // rollback leaves no Zapis, no counter bump, no discount use, no start-list row.
+                $preview = $this->find($id);
+                $this->pdo->rollBack();
+                return [...($preview ?? []), 'isTest' => true];
+            }
             $this->pdo->commit();
         } catch (\Throwable $e) {
-            $this->pdo->rollBack();
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
             throw $e;
         }
 
@@ -1873,8 +1922,7 @@ SQL;
      * entirely derived from `registrations.status` elsewhere (an expired/cancelled/removed
      * Zapis simply has a dead code, nothing to unset here). Distance changes never touch
      * this — same Zapis, same code; only a reassignment of the Zapis to a different person
-     * would rotate it (no such mechanism exists in this codebase today — see the ticket's
-     * own note — so there is nothing to hook rotation into yet).
+     * rotates it — see swapTeamMember() (G-04).
      */
     private function generateStartCode(): string
     {
@@ -2512,6 +2560,208 @@ SQL;
     }
 
     /**
+     * G-04 (spec 23 Answer §2, spec 20 "Transfer", spec 11 §4): swaps the Zawodnik on a relay
+     * member's Zapis. It is a swap of the person on an existing Zapis, NOT a cancel-and-recreate:
+     * the Zapis id, the Drużyna, the Rozliczenie (frozen price — spec 07 pkt 12 resets it only
+     * when the product changes, not the person), the bib number and the status all stay; the
+     * person, the contact data and the Kategoria (derived from the new person) are replaced and
+     * the start code rotates (the old one was mailed to the previous person). Answers to the
+     * Zapis's custom form fields belonged to the previous person and are dropped — the new person
+     * fills them in. The write stamps `updated_at`, which is how Biuro Zawodów picks the change
+     * up on its pull (spec 12 §1 lists only cancellation/refund/distance change as push-worthy
+     * critical changes, a swap is not among them).
+     *
+     * Authorization (spec 23 §2 + 09): the Drużyna's captain until the Dystans's swap deadline
+     * (`relay_swap_deadline`, default: the day before the Event), the Event's manager always.
+     *
+     * @param array<string, mixed> $input  `competitorId` (existing Zawodnik) or `newPerson` (data of a new one)
+     * @param array{id: string, email: string, isManager: bool} $actor
+     * @return array{registration: array<string, mixed>, from: array<string, mixed>, to: array<string, mixed>}
+     */
+    public function swapTeamMember(string $teamId, string $registrationId, array $input, array $actor): array
+    {
+        $teams = new TeamRepository($this->pdo);
+        $team = $teams->find($teamId);
+        if ($team === null) {
+            throw new \RuntimeException('team_not_found');
+        }
+        $actorId = (string) $actor['id'];
+        $isManager = (bool) $actor['isManager'];
+        if (!$isManager && !TeamRepository::isCaptain($team, $actorId)) {
+            throw new \RuntimeException('team_not_captain');
+        }
+
+        $this->pdo->beginTransaction();
+        try {
+            $locked = $this->lockRegistration($registrationId);
+            if ($locked === null || (string) $this->teamIdOf($registrationId) !== $teamId) {
+                throw new \RuntimeException('registration_not_found');
+            }
+            if (in_array((string) $locked['status'], self::NOT_COUNTED_STATUSES, true)) {
+                throw new \RuntimeException('team_swap_registration_inactive');
+            }
+
+            $info = $this->pdo->prepare(
+                'SELECT e.date AS eventDate, d.relay_swap_deadline AS swapDeadline,
+                        d.age_categories AS ageCategories, d.categories AS categories, d.special_categories AS specialCategories
+                 FROM events e INNER JOIN event_distances d ON d.event_id = e.id
+                 WHERE e.id = :eventId AND d.id = :distanceId'
+            );
+            $info->execute(['eventId' => $locked['eventId'], 'distanceId' => $locked['distanceId']]);
+            $distanceRow = $info->fetch();
+            if (!$distanceRow) {
+                throw new \RuntimeException('registration_distance_invalid');
+            }
+            if (!$isManager && !$this->teamSwapStillOpen($distanceRow)) {
+                throw new \RuntimeException('team_swap_deadline_passed');
+            }
+
+            $competitors = new CompetitorRepository($this->pdo);
+            $newCompetitorId = trim((string) ($input['competitorId'] ?? ''));
+            $newPerson = is_array($input['newPerson'] ?? null) ? $input['newPerson'] : null;
+            if ($newCompetitorId !== '') {
+                $competitor = $competitors->find($newCompetitorId);
+                if ($competitor === null) {
+                    throw new \RuntimeException('team_swap_competitor_not_found');
+                }
+                // The captain names only people they may register (Opieka or own profile — the
+                // capped permission of spec 10/23, no new Opieka is granted); the Event's manager
+                // is organising the start list and may name any Zawodnik.
+                if (!$isManager && !(new \ZmierzymyCzas\Domain\Care\CareRepository($this->pdo))->canRegister($actorId, $newCompetitorId)) {
+                    throw new \RuntimeException('not_authorized_to_register');
+                }
+            } elseif ($newPerson !== null) {
+                if (trim((string) ($newPerson['firstName'] ?? '')) === '' || trim((string) ($newPerson['lastName'] ?? '')) === '') {
+                    throw new \RuntimeException('team_swap_person_required');
+                }
+                $competitor = null;
+            } else {
+                throw new \RuntimeException('team_swap_person_required');
+            }
+
+            $current = $this->pdo->prepare('SELECT competitor_id, user_name, user_id, category FROM registrations WHERE id = :id');
+            $current->execute(['id' => $registrationId]);
+            $before = (array) $current->fetch();
+
+            if ($competitor !== null) {
+                if ((string) $before['competitor_id'] === (string) $competitor['id']) {
+                    throw new \RuntimeException('team_swap_same_person');
+                }
+                $dup = $this->pdo->prepare(
+                    "SELECT 1 FROM registrations WHERE event_id = :eventId AND competitor_id = :cid AND id <> :id AND status NOT IN ('cancelled', 'removed', 'expired') LIMIT 1"
+                );
+                $dup->execute(['eventId' => $locked['eventId'], 'cid' => $competitor['id'], 'id' => $registrationId]);
+                if ($dup->fetchColumn() !== false) {
+                    throw new \RuntimeException('team_swap_competitor_already_registered');
+                }
+            } else {
+                $competitor = $competitors->create([
+                    'firstName' => trim((string) $newPerson['firstName']),
+                    'lastName' => trim((string) $newPerson['lastName']),
+                    'birthDate' => $newPerson['birthDate'] ?? null,
+                    'gender' => $newPerson['gender'] ?? null,
+                    'email' => $newPerson['email'] ?? null,
+                    'phone' => $newPerson['phone'] ?? null,
+                    'club' => $newPerson['club'] ?? null,
+                ], true);
+            }
+
+            // Same derivation as POST /registrations (PP.52/PP.44): the Zapis hangs on the
+            // Zawodnik's own Konto when there is one, else on whoever stands behind them.
+            $kontoId = (string) ($competitor['userId'] ?? '');
+            $konto = null;
+            if ($kontoId !== '') {
+                $k = $this->pdo->prepare('SELECT id, name, email FROM users WHERE id = :id');
+                $k->execute(['id' => $kontoId]);
+                $konto = $k->fetch() ?: null;
+            }
+            $fullName = trim((string) $competitor['firstName'] . ' ' . (string) $competitor['lastName']);
+            $ownerId = $konto !== null ? $kontoId : $actorId;
+            $email = '';
+            foreach ([(string) ($konto['email'] ?? ''), (string) ($competitor['email'] ?? ''), (string) $actor['email']] as $candidate) {
+                if (trim($candidate) !== '') {
+                    $email = $candidate;
+                    break;
+                }
+            }
+            $category = $this->resolveRegistrationCategory(
+                ['competitorId' => (string) $competitor['id'], 'category' => (string) ($before['category'] ?? '')],
+                $distanceRow
+            );
+
+            $newCode = $this->generateStartCode();
+            $this->updateById('registrations', $registrationId, [
+                'competitor_id' => $competitor['id'],
+                'user_id' => $ownerId,
+                'user_name' => $konto !== null ? (string) $konto['name'] : $fullName,
+                'user_email' => $email,
+                'category' => $category,
+                'registered_by_id' => $ownerId === $actorId ? null : $actorId,
+                'qr_code' => $newCode,
+                'updated_at' => date(DATE_ATOM),
+            ]);
+            $this->pdo->prepare('DELETE FROM form_field_answers WHERE registration_id = :id')->execute(['id' => $registrationId]);
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        return [
+            'registration' => (array) $this->find($registrationId),
+            'from' => ['competitorId' => $before['competitor_id'], 'name' => (string) $before['user_name']],
+            'to' => ['competitorId' => (string) $competitor['id'], 'name' => $fullName],
+        ];
+    }
+
+    /**
+     * G-04: the roster the captain (or the Event's manager) picks the person to swap out of —
+     * active Zapisy of the Drużyna only (a cancelled/expired/removed one holds no place).
+     *
+     * @return list<array{registrationId: string, name: string, status: string, bibNumber: ?string, competitorId: ?string}>
+     */
+    public function teamMembers(string $teamId): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT id AS registrationId, user_name AS name, status, bib_number AS bibNumber, competitor_id AS competitorId
+             FROM registrations WHERE team_id = :teamId AND status NOT IN ('cancelled', 'removed', 'expired')
+             ORDER BY registered_at ASC, id ASC"
+        );
+        $stmt->execute(['teamId' => $teamId]);
+
+        return array_values($stmt->fetchAll());
+    }
+
+    private function teamIdOf(string $registrationId): ?string
+    {
+        $stmt = $this->pdo->prepare('SELECT team_id FROM registrations WHERE id = :id');
+        $stmt->execute(['id' => $registrationId]);
+        $teamId = $stmt->fetchColumn();
+
+        return $teamId === false || $teamId === null ? null : (string) $teamId;
+    }
+
+    /**
+     * Captain's swap window (G-04): up to and including the Dystans's `relay_swap_deadline`;
+     * without one, until the day before the Event (the same "locked once under way" stance as
+     * TeamRepository::updateSpecialCategory()). DATE granularity, like the rest of the Event dates.
+     *
+     * @param array<string, mixed> $distanceRow
+     */
+    private function teamSwapStillOpen(array $distanceRow): bool
+    {
+        $today = date('Y-m-d');
+        $deadline = $distanceRow['swapDeadline'] ?? null;
+        if ($deadline !== null && $deadline !== '') {
+            return $today <= substr((string) $deadline, 0, 10);
+        }
+
+        return $today < substr((string) $distanceRow['eventDate'], 0, 10);
+    }
+
+    /**
      * Records Odprawa (check-in) against this Zapis. This is not the full Odprawa
      * model (Biuro Zawodów, separate ticket) — just enough to not lose "czy i kiedy
      * sprawdzono zapis" now that Bilet is a view of Zapis, not a separate entity.
@@ -2870,6 +3120,21 @@ SQL;
             if ($registration === null) {
                 $this->pdo->rollBack();
                 return null;
+            }
+            if ($registration['status'] === 'pending') {
+                // B-05: a still-open window on the gateway route gets a fresh gateway session for the
+                // SAME Zapis and the same frozen amount; the window and the slot are left untouched.
+                // A transfer (organizer_bank) Zapis has no gateway session to restart.
+                if ($this->paymentConfigType((string) $registration['eventId']) === 'organizer_bank') {
+                    throw new \RuntimeException('retry_not_available_for_bank_transfer');
+                }
+                $this->pdo->commit();
+                $pending = $this->find($id);
+                if ($pending !== null && $pending['status'] === 'pending') {
+                    $pending['paymentSession'] = $this->startGatewaySessionIfNeeded($pending);
+                }
+
+                return $pending;
             }
             if ($registration['status'] !== 'expired') {
                 throw new \RuntimeException('retry_requires_expired_registration');
@@ -4027,18 +4292,17 @@ SQL;
     /**
      * Step 4 (Modyfikatory): pricing contributions from form-field-variant choices —
      * "posiłek wegetariański +5", "udział w losowaniu −5" (rozstrzygnięcie 8 w
-     * spec). Not built yet: ticket 10 / E1.13 owns the source of these variants and
-     * their prices. This method is the deliberate seam for that ticket — a real,
-     * always-called stage in the pipeline, not a silently-skipped step — so E1.13
-     * only has to change this one method's body, never pricingForRegistration()'s
-     * shape or create()/hydrate()'s handling of settlement items.
+     * spec). B-07: RegistrationFormService::prepare() builds the items from the field
+     * configuration on the server (never from the client's amounts) and create()
+     * hands them over as `formModifierItems`. They may be negative; the Zapis's
+     * total is floored at 0 by amountDueFromItems()/hydrate().
      *
      * @param array<string, mixed> $data
      * @return array<int, array{name: string, basis: string, amount: float}>
      */
     private function modifierSettlementItems(array $data): array
     {
-        return [];
+        return array_values((array) ($data['formModifierItems'] ?? []));
     }
 
     /** @return array<int, array<string, mixed>> */

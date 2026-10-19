@@ -112,6 +112,28 @@ final class RbacFixtures
         ]);
         $fx->values['team'] = (string) $team['id'];
 
+        // G-04: a relay member's Zapis on that team (the team's captain = owner) for the swap row.
+        $memberRegId = $fx->prefix . '-member';
+        $pdo->prepare(
+            'INSERT INTO registrations (id, event_id, event_name, user_id, user_name, user_email, distance_id, distance_name, category, registered_at, status, qr_code, team_id)
+             VALUES (:id, :eventId, :eventName, :userId, :userName, :userEmail, :distanceId, :distanceName, :category, :registeredAt, :status, :qrCode, :teamId)'
+        )->execute([
+            'id' => $memberRegId,
+            'eventId' => $event['id'],
+            'eventName' => $event['name'],
+            'userId' => $fx->values['owner'],
+            'userName' => 'Rbac member',
+            'userEmail' => $fx->values['ownerEmail'],
+            'distanceId' => $fx->values['relay'],
+            'distanceName' => $event['distances'][1]['name'],
+            'category' => 'Open',
+            'registeredAt' => date(DATE_ATOM),
+            'status' => 'confirmed',
+            'qrCode' => 'rbac_' . bin2hex(random_bytes(16)),
+            'teamId' => $team['id'],
+        ]);
+        $fx->values['teamMember'] = $memberRegId;
+
         $fields = (new FormFieldRepository($pdo))->ensureSystemCatalog((string) $event['id']);
         $fx->values['formField'] = (string) $fields[0]['id'];
 

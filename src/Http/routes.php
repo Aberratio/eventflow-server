@@ -83,6 +83,7 @@ use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Support\JsonResponder;
 use ZmierzymyCzas\Support\Log\LoggerFactory;
+use ZmierzymyCzas\Support\ReleaseInfo;
 use ZmierzymyCzas\Support\UploadedFileStorage;
 
 return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $logger = null): void {
@@ -489,10 +490,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'service_unavailable', 'Serwis jest chwilowo niedostępny. Spróbuj ponownie później.', 503);
             }
 
+            $release = ReleaseInfo::fromFile(dirname(__DIR__, 2) . '/.zmierzymy-czas-release');
+            $versionOverride = trim((string) Env::get('APP_VERSION', ''));
+
             return JsonResponder::ok($response, [
                 'status' => 'ok',
                 'checks' => ['database' => 'ok'],
-                'version' => (string) Env::get('APP_VERSION', ''),
+                'version' => $versionOverride !== '' ? $versionOverride : $release['version'],
+                'commit' => $release['commit'],
             ]);
         });
 

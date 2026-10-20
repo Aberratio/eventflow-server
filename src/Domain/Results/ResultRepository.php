@@ -11,7 +11,7 @@ use ZmierzymyCzas\Support\InputValidationException;
 
 final class ResultRepository extends Repository
 {
-    private const COLUMNS = 'id, event_id AS eventId, event_name AS eventName, distance_id AS distanceId, distance_name AS distanceName, user_id AS userId, registration_id AS registrationId, user_name AS userName, bib_number AS bibNumber, category, time, time_in_seconds AS timeInSeconds, net_time AS netTime, net_time_in_seconds AS netTimeInSeconds, position, category_position AS categoryPosition, status, is_virtual AS isVirtual, publication_status AS publicationStatus, gender, birth_year AS birthYear';
+    private const COLUMNS = 'id, event_id AS eventId, event_name AS eventName, distance_id AS distanceId, distance_name AS distanceName, user_id AS userId, registration_id AS registrationId, user_name AS userName, bib_number AS bibNumber, category, time, time_in_seconds AS timeInSeconds, net_time AS netTime, net_time_in_seconds AS netTimeInSeconds, position, category_position AS categoryPosition, gender_position AS genderPosition, status, is_virtual AS isVirtual, publication_status AS publicationStatus, gender, birth_year AS birthYear';
 
     /**
      * Same column list as COLUMNS above, `r.`-qualified for byEvent()'s
@@ -19,7 +19,7 @@ final class ResultRepository extends Repository
      * `registrations`/`competitors`, both of which have their own `id`
      * column that would otherwise collide with `results.id`.
      */
-    private const COLUMNS_R = 'r.id, r.event_id AS eventId, r.event_name AS eventName, r.distance_id AS distanceId, r.distance_name AS distanceName, r.user_id AS userId, r.registration_id AS registrationId, r.user_name AS userName, r.bib_number AS bibNumber, r.category, r.time, r.time_in_seconds AS timeInSeconds, r.net_time AS netTime, r.net_time_in_seconds AS netTimeInSeconds, r.position, r.category_position AS categoryPosition, r.status, r.is_virtual AS isVirtual, r.publication_status AS publicationStatus, r.gender, r.birth_year AS birthYear';
+    private const COLUMNS_R = 'r.id, r.event_id AS eventId, r.event_name AS eventName, r.distance_id AS distanceId, r.distance_name AS distanceName, r.user_id AS userId, r.registration_id AS registrationId, r.user_name AS userName, r.bib_number AS bibNumber, r.category, r.time, r.time_in_seconds AS timeInSeconds, r.net_time AS netTime, r.net_time_in_seconds AS netTimeInSeconds, r.position, r.category_position AS categoryPosition, r.gender_position AS genderPosition, r.status, r.is_virtual AS isVirtual, r.publication_status AS publicationStatus, r.gender, r.birth_year AS birthYear';
 
     /**
      * Shared FROM/JOIN shape behind byEvent()'s anonymization masking (TD.6),
@@ -425,6 +425,7 @@ final class ResultRepository extends Repository
             $manualPlaces[$column] = $data[$field] === null ? null : (int) $data[$field];
             unset($data[$field]);
         }
+        $this->assertManualPlacesFree($id, $manualPlaces, (string) ($data['eventId'] ?? $current['eventId']), (string) ($data['distanceId'] ?? $current['distanceId']), (string) ($data['category'] ?? $current['category']), (string) ($data['status'] ?? $current['status']));
         $this->assertSplits($data);
         $mapped = $this->map($id, $data, false);
         unset($mapped['id']);
@@ -432,6 +433,7 @@ final class ResultRepository extends Repository
         if (in_array($status, self::NON_CLASSIFIED_STATUSES, true)) {
             $mapped['position'] = 0;
             $mapped['category_position'] = 0;
+            $mapped['gender_position'] = 0;
             $mapped['position_manual'] = 0;
             $mapped['category_position_manual'] = 0;
         } else {
@@ -482,29 +484,108 @@ final class ResultRepository extends Repository
     private function renumberEventDistance(string $eventId, string $distanceId): void
     {
         $stmt = $this->pdo->prepare(
-            'SELECT id, category, position_manual AS positionManual, category_position_manual AS categoryManual FROM results
+            'SELECT id, category, position_manual AS positionManual, category_position AS categoryPosition,
+                    position, category_position_manual AS categoryManual FROM results
              WHERE event_id = :eventId AND distance_id = :distanceId AND status = "finished"
-             ORDER BY time_in_seconds ASC'
+             ORDER BY time_in_seconds ASC, id ASC'
         );
         $stmt->execute(['eventId' => $eventId, 'distanceId' => $distanceId]);
         $rows = $stmt->fetchAll();
 
-        $categoryPositions = [];
-        foreach ($rows as $index => $row) {
+        // G-03: a manually corrected place is left as the organizer set it, and the automatic places
+        // of the others skip the numbers taken by a manual one - so a manual place never coincides
+        // with a computed one (two manual places cannot coincide either, see assertManualPlacesFree()).
+        $takenOpen = [];
+        $takenCategory = [];
+        foreach ($rows as $row) {
+            if ((int) $row['positionManual']) {
+                $takenOpen[(int) $row['position']] = true;
+            }
+            if ((int) $row['categoryManual']) {
+                $takenCategory[(string) $row['category']][(int) $row['categoryPosition']] = true;
+            }
+        }
+
+        $nextOpen = 0;
+        $nextCategory = [];
+        foreach ($rows as $row) {
             $category = (string) $row['category'];
-            $categoryPositions[$category] = ($categoryPositions[$category] ?? 0) + 1;
-            // G-03: a manually corrected place is left as the organizer set it. Ranks of the
-            // others are still counted over all finishers, so a manual place can coincide with
-            // an automatic one - the organizer owns that call.
             $places = [];
             if (!(int) $row['positionManual']) {
-                $places['position'] = $index + 1;
+                do {
+                    ++$nextOpen;
+                } while (isset($takenOpen[$nextOpen]));
+                $places['position'] = $nextOpen;
             }
             if (!(int) $row['categoryManual']) {
-                $places['category_position'] = $categoryPositions[$category];
+                $next = $nextCategory[$category] ?? 0;
+                do {
+                    ++$next;
+                } while (isset($takenCategory[$category][$next]));
+                $nextCategory[$category] = $next;
+                $places['category_position'] = $next;
             }
             if ($places !== []) {
                 $this->updateById('results', (string) $row['id'], $places);
+            }
+        }
+        self::recomputeGenderPositions($this->pdo, $eventId, $distanceId);
+    }
+
+    /**
+     * G-03: "miejsce wg płci" - rank by time among the finishers of the same gender in the event+distance
+     * (0 for a result without a known gender or one that did not finish). Never manual.
+     */
+    public static function recomputeGenderPositions(\PDO $pdo, string $eventId, string $distanceId): void
+    {
+        $pdo->prepare("UPDATE results SET gender_position = 0 WHERE event_id = :e AND distance_id = :d AND gender_position <> 0 AND (status <> 'finished' OR gender IS NULL OR gender NOT IN ('M', 'K'))")
+            ->execute(['e' => $eventId, 'd' => $distanceId]);
+        $stmt = $pdo->prepare("SELECT id, gender, gender_position AS genderPosition FROM results WHERE event_id = :e AND distance_id = :d AND status = 'finished' AND gender IN ('M', 'K') ORDER BY time_in_seconds ASC, id ASC");
+        $stmt->execute(['e' => $eventId, 'd' => $distanceId]);
+        $counters = [];
+        $update = $pdo->prepare('UPDATE results SET gender_position = :p WHERE id = :id');
+        foreach ($stmt->fetchAll() as $row) {
+            $gender = (string) $row['gender'];
+            $counters[$gender] = ($counters[$gender] ?? 0) + 1;
+            if ((int) $row['genderPosition'] !== $counters[$gender]) {
+                $update->execute(['p' => $counters[$gender], 'id' => $row['id']]);
+            }
+        }
+    }
+
+    /**
+     * G-03: a manually set place must be free in its classification - no other result of the event+distance
+     * (and, for the category place, of the same category) may already hold that number as a manual place.
+     * The automatic places move around manual ones, so they never collide.
+     *
+     * @param array<string, ?int> $manualPlaces column => place (null releases the override)
+     */
+    private function assertManualPlacesFree(string $id, array $manualPlaces, string $eventId, string $distanceId, string $category, string $status): void
+    {
+        if (in_array($status, self::NON_CLASSIFIED_STATUSES, true)) {
+            return;
+        }
+        $checks = [
+            'position' => ['position_manual', 'position', 'position', 'Miejsce', ''],
+            'category_position' => ['category_position_manual', 'category_position', 'categoryPosition', 'Miejsce w kategorii', ' AND category = :category'],
+        ];
+        foreach ($checks as $column => [$flag, $placeColumn, $field, $label, $extra]) {
+            $place = $manualPlaces[$column] ?? null;
+            if ($place === null) {
+                continue;
+            }
+            $params = ['e' => $eventId, 'd' => $distanceId, 'id' => $id, 'p' => $place];
+            if ($extra !== '') {
+                $params['category'] = $category;
+            }
+            $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM results WHERE event_id = :e AND distance_id = :d AND status = 'finished' AND id <> :id AND {$flag} = 1 AND {$placeColumn} = :p{$extra}");
+            $stmt->execute($params);
+            if ((int) $stmt->fetchColumn() > 0) {
+                throw new InputValidationException(
+                    $label . ' ' . $place . ' jest już ustawione ręcznie dla innego zawodnika w tej klasyfikacji.',
+                    $field,
+                    'result_place_taken'
+                );
             }
         }
     }

@@ -193,6 +193,13 @@ final class FormFieldRepository extends Repository
     public function resetOverride(string $eventId, string $distanceId, string $eventFieldId): bool
     {
         $base = $this->find($eventFieldId);
+        if ($base !== null && $base['distanceId'] === $distanceId) {
+            // The override's own id was given (the editor only knows the effective form) - resolve its event-level row.
+            $stmt = $this->pdo->prepare("SELECT id FROM form_fields WHERE event_id = :eventId AND field_key = :key AND distance_scope = ''");
+            $stmt->execute(['eventId' => $eventId, 'key' => $base['fieldKey']]);
+            $baseId = $stmt->fetchColumn();
+            $base = $baseId === false ? null : $this->find((string) $baseId);
+        }
         if ($base === null || $base['eventId'] !== $eventId || $base['distanceId'] !== null) {
             return false;
         }

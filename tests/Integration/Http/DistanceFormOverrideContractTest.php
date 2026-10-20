@@ -134,6 +134,17 @@ final class DistanceFormOverrideContractTest extends HttpTestCase
         self::assertSame(404, $missing->getStatusCode());
     }
 
+    public function testResetAcceptsTheOverrideIdAsWell(): void
+    {
+        $field = $this->customField('Posilek', 'shown');
+        $override = $this->json($this->request('POST', $this->path($this->distA, "/form-fields/{$field['id']}/override"), [], $this->organizerAuth()))['data'];
+
+        $reset = $this->request('DELETE', $this->path($this->distA, "/form-fields/{$override['id']}/override"), [], $this->organizerAuth());
+
+        self::assertSame(200, $reset->getStatusCode());
+        self::assertSame([], $this->fields->listForDistanceOnly((string) $this->event['id'], $this->distA));
+    }
+
     public function testInheritedFieldCannotBeRetypedOnTheDistance(): void
     {
         $field = $this->customField('Posilek', 'shown');

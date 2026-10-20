@@ -25,6 +25,11 @@ as the first version.
 - Account security: e-mail verification and verified e-mail change, password
   reset with hashed one-time tokens, session revocation and rotation, and
   blocked-account checks on every request.
+- Login throttling: 5 failed attempts per account or 20 per IP within 15
+  minutes lock further attempts with a growing lockout (1, 5, then 15
+  minutes) answered with `429` and `Retry-After`; unknown e-mails behave the
+  same, a lockout is written to the activity log and a successful login
+  resets the account counter. Tunable with `LOGIN_THROTTLE_*` variables.
 - Route-level access control covered by an RBAC test grid over every
   registered route.
 - Transactional mail through Central Mailer via an outbox with backoff and

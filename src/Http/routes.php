@@ -15,6 +15,9 @@ use ZmierzymyCzas\Domain\Auth\ActionTokenPurpose;
 use ZmierzymyCzas\Domain\Auth\ActionTokenRepository;
 use ZmierzymyCzas\Domain\Auth\DbSessionGuard;
 use ZmierzymyCzas\Domain\Auth\JwtService;
+use ZmierzymyCzas\Domain\Auth\LoginThrottle;
+use ZmierzymyCzas\Domain\Auth\LoginThrottleConfig;
+use ZmierzymyCzas\Domain\Auth\LoginThrottleRepository;
 use ZmierzymyCzas\Domain\Auth\PasswordRule;
 use ZmierzymyCzas\Domain\Auth\SessionRevocationRepository;
 use ZmierzymyCzas\Domain\Bz\BzWebhookClient;
@@ -619,12 +622,43 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 ->withHeader('Cache-Control', 'public, max-age=31536000, immutable');
         });
 
-        $api->post('/auth/login', function (Request $request, Response $response) use ($users, $jwt, $body) {
+        // R-10: failed logins are counted per account (normalised e-mail, whether or not it exists) and per IP.
+        // A blocked caller gets 429 + Retry-After before the password is even checked, with the same answer for
+        // unknown and existing accounts. The IP is REMOTE_ADDR only (a forwarded header would be spoofable).
+        $api->post('/auth/login', function (Request $request, Response $response) use ($users, $jwt, $body, $pdo, $admin) {
+            $loginThrottle = new LoginThrottle(new LoginThrottleRepository($pdo), LoginThrottleConfig::fromEnv(), static fn (): int => time());
             $payload = $body($request);
-            $user = $users->findByEmail((string) ($payload['email'] ?? ''), true);
+            $email = (string) ($payload['email'] ?? '');
+            $ip = (string) ($request->getServerParams()['REMOTE_ADDR'] ?? '');
+            $wait = $loginThrottle->retryAfter($email, $ip);
+            if ($wait > 0) {
+                return JsonResponder::error(
+                    $response,
+                    'too_many_login_attempts',
+                    'Zbyt wiele nieudanych prób logowania. Spróbuj ponownie za ' . (int) ceil($wait / 60) . ' min.',
+                    429,
+                    ['retryAfterSeconds' => $wait]
+                )->withHeader('Retry-After', (string) $wait);
+            }
+            $user = $users->findByEmail($email, true);
             if (!$user || !password_verify((string) ($payload['password'] ?? ''), (string) $user['passwordHash'])) {
+                $lockedScopes = $loginThrottle->recordFailure($email, $ip);
+                foreach ($lockedScopes as $scope) {
+                    $byIp = $scope === LoginThrottleRepository::SCOPE_IP;
+                    $admin->insertActivityLog([
+                        'userId' => $byIp || !$user ? '' : (string) $user['id'],
+                        'action' => 'login_lockout',
+                        'description' => $byIp
+                            ? 'Zablokowano logowanie z adresu IP po zbyt wielu nieudanych próbach.'
+                            : 'Zablokowano logowanie na konto po zbyt wielu nieudanych próbach.',
+                        'targetType' => $byIp ? 'ip' : 'user',
+                        'targetId' => $byIp || !$user ? null : (string) $user['id'],
+                        'targetName' => $byIp ? $ip : null,
+                    ]);
+                }
                 return JsonResponder::error($response, 'invalid_credentials', 'Invalid email or password', 401);
             }
+            $loginThrottle->recordSuccess($email);
             unset($user['passwordHash']);
             // PP.70: a blocked account never gets a session. Checked after the password, so the
             // block itself is only disclosed to someone who knows the password.

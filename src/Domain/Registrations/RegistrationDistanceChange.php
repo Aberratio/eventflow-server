@@ -321,7 +321,7 @@ trait RegistrationDistanceChange
     private function outstandingBalance(string $registrationId): float
     {
         $stmt = $this->pdo->prepare(
-            "SELECT to_json FROM registration_changes WHERE registration_id = :id AND type = 'distance_changed' ORDER BY created_at DESC, id DESC LIMIT 1"
+            "SELECT to_json FROM registration_changes WHERE registration_id = :id AND type IN ('distance_changed', 'transferred') ORDER BY created_at DESC, id DESC LIMIT 1"
         );
         $stmt->execute(['id' => $registrationId]);
         $json = $stmt->fetchColumn();

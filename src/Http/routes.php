@@ -2542,6 +2542,59 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             ->add(new AuthMiddleware($jwt));
         $api->post('/registrations/{id}/distance-change', $distanceChangeRoute(true))
             ->add(new AuthMiddleware($jwt));
+        // R-02 (spec 20 "Transfer - wersja prosta", zakres P2): the Event's manager moves a Zapis to another
+        // Zawodnik (existing `competitorId` or `newPerson`). Manager only - the owner gets 403. Shares the
+        // person-swap core with the relay swap (G-04); a relay member is refused and pointed to that swap.
+        // No money moves: balanceDueMinor / overpaymentMinor in the answer are informational.
+        $api->post('/registrations/{id}/transfer', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations, $logActivity, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $gate = $authorizeRegistration($response, (string) $args['id'], $auth, true);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            try {
+                $result = $registrations->transferRegistration(
+                    (string) $args['id'],
+                    $body($request),
+                    ['id' => (string) ($auth['sub'] ?? ''), 'email' => (string) ($auth['email'] ?? ''), 'role' => (string) ($auth['role'] ?? '')]
+                );
+            } catch (RuntimeException $e) {
+                $errors = [
+                    'registration_not_found' => ['Nie znaleziono zapisu.', 404],
+                    'transfer_registration_inactive' => ['Ten zapis nie jest już aktywny - nie można go przenieść.', 409],
+                    'transfer_team_registration' => ['Zapisu w drużynie (sztafecie) nie przenosi się tym działaniem - zmień zawodnika w składzie drużyny (wymiana zawodnika).', 409],
+                    'team_swap_competitor_already_registered' => ['Ta osoba jest już zapisana na to wydarzenie.', 409],
+                    'team_swap_same_person' => ['To ten sam zawodnik, który jest już na tym zapisie.', 422],
+                    'team_swap_person_required' => ['Podaj istniejącego zawodnika (competitorId) albo dane nowej osoby (newPerson: imię i nazwisko).', 422],
+                    'team_swap_competitor_not_found' => ['Nie znaleziono zawodnika.', 404],
+                    'transfer_insurance_birth_date_missing' => ['Zapis ma ubezpieczenie NNW - nowa osoba musi mieć pełną datę urodzenia (birthDate), by przeliczyć składkę.', 422],
+                    'transfer_insurance_invalid' => ['Nie można przeliczyć ubezpieczenia NNW dla nowej osoby.', 422],
+                    'registration_distance_invalid' => ['Selected distance is invalid.', 422],
+                ];
+                if (isset($errors[$e->getMessage()])) {
+                    [$message, $status] = $errors[$e->getMessage()];
+                    return JsonResponder::error($response, $e->getMessage(), $message, $status);
+                }
+                throw $e;
+            }
+            $logActivity(
+                $auth,
+                'registration_transferred',
+                sprintf('Przeniesiono zapis: %s -> %s', $result['from']['name'], $result['to']['name']),
+                'registration',
+                (string) $args['id'],
+                (string) $result['to']['name'],
+                ['from' => $result['from'], 'to' => $result['to'], 'balanceDueMinor' => $result['balanceDueMinor'], 'overpaymentMinor' => $result['overpaymentMinor']]
+            );
+
+            return JsonResponder::ok($response, [
+                ...$result['registration'],
+                'balanceDueMinor' => $result['balanceDueMinor'],
+                'overpaymentMinor' => $result['overpaymentMinor'],
+                'transfer' => ['from' => $result['from'], 'to' => $result['to'], 'changeId' => $result['changeId']],
+            ]);
+        })
+            ->add(new AuthMiddleware($jwt));
         // PP.2: $eventManagerRoles alone only checked global role — an organizer of a
         // different event could mark another organizer's Zapis paid. managerOnly:
         // true rejects the owner too (payment-details is manager-only by design).

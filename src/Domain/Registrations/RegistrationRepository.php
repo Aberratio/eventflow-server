@@ -23,6 +23,7 @@ use ZmierzymyCzas\Support\QrCode;
 final class RegistrationRepository extends Repository
 {
     use RegistrationDistanceChange;
+    use RegistrationTransfer;
 
     /**
      * Trasa A (bramka) seam (E1.6/E1.7) — null in every environment without real
@@ -2738,91 +2739,10 @@ SQL;
                 throw new \RuntimeException('team_swap_deadline_passed');
             }
 
-            $competitors = new CompetitorRepository($this->pdo);
-            $newCompetitorId = trim((string) ($input['competitorId'] ?? ''));
-            $newPerson = is_array($input['newPerson'] ?? null) ? $input['newPerson'] : null;
-            if ($newCompetitorId !== '') {
-                $competitor = $competitors->find($newCompetitorId);
-                if ($competitor === null) {
-                    throw new \RuntimeException('team_swap_competitor_not_found');
-                }
-                // The captain names only people they may register (Opieka or own profile — the
-                // capped permission of spec 10/23, no new Opieka is granted); the Event's manager
-                // is organising the start list and may name any Zawodnik.
-                if (!$isManager && !(new \ZmierzymyCzas\Domain\Care\CareRepository($this->pdo))->canRegister($actorId, $newCompetitorId)) {
-                    throw new \RuntimeException('not_authorized_to_register');
-                }
-            } elseif ($newPerson !== null) {
-                if (trim((string) ($newPerson['firstName'] ?? '')) === '' || trim((string) ($newPerson['lastName'] ?? '')) === '') {
-                    throw new \RuntimeException('team_swap_person_required');
-                }
-                $competitor = null;
-            } else {
-                throw new \RuntimeException('team_swap_person_required');
-            }
-
-            $current = $this->pdo->prepare('SELECT competitor_id, user_name, user_id, category FROM registrations WHERE id = :id');
-            $current->execute(['id' => $registrationId]);
-            $before = (array) $current->fetch();
-
-            if ($competitor !== null) {
-                if ((string) $before['competitor_id'] === (string) $competitor['id']) {
-                    throw new \RuntimeException('team_swap_same_person');
-                }
-                $dup = $this->pdo->prepare(
-                    "SELECT 1 FROM registrations WHERE event_id = :eventId AND competitor_id = :cid AND id <> :id AND status NOT IN ('cancelled', 'removed', 'expired') LIMIT 1"
-                );
-                $dup->execute(['eventId' => $locked['eventId'], 'cid' => $competitor['id'], 'id' => $registrationId]);
-                if ($dup->fetchColumn() !== false) {
-                    throw new \RuntimeException('team_swap_competitor_already_registered');
-                }
-            } else {
-                $competitor = $competitors->create([
-                    'firstName' => trim((string) $newPerson['firstName']),
-                    'lastName' => trim((string) $newPerson['lastName']),
-                    'birthDate' => $newPerson['birthDate'] ?? null,
-                    'gender' => $newPerson['gender'] ?? null,
-                    'email' => $newPerson['email'] ?? null,
-                    'phone' => $newPerson['phone'] ?? null,
-                    'club' => $newPerson['club'] ?? null,
-                ], true);
-            }
-
-            // Same derivation as POST /registrations (PP.52/PP.44): the Zapis hangs on the
-            // Zawodnik's own Konto when there is one, else on whoever stands behind them.
-            $kontoId = (string) ($competitor['userId'] ?? '');
-            $konto = null;
-            if ($kontoId !== '') {
-                $k = $this->pdo->prepare('SELECT id, name, email FROM users WHERE id = :id');
-                $k->execute(['id' => $kontoId]);
-                $konto = $k->fetch() ?: null;
-            }
-            $fullName = trim((string) $competitor['firstName'] . ' ' . (string) $competitor['lastName']);
-            $ownerId = $konto !== null ? $kontoId : $actorId;
-            $email = '';
-            foreach ([(string) ($konto['email'] ?? ''), (string) ($competitor['email'] ?? ''), (string) $actor['email']] as $candidate) {
-                if (trim($candidate) !== '') {
-                    $email = $candidate;
-                    break;
-                }
-            }
-            $category = $this->resolveRegistrationCategory(
-                ['competitorId' => (string) $competitor['id'], 'category' => (string) ($before['category'] ?? '')],
-                $distanceRow
-            );
-
-            $newCode = $this->generateStartCode();
-            $this->updateById('registrations', $registrationId, [
-                'competitor_id' => $competitor['id'],
-                'user_id' => $ownerId,
-                'user_name' => $konto !== null ? (string) $konto['name'] : $fullName,
-                'user_email' => $email,
-                'category' => $category,
-                'registered_by_id' => $ownerId === $actorId ? null : $actorId,
-                'qr_code' => $newCode,
-                'updated_at' => date(DATE_ATOM),
-            ]);
-            $this->pdo->prepare('DELETE FROM form_field_answers WHERE registration_id = :id')->execute(['id' => $registrationId]);
+            $swap = $this->swapRegistrationPerson($registrationId, $locked, $distanceRow, $input, $actor, $isManager);
+            $before = $swap['before'];
+            $competitor = $swap['competitor'];
+            $fullName = $swap['fullName'];
             $this->pdo->commit();
         } catch (\Throwable $e) {
             if ($this->pdo->inTransaction()) {
@@ -2836,6 +2756,112 @@ SQL;
             'from' => ['competitorId' => $before['competitor_id'], 'name' => (string) $before['user_name']],
             'to' => ['competitorId' => (string) $competitor['id'], 'name' => $fullName],
         ];
+    }
+
+    /**
+     * Shared core of the person swap on an existing Zapis (G-04 team swap, R-02 transfer): resolves the
+     * new Zawodnik (existing `competitorId` or created from `newPerson`), refuses the same person and a
+     * person already registered for the Event, then replaces the person, the contact data and the
+     * Kategoria (derived from the new person), rotates the start code and drops the answers to the
+     * Zapis's custom form fields. Must run inside the caller's transaction with the Zapis locked; the
+     * caller has already decided who may do it (`$isManager`: may name any Zawodnik).
+     *
+     * @param array<string, mixed> $locked the locked registrations row
+     * @param array<string, mixed> $distanceRow Dystans row with the Kategoria definitions
+     * @param array<string, mixed> $input `competitorId` or `newPerson`
+     * @param array{id: string, email: string, isManager?: bool} $actor
+     * @return array{before: array<string, mixed>, competitor: array<string, mixed>, fullName: string, startCode: string}
+     */
+    private function swapRegistrationPerson(string $registrationId, array $locked, array $distanceRow, array $input, array $actor, bool $isManager): array
+    {
+        $actorId = (string) $actor['id'];
+        $competitors = new CompetitorRepository($this->pdo);
+        $newCompetitorId = trim((string) ($input['competitorId'] ?? ''));
+        $newPerson = is_array($input['newPerson'] ?? null) ? $input['newPerson'] : null;
+        if ($newCompetitorId !== '') {
+            $competitor = $competitors->find($newCompetitorId);
+            if ($competitor === null) {
+                throw new \RuntimeException('team_swap_competitor_not_found');
+            }
+            // The captain names only people they may register (Opieka or own profile — the
+            // capped permission of spec 10/23, no new Opieka is granted); the Event's manager
+            // is organising the start list and may name any Zawodnik.
+            if (!$isManager && !(new \ZmierzymyCzas\Domain\Care\CareRepository($this->pdo))->canRegister($actorId, $newCompetitorId)) {
+                throw new \RuntimeException('not_authorized_to_register');
+            }
+        } elseif ($newPerson !== null) {
+            if (trim((string) ($newPerson['firstName'] ?? '')) === '' || trim((string) ($newPerson['lastName'] ?? '')) === '') {
+                throw new \RuntimeException('team_swap_person_required');
+            }
+            $competitor = null;
+        } else {
+            throw new \RuntimeException('team_swap_person_required');
+        }
+
+        $current = $this->pdo->prepare('SELECT competitor_id, user_name, user_id, category FROM registrations WHERE id = :id');
+        $current->execute(['id' => $registrationId]);
+        $before = (array) $current->fetch();
+
+        if ($competitor !== null) {
+            if ((string) $before['competitor_id'] === (string) $competitor['id']) {
+                throw new \RuntimeException('team_swap_same_person');
+            }
+            $dup = $this->pdo->prepare(
+                "SELECT 1 FROM registrations WHERE event_id = :eventId AND competitor_id = :cid AND id <> :id AND status NOT IN ('cancelled', 'removed', 'expired') LIMIT 1"
+            );
+            $dup->execute(['eventId' => $locked['eventId'], 'cid' => $competitor['id'], 'id' => $registrationId]);
+            if ($dup->fetchColumn() !== false) {
+                throw new \RuntimeException('team_swap_competitor_already_registered');
+            }
+        } else {
+            $competitor = $competitors->create([
+                'firstName' => trim((string) $newPerson['firstName']),
+                'lastName' => trim((string) $newPerson['lastName']),
+                'birthDate' => $newPerson['birthDate'] ?? null,
+                'gender' => $newPerson['gender'] ?? null,
+                'email' => $newPerson['email'] ?? null,
+                'phone' => $newPerson['phone'] ?? null,
+                'club' => $newPerson['club'] ?? null,
+            ], true);
+        }
+
+        // Same derivation as POST /registrations (PP.52/PP.44): the Zapis hangs on the
+        // Zawodnik's own Konto when there is one, else on whoever stands behind them.
+        $kontoId = (string) ($competitor['userId'] ?? '');
+        $konto = null;
+        if ($kontoId !== '') {
+            $k = $this->pdo->prepare('SELECT id, name, email FROM users WHERE id = :id');
+            $k->execute(['id' => $kontoId]);
+            $konto = $k->fetch() ?: null;
+        }
+        $fullName = trim((string) $competitor['firstName'] . ' ' . (string) $competitor['lastName']);
+        $ownerId = $konto !== null ? $kontoId : $actorId;
+        $email = '';
+        foreach ([(string) ($konto['email'] ?? ''), (string) ($competitor['email'] ?? ''), (string) $actor['email']] as $candidate) {
+            if (trim($candidate) !== '') {
+                $email = $candidate;
+                break;
+            }
+        }
+        $category = $this->resolveRegistrationCategory(
+            ['competitorId' => (string) $competitor['id'], 'category' => (string) ($before['category'] ?? '')],
+            $distanceRow
+        );
+
+        $newCode = $this->generateStartCode();
+        $this->updateById('registrations', $registrationId, [
+            'competitor_id' => $competitor['id'],
+            'user_id' => $ownerId,
+            'user_name' => $konto !== null ? (string) $konto['name'] : $fullName,
+            'user_email' => $email,
+            'category' => $category,
+            'registered_by_id' => $ownerId === $actorId ? null : $actorId,
+            'qr_code' => $newCode,
+            'updated_at' => date(DATE_ATOM),
+        ]);
+        $this->pdo->prepare('DELETE FROM form_field_answers WHERE registration_id = :id')->execute(['id' => $registrationId]);
+
+        return ['before' => $before, 'competitor' => $competitor, 'fullName' => $fullName, 'startCode' => $newCode];
     }
 
     /**

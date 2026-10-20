@@ -206,6 +206,10 @@ final class RbacFixtures
             'gender' => 'K',
         ], true);
         $fx->values['competitorB'] = (string) $other['id'];
+        // R-08: zawodnik child ma Zapis na wydarzeniu organizatora + otwarte zgłoszenie duplikatu.
+        $pdo->prepare('UPDATE registrations SET competitor_id = :c WHERE id = :id')->execute(['c' => $fx->values['child'], 'id' => $fx->values['registration']]);
+        $fx->values['dupReport'] = (string) (new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo))
+            ->create($fx->values['child'], $fx->values['competitorB'], $fx->values['owner'], 'participant', 'rbac')['id'];
 
         $insertOrder = $pdo->prepare(
             'INSERT INTO shop_orders (id, order_number, user_id, status, product_total, delivery_price, payment_surcharge,

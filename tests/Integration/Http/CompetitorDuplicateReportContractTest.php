@@ -20,6 +20,8 @@ final class CompetitorDuplicateReportContractTest extends HttpTestCase
     private array $actors = [];
     private array $child;
     private array $other;
+    /** @var list<string> */
+    private array $eventIds = [];
 
     protected function setUp(): void
     {
@@ -44,6 +46,10 @@ final class CompetitorDuplicateReportContractTest extends HttpTestCase
     {
         if (!isset($this->pdo, $this->prefix)) {
             return;
+        }
+        foreach ($this->eventIds as $eventId) {
+            $this->pdo->prepare('DELETE FROM registrations WHERE event_id = :e')->execute(['e' => $eventId]);
+            $this->pdo->prepare('DELETE FROM events WHERE id = :e')->execute(['e' => $eventId]);
         }
         $this->pdo->prepare('DELETE FROM competitors WHERE last_name = :last')->execute(['last' => $this->prefix]);
         $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')
@@ -85,9 +91,94 @@ final class CompetitorDuplicateReportContractTest extends HttpTestCase
         self::assertArrayNotHasKey('identityCode', $rows[0]['competitor']);
     }
 
-    public function testOrganizerCanReport(): void
+    public function testOrganizerWithRegistrationOnOwnEventCanReport(): void
     {
+        $this->registerChildOn((string) $this->actors['organizer']['id']);
         self::assertSame(201, $this->report('organizer')->getStatusCode());
+    }
+
+    public function testOrganizerWithoutRegistrationOnOwnEventCannotReport(): void
+    {
+        self::assertSame(403, $this->report('organizer')->getStatusCode());
+        // zapis na cudze wydarzenie nie wystarcza
+        $this->registerChildOn((string) $this->actors['participant']['id']);
+        self::assertSame(403, $this->report('organizer')->getStatusCode());
+    }
+
+    public function testModeratorAndAdminCanReportAnyone(): void
+    {
+        self::assertSame(201, $this->report('moderator')->getStatusCode());
+        self::assertSame(201, $this->report('admin')->getStatusCode());
+    }
+
+    public function testModeratorCanRejectWithReasonAndQueueFiltersByStatus(): void
+    {
+        $id = $this->json($this->report('caregiver'))['data']['id'];
+        $url = "/api/v1/admin/competitors/duplicate-reports/{$id}";
+
+        self::assertSame(422, $this->request('PATCH', $url, ['status' => 'merged'], $this->as('moderator'))->getStatusCode());
+
+        $res = $this->request('PATCH', $url, ['status' => 'rejected', 'reason' => 'Różne osoby'], $this->as('moderator'));
+        self::assertSame(200, $res->getStatusCode());
+        self::assertSame('rejected', $this->json($res)['data']['status']);
+        self::assertSame('Różne osoby', $this->json($res)['data']['rejectReason']);
+
+        self::assertSame(409, $this->request('PATCH', $url, ['status' => 'rejected'], $this->as('moderator'))->getStatusCode());
+        self::assertSame(404, $this->request('PATCH', '/api/v1/admin/competitors/duplicate-reports/nope', ['status' => 'rejected'], $this->as('moderator'))->getStatusCode());
+        self::assertSame(403, $this->request('PATCH', $url, ['status' => 'rejected'], $this->as('organizer'))->getStatusCode());
+
+        $ids = fn (string $q): array => array_values(array_column(array_filter(
+            $this->json($this->request('GET', '/api/v1/admin/competitors/duplicate-reports' . $q, [], $this->as('admin')))['data'],
+            fn ($r) => $r['competitorId'] === $this->child['id']
+        ), 'id'));
+        self::assertSame([], $ids(''));
+        self::assertSame([$id], $ids('?status=rejected'));
+        self::assertSame([$id], $ids('?status=all'));
+        self::assertSame(422, $this->request('GET', '/api/v1/admin/competitors/duplicate-reports?status=bogus', [], $this->as('admin'))->getStatusCode());
+    }
+
+    public function testMergeMarksOpenReportsForMergedPairAsMerged(): void
+    {
+        $id = $this->json($this->report('caregiver'))['data']['id'];
+        $merge = $this->request(
+            'POST',
+            '/api/v1/admin/competitors/merge',
+            ['survivorId' => $this->child['id'], 'absorbedId' => $this->other['id']],
+            $this->as('moderator')
+        );
+        self::assertSame(200, $merge->getStatusCode(), (string) $merge->getBody());
+
+        $rows = $this->json($this->request('GET', '/api/v1/admin/competitors/duplicate-reports?status=merged', [], $this->as('admin')))['data'];
+        self::assertContains($id, array_column($rows, 'id'));
+        self::assertSame([], array_filter(
+            $this->json($this->request('GET', '/api/v1/admin/competitors/duplicate-reports', [], $this->as('admin')))['data'],
+            fn ($r) => $r['id'] === $id
+        ));
+    }
+
+    private function registerChildOn(string $organizerId): void
+    {
+        $slug = strtolower($this->prefix) . '-' . bin2hex(random_bytes(3));
+        $event = (new \ZmierzymyCzas\Domain\Events\EventRepository($this->pdo))->create([
+            'name' => $slug, 'slug' => $slug, 'discipline' => 'running', 'date' => date('Y-m-d', strtotime('+60 days')),
+            'location' => 'X', 'city' => 'Y', 'description' => 'd', 'imageUrl' => 'https://example.test/e.jpg',
+            'organizerId' => $organizerId, 'organizerName' => 'Org', 'status' => 'active',
+            'registrationDeadline' => date('Y-m-d', strtotime('+50 days')), 'featured' => false, 'isPrivate' => false,
+            'paymentConfig' => ['type' => 'admin_gateway'],
+            'distances' => [[
+                'id' => $slug . '-10k', 'name' => '10 km', 'length' => 10, 'unit' => 'km', 'categories' => ['Open'],
+                'ageCategories' => [], 'specialCategories' => [], 'limit' => 100, 'registeredCount' => 0, 'price' => 80, 'routeFiles' => [],
+            ]],
+        ]);
+        $this->eventIds[] = (string) $event['id'];
+        $this->pdo->prepare(
+            'INSERT INTO registrations (id, event_id, event_name, user_id, user_name, user_email, distance_id, distance_name, category, registered_at, status, qr_code, competitor_id)
+             VALUES (:id, :e, :en, :u, :un, :ue, :d, :dn, :cat, :at, :st, :qr, :c)'
+        )->execute([
+            'id' => $slug . '-r', 'e' => $event['id'], 'en' => $event['name'], 'u' => (string) $this->actors['caregiver']['id'],
+            'un' => 'x', 'ue' => 'x@example.test', 'd' => $event['distances'][0]['id'], 'dn' => '10 km', 'cat' => 'Open',
+            'at' => date(DATE_ATOM), 'st' => 'confirmed', 'qr' => 'dr_' . bin2hex(random_bytes(8)), 'c' => $this->child['id'],
+        ]);
     }
 
     public function testUnrelatedParticipantCannotReport(): void

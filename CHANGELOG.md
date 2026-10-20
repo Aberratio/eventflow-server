@@ -39,6 +39,12 @@ as the first version.
   with code snapshots and rollback.
 - Demo data seeding around the current date, with locked demo accounts
   outside local environments.
+- Self-service cancellation of a registration by its owner (zakres P2, do
+  potwierdzenia przez Zamawiającego): per-event switch and cut-off date
+  (`selfServiceEnabled`, `selfServiceDeadline`, default 7 days before the
+  start), a refund request opened automatically for a paid registration, the
+  freed slot returned to the pool, and a per-registration change history
+  (`GET /registrations/{id}/changes`). Organizers can still cancel at any time.
 - `/health` reports the deployed `version` (from the release tag) and
   `commit`, and the deploy fails its health check when the commit does not
   match. `APP_VERSION` only overrides the version now: clear the old

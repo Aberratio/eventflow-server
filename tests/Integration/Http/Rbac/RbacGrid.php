@@ -215,6 +215,7 @@ final class RbacGrid
         'POST /api/v1/registrations/quote' => ['policy' => self::AUTH, 'basis' => 'B-02: same gate as POST /registrations (Opieka, event visibility); writes nothing'],
         'PATCH /api/v1/registrations/{id}' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'PP.2 (plan line 1830)'],
         'POST /api/v1/registrations/{id}/cancel' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'PP.2 (plan line 1849)'],
+        'GET /api/v1/registrations/{id}/changes' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'R-02: history of one Zapis, owner + manager (zakres P2)'],
         'PATCH /api/v1/registrations/{id}/payment-details' => ['policy' => self::REG_MONEY, 'params' => ['id' => 'registration'], 'basis' => 'H6 (plan line 1860)'],
         'POST /api/v1/registrations/{id}/refund-request' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'spec 13: zawodnik prosi (plan line 1875)'],
         'POST /api/v1/registrations/{id}/refund-approve' => ['policy' => self::REG_MONEY, 'params' => ['id' => 'registration'], 'basis' => 'H6 (plan line 1894)'],

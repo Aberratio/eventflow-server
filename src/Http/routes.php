@@ -45,7 +45,9 @@ use ZmierzymyCzas\Domain\Payments\Tpay\TpayGateway;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotification;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotificationVerifier;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayOAuthClient;
+use ZmierzymyCzas\Domain\Registrations\RegistrationChangeRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationOpenRules;
+use ZmierzymyCzas\Domain\Registrations\SelfServicePolicy;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Registrations\StartListExportFormatter;
 use ZmierzymyCzas\Domain\Results\ResultImportRepository;
@@ -1431,6 +1433,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     }
                 }
             }
+            // R-02: the self-service cut-off must be a real moment before the start of the Wydarzenie.
+            if (array_key_exists('selfServiceDeadline', $payload)
+                && !SelfServicePolicy::deadlineIsValid($payload['selfServiceDeadline'], [...(array) $event, ...array_intersect_key($payload, ['date' => true])])) {
+                return JsonResponder::error($response, 'validation_error', 'selfServiceDeadline must be a valid date before the start of the event', 422, ['field' => 'selfServiceDeadline']);
+            }
             $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::EVENT);
             if ($urlCheck['error'] !== null) {
                 return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
@@ -2414,12 +2421,52 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $registrations->update((string) $args['id'], $policyResult['allowed']));
         })
             ->add(new AuthMiddleware($jwt));
-        $api->post('/registrations/{id}/cancel', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations) {
+        // R-02 (spec 20, zakres P2): the Event's manager cancels whenever (as always); the owner only through
+        // SelfServicePolicy - switch on, before the cut-off date. A paid Zapis cancelled by its owner opens
+        // a refund request (E1.5 machine, organizer/admin approves); the change lands in the Zapis history.
+        $api->post('/registrations/{id}/cancel', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations, $events, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $gate = $authorizeRegistration($response, (string) $args['id'], $auth);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            $verdict = (new SelfServicePolicy())->evaluate((array) $events->find((string) $gate['registration']['eventId']), $gate['registration'], $gate['isManager']);
+            if (!$verdict['allowed']) {
+                $messages = [
+                    SelfServicePolicy::REASON_DISABLED => 'Organizator wyłączył samodzielną rezygnację z tego wydarzenia.',
+                    SelfServicePolicy::REASON_CLOSED => 'Termin samodzielnej rezygnacji minął.',
+                    SelfServicePolicy::REASON_EVENT_OVER => 'Wydarzenie jest już zamknięte dla zmian.',
+                    SelfServicePolicy::REASON_REGISTRATION_INACTIVE => 'Ten zapis nie jest już aktywny.',
+                ];
+                $reason = (string) $verdict['reason'];
+                return JsonResponder::error($response, $reason, $messages[$reason] ?? 'Rezygnacja jest niedostępna.', 409, ['deadline' => $verdict['deadline']]);
+            }
+            $result = $registrations->cancelWithHistory((string) $args['id'], [
+                'id' => (string) ($auth['sub'] ?? ''),
+                'role' => (string) ($auth['role'] ?? ''),
+                'isManager' => $gate['isManager'],
+            ]);
+            if ($result !== null && $result['changed']) {
+                $logActivity(
+                    $auth,
+                    'registration_cancelled',
+                    $gate['isManager'] ? 'Anulowano zapis' : 'Rezygnacja z zapisu',
+                    'registration',
+                    (string) $args['id'],
+                    (string) ($gate['registration']['eventName'] ?? ''),
+                    ['refundRequested' => $result['refundRequested']]
+                );
+            }
+            return JsonResponder::ok($response, $result['registration'] ?? null);
+        })
+            ->add(new AuthMiddleware($jwt));
+        // R-02: the history of one Zapis (what changed, when, by whom) - for its owner and the Event's manager.
+        $api->get('/registrations/{id}/changes', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $pdo) {
             $gate = $authorizeRegistration($response, (string) $args['id'], (array) $request->getAttribute('auth'));
             if ($gate instanceof Response) {
                 return $gate;
             }
-            return JsonResponder::ok($response, $registrations->cancel((string) $args['id']));
+            return JsonResponder::ok($response, (new RegistrationChangeRepository($pdo))->listForRegistration((string) $args['id']));
         })
             ->add(new AuthMiddleware($jwt));
         // PP.2: $eventManagerRoles alone only checked global role — an organizer of a

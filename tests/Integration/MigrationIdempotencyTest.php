@@ -55,9 +55,11 @@ final class MigrationIdempotencyTest extends TestCase
     /** @return array<string, int> */
     private function rowCountsByTable(): array
     {
+        // information_schema has no guaranteed order, and assertSame compares key order too.
         $tables = $this->pdo->query(
             "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() "
-            . "AND TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME NOT IN ('" . Migrator::LEDGER_TABLE . "', 'seed_records')"
+            . "AND TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME NOT IN ('" . Migrator::LEDGER_TABLE . "', 'seed_records') "
+            . 'ORDER BY TABLE_NAME'
         )->fetchAll(PDO::FETCH_COLUMN);
 
         $counts = [];

@@ -43,5 +43,14 @@ as the first version.
   `commit`, and the deploy fails its health check when the commit does not
   match. `APP_VERSION` only overrides the version now: clear the old
   `2026xxxx-x` placeholder from existing `.env` files.
+- Event Team: besides its Owner an event can have Co-managers, any account
+  whatever its global role (zakres P2, do potwierdzenia przez Zamawiającego).
+  A Co-manager edits the event and manages registrations, results, form
+  fields and mail templates; the Team roster, the event's payment
+  configuration, deleting the event, handing over ownership and refunds or
+  manual payments stay with the Owner (and admin). A revoked or merely
+  invited member has no access. The organizer panel list
+  (`GET /organizers/{id}/events`) includes co-managed events with a
+  `teamRole` of `owner` or `co_manager`. Migration `140_r01_event_team.sql`.
 
 [Unreleased]: https://github.com/Aberratio/eventflow-server/commits/master

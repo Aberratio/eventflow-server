@@ -18,7 +18,10 @@ namespace ZmierzymyCzas\Tests\Integration\Http\Rbac;
  */
 final class RbacGrid
 {
-    public const ACTORS = ['anon', 'participant', 'owner', 'foreignOrganizer', 'organizer', 'moderator', 'admin', 'superadmin'];
+    public const ACTORS = ['anon', 'participant', 'owner', 'foreignOrganizer', 'organizer', 'moderator', 'admin', 'superadmin', 'coManager', 'coManagerOrg', 'revoked'];
+
+    /** R-01: the base policy tables below cover the first eight actors (up to `superadmin`). */
+    private const BASE_ACTORS = ['anon', 'participant', 'owner', 'foreignOrganizer', 'organizer', 'moderator', 'admin', 'superadmin'];
 
     public const PASS = 'PASS';
     public const OK = 'OK';
@@ -49,7 +52,8 @@ final class RbacGrid
 
     /**
      * Policy => expectation per actor, in ACTORS order:
-     * anon, participant, owner, foreignOrganizer, organizer, moderator, admin, superadmin.
+     * anon, participant, owner, foreignOrganizer, organizer, moderator, admin, superadmin
+     * (the R-01 Team actors coManager, coManagerOrg, revoked come from teamColumns()).
      *
      * @return array<string, list<int|string>>
      */
@@ -82,6 +86,42 @@ final class RbacGrid
         ];
     }
 
+    /**
+     * R-01: policy => [coManager, coManagerOrg, revoked]. coManager = participant-role active Co-manager of
+     * `event`; coManagerOrg = the same with the organizer role; revoked = a participant whose membership was
+     * revoked (must get exactly what a stranger gets). Owner-only and money policies deny Co-managers.
+     *
+     * @return array<string, list<int|string>>
+     */
+    public static function teamColumns(): array
+    {
+        $P = self::PASS;
+
+        return [
+            self::PUBLIC => [$P, $P, $P],
+            self::AUTH => [$P, $P, $P],
+            self::PARTICIPANT_ROLE => [$P, 403, $P],
+            self::STAFF => [403, 403, 403],
+            self::ADMIN => [403, 403, 403],
+            self::ROLE_EVENT_MANAGER => [403, $P, 403],
+            self::EVENT_MANAGER => [$P, $P, 403],
+            self::EVENT_OWNER_OR_ADMIN => [403, 403, 403],
+            self::REG_OWNER_OR_MANAGER => [$P, $P, 403],
+            self::REG_MANAGER => [$P, $P, 403],
+            self::REG_MONEY => [403, 403, 403],
+            self::SELF_OR_STAFF => [403, 403, 403],
+            self::SELF_OR_ACCOUNT_MANAGER => [403, 403, 403],
+            self::CARE_HOLDER => [403, 403, 403],
+            self::CARE_OR_STAFF => [403, 403, 403],
+            self::CARE_REVOKE => [404, 404, 404],
+            self::CAPTAIN_ONLY => [403, 403, 403],
+            self::CAPTAIN_OR_MANAGER => [$P, $P, 403],
+            self::SELF_ONLY => [404, 404, 404],
+            self::API_KEY => [401, 401, 401],
+            self::SIGNED_WEBHOOK => [400, 400, 400],
+        ];
+    }
+
     /** @return array<string, int|string> */
     public static function allActors(int|string $token): array
     {
@@ -101,7 +141,8 @@ final class RbacGrid
             return self::allActors(self::SKIP);
         }
         $table = self::policies()[$policy];
-        $map = array_combine(self::ACTORS, $table);
+        $map = array_combine(self::BASE_ACTORS, $table)
+            + array_combine(['coManager', 'coManagerOrg', 'revoked'], self::teamColumns()[$policy]);
 
         return array_replace($map, $row['override'] ?? []);
     }
@@ -120,16 +161,16 @@ final class RbacGrid
                 'actors' => ['anon' => 'list', 'participant' => 'list', 'foreignOrganizer' => 'list']],
             'V2 draft event by id' => ['kind' => 'status', 'path' => '/api/v1/events/{eventDraft}', 'actors' => [
                 'anon' => 404, 'participant' => 404, 'owner' => 404, 'foreignOrganizer' => 404, 'moderator' => 404,
-                'organizer' => 200, 'admin' => 200, 'superadmin' => 200]],
+                'organizer' => 200, 'admin' => 200, 'superadmin' => 200, 'coManager' => 200, 'coManagerOrg' => 200, 'revoked' => 404]],
             'V3 private event by id without code' => ['kind' => 'status', 'path' => '/api/v1/events/{eventPrivate}', 'actors' => [
                 'anon' => 404, 'participant' => 404, 'foreignOrganizer' => 404,
-                'organizer' => 200, 'moderator' => 200, 'admin' => 200]],
+                'organizer' => 200, 'moderator' => 200, 'admin' => 200, 'coManager' => 200, 'coManagerOrg' => 200, 'revoked' => 404]],
             'V4 private event by id with code' => ['kind' => 'status', 'path' => '/api/v1/events/{eventPrivate}?accessCode=rbac-code', 'actors' => [
                 'anon' => 200, 'participant' => 200, 'foreignOrganizer' => 404]],
             'V5 includePrivate does not widen the list for the non-entitled' => ['kind' => 'list', 'path' => '/api/v1/events?includePrivate=1&search={prefix}',
-                'actors' => ['anon' => 'list', 'participant' => 'list', 'owner' => 'list', 'foreignOrganizer' => 'list']],
+                'actors' => ['anon' => 'list', 'participant' => 'list', 'owner' => 'list', 'foreignOrganizer' => 'list', 'revoked' => 'list']],
             'V6 includePrivate lists private for the owner and staff' => ['kind' => 'list+private', 'path' => '/api/v1/events?includePrivate=1&search={prefix}',
-                'actors' => ['organizer' => 'list+private', 'moderator' => 'list+private', 'admin' => 'list+private', 'superadmin' => 'list+private']],
+                'actors' => ['organizer' => 'list+private', 'moderator' => 'list+private', 'admin' => 'list+private', 'superadmin' => 'list+private', 'coManager' => 'list+private', 'coManagerOrg' => 'list+private']],
             'V7 featured hides private and deleted (H8)' => ['kind' => 'list', 'path' => '/api/v1/events/featured', 'actors' => $allList],
             'V8 live hides private and deleted (H8)' => ['kind' => 'list', 'path' => '/api/v1/events/live', 'actors' => $allList],
         ];
@@ -145,8 +186,8 @@ final class RbacGrid
         'GET /uploads/{path:.+}' => ['policy' => self::PUBLIC, 'params' => ['path' => 'rbac-missing.png'], 'optional' => true, 'basis' => 'public files (plan line 446)'],
         'GET /api/v1/health' => ['policy' => self::PUBLIC, 'basis' => 'PP.20 probe (plan line 462)'],
         'POST /api/v1/uploads/avatars' => ['policy' => self::AUTH, 'basis' => 'own avatar (auth.sub) (plan line 479)'],
-        'POST /api/v1/uploads/event-images' => ['policy' => self::ROLE_EVENT_MANAGER, 'basis' => 'upload precedes the Event; no ownership (plan line 510)'],
-        'POST /api/v1/uploads/event-documents' => ['policy' => self::ROLE_EVENT_MANAGER, 'basis' => 'idem (plan line 535)'],
+        'POST /api/v1/uploads/event-images' => ['policy' => self::ROLE_EVENT_MANAGER, 'override' => ['coManager' => self::PASS], 'basis' => 'upload precedes the Event; no ownership (plan line 510); R-01: also an active Co-manager of any role'],
+        'POST /api/v1/uploads/event-documents' => ['policy' => self::ROLE_EVENT_MANAGER, 'override' => ['coManager' => self::PASS], 'basis' => 'idem (plan line 535); R-01: also an active Co-manager of any role'],
         'POST /api/v1/uploads/partner-logos' => ['policy' => self::ADMIN, 'basis' => 'macierz: Partnerzy = Admin (plan line 559)'],
         'GET /api/v1/uploads/{path:.+}' => ['policy' => self::PUBLIC, 'params' => ['path' => 'rbac-missing.png'], 'basis' => 'public files (plan line 584)'],
         'POST /api/v1/auth/login' => ['policy' => self::PUBLIC, 'body' => ['email' => '@ownerEmail', 'password' => 'rbac-pass-1234'], 'override' => self::allActors(self::OK), 'basis' => 'a valid login is 200 for any caller (plan line 597)'],
@@ -185,8 +226,8 @@ final class RbacGrid
         'POST /api/v1/events/{id}/cancel' => ['policy' => self::EVENT_OWNER_OR_ADMIN, 'params' => ['id' => 'event'], 'basis' => 'E1.1; spec 13 pkt 2 (plan line 1131)'],
         'PATCH /api/v1/events/{id}/visibility' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'event'], 'basis' => 'E1.1 (plan line 1157)'],
         'PATCH /api/v1/events/{id}/is-test' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'event'], 'basis' => '(published → 409 for managers = PASS) (plan line 1177)'],
-        'GET /api/v1/organizers/{organizerId}/events' => ['policy' => self::EVENT_MANAGER, 'params' => ['organizerId' => 'organizer'], 'basis' => 'own list or staff (plan line 1191)'],
-        'GET /api/v1/organizers/{organizerId}/event-limit' => ['policy' => self::EVENT_MANAGER, 'params' => ['organizerId' => 'organizer'], 'basis' => 'idem (plan line 1199)'],
+        'GET /api/v1/organizers/{organizerId}/events' => ['policy' => self::EVENT_MANAGER, 'params' => ['organizerId' => 'organizer'], 'override' => ['coManager' => 403, 'coManagerOrg' => 403], 'basis' => 'own list or staff (plan line 1191); R-01: a Co-manager reads only its own panel list (targeted test), never the Owner\'s'],
+        'GET /api/v1/organizers/{organizerId}/event-limit' => ['policy' => self::EVENT_MANAGER, 'params' => ['organizerId' => 'organizer'], 'override' => ['coManager' => 403, 'coManagerOrg' => 403], 'basis' => 'idem (plan line 1199); R-01: own limit or staff only, a Co-manager has no Event slots of its own'],
         'PATCH /api/v1/organizers/{organizerId}/event-limit' => ['policy' => self::ADMIN, 'params' => ['organizerId' => 'organizer'], 'basis' => 'pakiety = Admin (plan line 1207)'],
         'GET /api/v1/registrations' => ['policy' => self::STAFF, 'basis' => 'PP.2 (plan line 1228)'],
         'GET /api/v1/events/{eventId}/distances/{distanceId}/teams' => ['policy' => self::PUBLIC, 'params' => ['eventId' => 'event', 'distanceId' => 'relay'], 'basis' => 'E7.1 (NEW-C note) (plan line 1239)'],
@@ -272,7 +313,7 @@ final class RbacGrid
         'GET /api/v1/shop/orders' => ['policy' => self::STAFF, 'basis' => 'staff full projection (macierz §3 Zamówienia sklepowe: Moderator/Admin); participant own orders = GET /me/orders (PP.17)'],
         'GET /api/v1/shop/orders/{id}' => ['policy' => self::STAFF, 'basis' => 'idem; own single order = GET /me/orders/{id} (PP.17)'],
         'POST /api/v1/shop/orders' => ['policy' => self::AUTH, 'basis' => 'buyer = auth.sub (plan line 2709)'],
-        'GET /api/v1/me/orders' => ['policy' => self::AUTH, 'override' => ['participant' => self::OK, 'owner' => self::OK, 'foreignOrganizer' => self::OK, 'organizer' => self::OK, 'moderator' => self::OK, 'admin' => self::OK, 'superadmin' => self::OK], 'basis' => 'macierz §3 Zamówienia sklepowe — Uczestnik: własne; identity = auth.sub (PP.17)'],
+        'GET /api/v1/me/orders' => ['policy' => self::AUTH, 'override' => ['participant' => self::OK, 'owner' => self::OK, 'foreignOrganizer' => self::OK, 'organizer' => self::OK, 'moderator' => self::OK, 'admin' => self::OK, 'superadmin' => self::OK, 'coManager' => self::OK, 'coManagerOrg' => self::OK, 'revoked' => self::OK], 'basis' => 'macierz §3 Zamówienia sklepowe — Uczestnik: własne; identity = auth.sub (PP.17)'],
         'GET /api/v1/me/orders/{id}' => ['policy' => self::SELF_ONLY, 'params' => ['id' => 'order'], 'basis' => 'macierz §3 własne; foreign id = 404, not 403 (no enumeration) (PP.17)'],
         'PATCH /api/v1/shop/orders/{id}/status' => ['policy' => self::STAFF, 'params' => ['id' => 'order'], 'body' => ['status' => 'shipped'], 'basis' => 'macierz: Moderator "tylko zmiana statusu" (§8 Q1) (plan line 2752)'],
         'PATCH /api/v1/shop/orders/{id}' => ['policy' => self::ADMIN, 'basis' => 'H1 (plan line 2765)'],

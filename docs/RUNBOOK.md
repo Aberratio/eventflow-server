@@ -26,11 +26,13 @@ remote deploy. A push can never reach production; `scripts/ci/deploy-guard.sh` r
 **Dev:** Actions, "Deploy API", "Run workflow", any branch, `deploy_target=dev`. Needs the `dev`
 GitHub Environment with the secrets from section 9.
 
-**Production:** Actions, "Deploy API", "Run workflow", branch `master`, `deploy_target=production`,
-`migration_mode=run`, `confirm_production=DEPLOY_PRODUCTION`. With the CLI:
+**Production:** cut a release first (see [RELEASING.md](../RELEASING.md)), then Actions, "Deploy API",
+"Run workflow" from the release tag (`vYYYY.MM.PATCH`), `deploy_target=production`,
+`migration_mode=run`, `confirm_production=DEPLOY_PRODUCTION`. The guard also accepts `master` and
+`rollback-*` tags. With the CLI:
 
 ```sh
-gh workflow run deploy.yml -R Aberratio/eventflow-server --ref master \
+gh workflow run deploy.yml -R Aberratio/eventflow-server --ref v2026.10.0 \
   -f deploy_target=production -f migration_mode=run -f confirm_production=DEPLOY_PRODUCTION
 ```
 
@@ -39,7 +41,7 @@ Phases of one deploy:
 1. `guard`: input validation (exit 60-66).
 2. `Check deploy configuration`: names missing secrets, exit 30. Nothing was deployed.
 3. Tests (lint, migrate, seed, Unit, Integration) against MySQL 8.4.
-4. Build the artifact (`--no-dev`, release marker `.zmierzymy-czas-release`).
+4. Build the artifact (`--no-dev`, release marker `.zmierzymy-czas-release` with the deploy id, commit and, for a release tag, the version that `/health` reports).
 5. `preflight` on the host: paths, `.env`, `APP_ENV` equals the target, DB settings, tools. Fails before upload.
 6. Upload the zip, then `install` on the host:
    1. database dump `predeploy-<env>-<ts>.sql.gz` in `BACKEND_BACKUP_DIR` (newest 10 kept);
@@ -47,7 +49,7 @@ Phases of one deploy:
    3. `unzip -o`;
    4. `php bin/check-config.php`; on failure the snapshot is restored (exit 28);
    5. `php bin/migrate.php` (unless `migration_mode=skip`); on failure the snapshot is restored (exit 22).
-7. Health check: `curl --fail <API_URL>/health`.
+7. Health check: `curl --fail <API_URL>/health`, which must report the commit that was just deployed.
 
 The database is never restored automatically.
 

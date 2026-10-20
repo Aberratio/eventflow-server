@@ -39,5 +39,8 @@ as the first version.
   with code snapshots and rollback.
 - Demo data seeding around the current date, with locked demo accounts
   outside local environments.
+- `/health` reports the deployed `version` (from the release tag) and
+  `commit`, and the deploy fails its health check when the commit does not
+  match.
 
 [Unreleased]: https://github.com/Aberratio/eventflow-server/commits/master

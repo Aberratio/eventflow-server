@@ -41,7 +41,7 @@ Phases of one deploy:
 1. `guard`: input validation (exit 60-66).
 2. `Check deploy configuration`: names missing secrets, exit 30. Nothing was deployed.
 3. Tests (lint, migrate, seed, Unit, Integration) against MySQL 8.4.
-4. Build the artifact (`--no-dev`, release marker `.zmierzymy-czas-release`).
+4. Build the artifact (`--no-dev`, release marker `.zmierzymy-czas-release` with the deploy id, commit and, for a release tag, the version that `/health` reports).
 5. `preflight` on the host: paths, `.env`, `APP_ENV` equals the target, DB settings, tools. Fails before upload.
 6. Upload the zip, then `install` on the host:
    1. database dump `predeploy-<env>-<ts>.sql.gz` in `BACKEND_BACKUP_DIR` (newest 10 kept);
@@ -49,7 +49,7 @@ Phases of one deploy:
    3. `unzip -o`;
    4. `php bin/check-config.php`; on failure the snapshot is restored (exit 28);
    5. `php bin/migrate.php` (unless `migration_mode=skip`); on failure the snapshot is restored (exit 22).
-7. Health check: `curl --fail <API_URL>/health`.
+7. Health check: `curl --fail <API_URL>/health`, which must report the commit that was just deployed.
 
 The database is never restored automatically.
 

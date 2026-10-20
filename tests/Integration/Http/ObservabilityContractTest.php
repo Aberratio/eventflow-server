@@ -73,6 +73,8 @@ final class ObservabilityContractTest extends TestCase
         self::assertSame(200, $response->getStatusCode());
         self::assertSame('ok', $payload['data']['status']);
         self::assertSame('ok', $payload['data']['checks']['database']);
+        self::assertArrayHasKey('version', $payload['data']);
+        self::assertArrayHasKey('commit', $payload['data']);
         self::assertArrayNotHasKey('env', $payload['data']);
         self::assertArrayNotHasKey('url', $payload['data']);
     }

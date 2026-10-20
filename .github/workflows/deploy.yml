@@ -159,8 +159,11 @@ jobs:
             --exclude='artifact' \
             --exclude='tests' \
             --exclude='vendor/phpunit'
-          printf 'DEPLOY_ID=%s\nGIT_SHA=%s\nRUN_URL=%s/%s/actions/runs/%s\n' \
-            "$DEPLOY_ID" "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" \
+          # VERSION is set only for a release tag (RELEASING.md); /health reports it.
+          RELEASE_VERSION=""
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then RELEASE_VERSION="${GITHUB_REF_NAME#v}"; fi
+          printf 'DEPLOY_ID=%s\nGIT_SHA=%s\nVERSION=%s\nRUN_URL=%s/%s/actions/runs/%s\n' \
+            "$DEPLOY_ID" "$GITHUB_SHA" "$RELEASE_VERSION" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" \
             > artifact/api/.zmierzymy-czas-release
           cd artifact/api
           zip -r ../api.zip .
@@ -200,4 +203,11 @@ jobs:
           API_URL: ${{ secrets.API_URL }}
         run: |
           set -Eeuo pipefail
-          curl --fail --show-error --location "${API_URL%/}/health"
+          HEALTH="$(curl --fail --show-error --location "${API_URL%/}/health")"
+          printf '%s\n' "$HEALTH"
+          EXPECTED_COMMIT="${GITHUB_SHA::7}"
+          ACTUAL_COMMIT="$(printf '%s' "$HEALTH" | jq -r '.data.commit // empty')"
+          if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
+            echo "::error::/health reports commit '${ACTUAL_COMMIT}', expected '${EXPECTED_COMMIT}'."
+            exit 1
+          fi

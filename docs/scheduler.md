@@ -15,7 +15,7 @@ eight idempotent jobs, in this order, on every tick:
 | 8 | `mail.outbox_retry` | PP.19: dispatches outbox rows Central Mailer never accepted (deferred, failed, stale in-flight); skipped when not configured | 50 / tick, 6 attempts, backoff 2 / 10 / 30 / 120 / 360 min, max age 48 h |
 | 9 | `calendar.outbox_retry` | R-17: sends approved Events to Google Calendar (skipped while the integration is off or `GOOGLE_CALENDAR_SERVICE_ACCOUNT_FILE` is missing) | 50 / tick, 8 attempts, backoff 5 min .. 10 h |
 
-| 10 | `retention.purge` | R-05: deletes answers to confidential form fields once the Event ended more than 12 months ago, and activity-log entries older than 12 months (reads no longer delete) | unbounded DELETEs, idempotent |
+| 10 | `retention.purge` | R-05: deletes answers to confidential form fields once the Event ended more than `RETENTION_CONFIDENTIAL_ANSWERS_DAYS` days ago (default 90), and activity-log entries older than `RETENTION_ACTIVITY_LOG_MONTHS` months (default 12); an invalid value (not an integer > 0) falls back to the default with a log warning (reads no longer delete) | unbounded DELETEs, idempotent |
 
 ## Mail delivery (PP.19)
 

@@ -35,6 +35,7 @@ use ZmierzymyCzas\Scheduler\Jobs\PaymentRemindersJob;
 use ZmierzymyCzas\Scheduler\Jobs\ResultsPublishedMailJob;
 use ZmierzymyCzas\Scheduler\Jobs\RetentionPurgeJob;
 use ZmierzymyCzas\Domain\Admin\AdminRepository;
+use ZmierzymyCzas\Domain\Retention\RetentionConfig;
 use ZmierzymyCzas\Domain\Retention\RetentionRepository;
 use ZmierzymyCzas\Support\Env;
 
@@ -55,7 +56,7 @@ final class SchedulerJobs
         'mail.results_published',   // PP.19: fan-out first, so the new deferred rows go out in the same tick
         'mail.outbox_retry',        // PP.19: dispatch deferred / failed / stale rows (429-aware)
         'calendar.outbox_retry',    // R-17: send approved Events to Google Calendar (skipped while off / no key)
-        'retention.purge',          // R-05: 12-month retention of confidential answers + activity log
+        'retention.purge',          // R-05: configurable retention (90 d / 12 mo default) of confidential answers + activity log
     ];
 
     /** @return list<ScheduledJob> in NAMES order */
@@ -94,7 +95,7 @@ final class SchedulerJobs
             )),
             new MailOutboxRetryJob($outbox, $mailerConfig),
             new GoogleCalendarOutboxRetryJob(GoogleCalendarSyncService::fromEnv($pdo, $logger)),
-            new RetentionPurgeJob(new RetentionRepository($pdo), new AdminRepository($pdo)),
+            new RetentionPurgeJob(new RetentionRepository($pdo), new AdminRepository($pdo), RetentionConfig::fromEnv($logger)),
         ];
     }
 }

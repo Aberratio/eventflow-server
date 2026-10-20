@@ -41,17 +41,17 @@ final class AdminRepository extends Repository
      * 'retention.purge' (reads only filter them out). There is deliberately no endpoint to
      * delete a single entry. Idempotent.
      */
-    public function purgeExpiredActivityLogs(\DateTimeImmutable $now): int
+    public function purgeExpiredActivityLogs(\DateTimeImmutable $now, int $months = self::RETENTION_MONTHS): int
     {
         $stmt = $this->pdo->prepare('DELETE FROM activity_logs WHERE timestamp < :cutoff');
-        $stmt->execute(['cutoff' => $this->retentionCutoff($now)]);
+        $stmt->execute(['cutoff' => $this->retentionCutoff($now, $months)]);
 
         return $stmt->rowCount();
     }
 
-    private function retentionCutoff(?\DateTimeImmutable $now = null): string
+    private function retentionCutoff(?\DateTimeImmutable $now = null, int $months = self::RETENTION_MONTHS): string
     {
-        return ($now ?? new \DateTimeImmutable())->modify('-' . self::RETENTION_MONTHS . ' months')->format(DATE_ATOM);
+        return ($now ?? new \DateTimeImmutable())->modify('-' . max(1, $months) . ' months')->format(DATE_ATOM);
     }
 
     public function securitySettings(): array

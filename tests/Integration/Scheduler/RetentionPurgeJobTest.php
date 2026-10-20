@@ -9,12 +9,13 @@ use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Database\Migrator;
 use ZmierzymyCzas\Domain\Admin\AdminRepository;
+use ZmierzymyCzas\Domain\Retention\RetentionConfig;
 use ZmierzymyCzas\Domain\Retention\RetentionRepository;
 use ZmierzymyCzas\Scheduler\Jobs\RetentionPurgeJob;
 use ZmierzymyCzas\Scheduler\SchedulerJobs;
 use ZmierzymyCzas\Support\Env;
 
-/** R-05 (specs 09, 10): confidential form answers and the activity log are purged after 12 months. */
+/** R-05 (specs 09, 10): confidential form answers and the activity log are purged after the configured period (90 days / 12 months by default). */
 final class RetentionPurgeJobTest extends TestCase
 {
     private PDO $pdo;
@@ -45,11 +46,11 @@ final class RetentionPurgeJobTest extends TestCase
         self::assertContains('retention.purge', SchedulerJobs::NAMES);
     }
 
-    public function testDeletesConfidentialAnswersOfEventsEndedOverTwelveMonthsAgoOnly(): void
+    public function testDeletesConfidentialAnswersOfEventsEndedOver90DaysAgoOnly(): void
     {
         $now = new \DateTimeImmutable('2026-10-19 12:00:00');
-        $oldEvent = $this->event('old', '2025-09-01');       // ended > 12 months ago
-        $recentEvent = $this->event('recent', '2026-06-01');  // ended 4 months ago
+        $oldEvent = $this->event('old', '2025-09-01');       // ended > 90 days ago
+        $recentEvent = $this->event('recent', '2026-09-01');  // ended ~7 weeks ago (inside the 90-day default)
         $oldConfidential = $this->field($oldEvent, 'oldc', true);
         $oldPlain = $this->field($oldEvent, 'oldp', false);
         $recentConfidential = $this->field($recentEvent, 'recc', true);
@@ -79,6 +80,38 @@ final class RetentionPurgeJobTest extends TestCase
         self::assertGreaterThanOrEqual(1, $counters['activityLogs']);
         self::assertSame(0, $this->logCount('old'));
         self::assertSame(1, $this->logCount('new'));
+    }
+
+    public function testConfiguredPeriodsOverrideTheDefaults(): void
+    {
+        $now = new \DateTimeImmutable('2026-10-19 12:00:00');
+        $event = $this->event('mid', '2026-09-01');           // ended 48 days ago
+        $field = $this->field($event, 'midc', true);
+        $this->answer($field, $this->registration($event, 'midreg'));
+        $this->log('l4', $now->modify('-4 months'));
+        $this->log('l2', $now->modify('-2 months'));
+        $config = new RetentionConfig(confidentialAnswersDays: 30, activityLogMonths: 3);
+
+        $counters = (new RetentionPurgeJob(new RetentionRepository($this->pdo), new AdminRepository($this->pdo), $config))->run($now);
+
+        self::assertGreaterThanOrEqual(1, $counters['confidentialAnswers']);
+        self::assertSame(0, $this->answerCount($field), '48 days > 30-day override');
+        self::assertSame(0, $this->logCount('l4'), 'older than the 3-month override');
+        self::assertSame(1, $this->logCount('l2'));
+    }
+
+    public function testDefaultPeriodsKeepFortyEightDayOldAnswersAndElevenMonthOldLogs(): void
+    {
+        $now = new \DateTimeImmutable('2026-10-19 12:00:00');
+        $event = $this->event('mid2', '2026-09-01');
+        $field = $this->field($event, 'mid2c', true);
+        $this->answer($field, $this->registration($event, 'mid2reg'));
+        $this->log('l11', $now->modify('-11 months'));
+
+        $this->job()->run($now);
+
+        self::assertSame(1, $this->answerCount($field));
+        self::assertSame(1, $this->logCount('l11'));
     }
 
     public function testReadingTheActivityLogNoLongerDeletes(): void

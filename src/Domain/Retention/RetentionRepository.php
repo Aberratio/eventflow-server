@@ -12,16 +12,14 @@ use ZmierzymyCzas\Domain\Repository;
  */
 final class RetentionRepository extends Repository
 {
-    public const RETENTION_MONTHS = 12;
-
     /**
      * Deletes the answers to confidential ("poufne") form fields once their Event ended more than
-     * RETENTION_MONTHS ago (end_date, falling back to the start date). Other answers are untouched.
+     * $days days ago (end_date, falling back to the start date). Other answers are untouched.
      * Idempotent.
      */
-    public function purgeConfidentialAnswers(\DateTimeImmutable $now): int
+    public function purgeConfidentialAnswers(\DateTimeImmutable $now, int $days = RetentionConfig::DEFAULT_CONFIDENTIAL_ANSWERS_DAYS): int
     {
-        $cutoff = $now->modify('-' . self::RETENTION_MONTHS . ' months')->format('Y-m-d');
+        $cutoff = $now->modify('-' . max(1, $days) . ' days')->format('Y-m-d');
         $stmt = $this->pdo->prepare(
             "DELETE a FROM form_field_answers a
                JOIN form_fields f ON f.id = a.form_field_id

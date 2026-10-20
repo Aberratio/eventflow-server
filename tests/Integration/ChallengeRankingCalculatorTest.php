@@ -236,6 +236,34 @@ final class ChallengeRankingCalculatorTest extends TestCase
         self::assertSame(3, $byUserId[$userThird['id']]['rank']);
     }
 
+    /** R-09: the Series ranking (several Wyzwania) uses the same `Anonim #<kod>` label. */
+    public function testSeriesRankingOverSeveralChallengesUsesTheAnonymousLabel(): void
+    {
+        $this->pointsSettings->updateSettings(['pointsTable' => [100, 90], 'floorPoints' => 0]);
+        [$userAnon, $competitorAnon] = $this->makeUserAndCompetitor('SeriesAnon');
+        $this->competitors->setAnonymization((string) $competitorAnon['id'], true);
+
+        $challengeIds = [];
+        foreach (['a', 'b'] as $key) {
+            $eventId = $this->prefix . '-evt-series-' . $key;
+            $challenge = $this->createChallenge([
+                'type' => 'point_threshold',
+                'pointsRequired' => 1,
+                'bestResultsCount' => null,
+                'events' => [['eventId' => $eventId]],
+            ]);
+            $this->addFinishedResult($eventId, $userAnon['id'], $userAnon['name'], 1);
+            $this->addParticipation($challenge['id'], $userAnon['id'], $userAnon['name']);
+            $challengeIds[] = $challenge['id'];
+        }
+
+        $entries = $this->ranking->rank($challengeIds)['entries'];
+
+        self::assertCount(1, $entries);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel((string) $competitorAnon['id']), $entries[0]['name']);
+        self::assertStringStartsWith('Anonim #', $entries[0]['name']);
+    }
+
     public function testAnonymizedCompetitorNameIsMaskedNonAnonymizedIsNot(): void
     {
         $this->pointsSettings->updateSettings(['pointsTable' => [100, 90], 'floorPoints' => 0]);

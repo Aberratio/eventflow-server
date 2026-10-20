@@ -15,7 +15,7 @@ namespace ZmierzymyCzas\Domain\Competitors;
  *
  * Masked-name format: a judgment call, spec deliberately leaves it open
  * ("spec nie precyzuje dokladnego formatu, brak precedensu w kodzie").
- * Chosen: a fixed, fully generic label ("Zawodnik anonimowy") rather than
+ * Chosen (R-09, spec 10): the label "Anonim #<kod>" (stable per Zawodnik, see anonymousLabel()) rather than
  * initials (e.g. "J.K.") — initials are still partially re-identifying when
  * cross-referenced against a public start list or bib number, which would
  * undermine the whole point of the flag; a flat label carries zero

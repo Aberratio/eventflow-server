@@ -18,7 +18,10 @@ final class HttpMiddlewareStack
     {
         $app->addBodyParsingMiddleware();
         $app->addRoutingMiddleware();
-        $app->add(new JsonErrorMiddleware($config->debug, $logger));
+        // QA-DEV-01: exception details (message, class, trace) only for APP_DEBUG=true on a
+        // local machine; dev/staging/production always get the plain error contract.
+        $exposeDetails = $config->debug && $config->appEnv === AppConfig::ENV_LOCAL;
+        $app->add(new JsonErrorMiddleware($exposeDetails, $logger));
         $app->add(new CorsMiddleware($config->corsOriginsHeaderValue()));
         // Outermost: also covers CORS preflight (answered by CorsMiddleware without calling the
         // handler) and every error response rendered by JsonErrorMiddleware.

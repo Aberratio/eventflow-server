@@ -39,6 +39,8 @@ as the first version.
   with code snapshots and rollback.
 - Registration price quote also refuses a full distance and a team the caller
   has no invitation to, with the same errors as the registration itself.
+- An event switched to private visibility is removed from the Google Calendar
+  (queued through the calendar outbox, like a cancellation).
 - Demo data seeding around the current date, with locked demo accounts
   outside local environments.
 - `/health` reports the deployed `version` (from the release tag) and

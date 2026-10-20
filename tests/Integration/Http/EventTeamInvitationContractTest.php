@@ -83,13 +83,25 @@ final class EventTeamInvitationContractTest extends HttpTestCase
         return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }
 
-    private function tokenFromLastInvitation(string $email): string
+    /**
+     * The token of the newest invitation mail. outbox.created_at has second precision and the id is a random
+     * UUID, so two mails queued within one second have no reliable order: pass $except (the token already
+     * known) to pick the other one deterministically.
+     */
+    private function tokenFromLastInvitation(string $email, ?string $except = null): string
     {
         $rows = $this->outbox($email, 'event_team_invitation');
         self::assertNotSame([], $rows, 'the invitation mail is queued');
-        self::assertSame(1, preg_match('#/team-invitations/([a-f0-9]{64})#', (string) end($rows)['html'], $m));
+        $tokens = [];
+        foreach ($rows as $row) {
+            self::assertSame(1, preg_match('#/team-invitations/([a-f0-9]{64})#', (string) $row['html'], $m));
+            if ($m[1] !== $except) {
+                $tokens[] = $m[1];
+            }
+        }
+        self::assertNotSame([], $tokens, 'a mail with a token other than the excluded one is queued');
 
-        return $m[1];
+        return end($tokens);
     }
 
     private function activityCount(string $action): int
@@ -204,7 +216,7 @@ final class EventTeamInvitationContractTest extends HttpTestCase
         // A resend issues a fresh 7-day token and the old one stays dead.
         $resent = $this->call('organizer', 'POST', $this->team('/' . $created['json']['data']['id'] . '/resend'));
         self::assertSame(200, $resent['status']);
-        $fresh = $this->tokenFromLastInvitation($email);
+        $fresh = $this->tokenFromLastInvitation($email, $token);
         self::assertNotSame($token, $fresh);
         self::assertSame(404, $this->call(null, 'GET', '/api/v1/team-invitations/' . $token)['status']);
         self::assertSame(200, $this->call('foreignOrganizer', 'POST', '/api/v1/team-invitations/' . $fresh . '/accept')['status']);

@@ -30,6 +30,8 @@ assert_exit 0 guard deploy $D production DEPLOY_PRODUCTION $M
 assert_exit 0 guard deploy $D production DEPLOY_PRODUCTION $M false run
 assert_exit 0 guard deploy $D production DEPLOY_PRODUCTION refs/tags/rollback-x
 assert_exit 0 guard deploy $D production DEPLOY_PRODUCTION refs/tags/rollback-2026-10-05
+assert_exit 0 guard deploy $D production DEPLOY_PRODUCTION refs/tags/v2026.10.0
+assert_exit 0 guard deploy $D production DEPLOY_PRODUCTION refs/tags/v2026.1.12
 assert_exit 0 guard rollback $D production ROLLBACK_PRODUCTION $M false '' latest
 assert_exit 0 guard rollback $D staging '' $M false '' list
 assert_exit 0 guard rollback $D staging '' $M false '' code-20261005-101500-staging-12-abc1234.tar.gz
@@ -68,6 +70,11 @@ assert_exit 62 guard rollback $D production '' $M false '' latest
 # 63: production ref
 assert_exit 63 guard deploy $D production DEPLOY_PRODUCTION refs/heads/feat
 assert_exit 63 guard deploy $D production DEPLOY_PRODUCTION refs/tags/v1
+assert_exit 63 guard deploy $D production DEPLOY_PRODUCTION refs/tags/v2026.10
+assert_exit 63 guard deploy $D production DEPLOY_PRODUCTION refs/tags/v2026x10x0
+assert_exit 63 guard deploy $D production DEPLOY_PRODUCTION refs/tags/v2026.10.0-rc1
+assert_exit 63 guard deploy $D production DEPLOY_PRODUCTION refs/heads/v2026.10.0
+assert_exit 63 guard rollback $D production ROLLBACK_PRODUCTION refs/tags/v2026.10.0 false '' latest
 assert_exit 63 guard deploy $D production DEPLOY_PRODUCTION refs/tags/rollback-
 assert_exit 63 guard deploy $D production DEPLOY_PRODUCTION refs/heads/rollback-x
 assert_exit 63 guard deploy $D production DEPLOY_PRODUCTION ''

@@ -145,7 +145,7 @@ final class EventChildSchema
         'pricingVariants' => ['id', 'distanceId', 'sortOrder'],
         'paymentMethods' => ['id', 'eventId', 'sortOrder'],
         'merchandise' => ['id', 'eventId', 'sortOrder', 'shopProductId'],
-        'discountCodes' => ['id', 'eventId', 'sortOrder'],
+        'discountCodes' => ['id', 'eventId', 'sortOrder', 'batchId'],
         'galleryAlbums' => ['id', 'eventId', 'sortOrder'],
         'documents' => ['id', 'eventId', 'sortOrder'],
     ];

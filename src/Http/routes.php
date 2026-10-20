@@ -1987,8 +1987,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // the same ordered list an organizer edits, just without hidden
         // internals. Manage endpoints require $eventManagerRoles, mirroring
         // the mail-templates group above.
+        // R-04: `?distanceId=` returns the effective form of that Dystans (event form + its overrides + its own fields).
         $api->get('/events/{eventId}/form-fields/public', function (Request $request, Response $response, array $args) use ($formFields) {
-            $fields = $formFields->ensureSystemCatalog((string) $args['eventId']);
+            $fields = $formFields->effectiveForDistance((string) $args['eventId'], (string) ($request->getQueryParams()['distanceId'] ?? ''));
             $visible = array_values(array_filter($fields, static fn (array $f): bool => $f['state'] !== 'hidden'));
             return JsonResponder::ok($response, $visible);
         });
@@ -2059,6 +2060,67 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'validation_error', 'Pozycje systemowe można wyłącznie ukryć, nie usunąć.', 422);
             }
             return JsonResponder::ok($response, ['deleted' => true]);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        // R-04: per-Dystans form. The effective form (with `source`: event|override|distance), a Dystans-only
+        // field, and copy-on-override / reset of an inherited Pozycja. Same event-manager gate as above.
+        $distanceFormGate = static function (Response $response, array $args, Request $request) use ($events, $canManageEvent): array|Response {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $distanceIds = array_map(static fn (array $d): string => (string) $d['id'], (array) ($event['distances'] ?? []));
+            if (!in_array((string) $args['distanceId'], $distanceIds, true)) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono dystansu.', 404);
+            }
+            return (array) $event;
+        };
+        $api->get('/events/{eventId}/distances/{distanceId}/form-fields', function (Request $request, Response $response, array $args) use ($formFields, $distanceFormGate) {
+            $gate = $distanceFormGate($response, $args, $request);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            return JsonResponder::ok($response, $formFields->effectiveForDistance((string) $args['eventId'], (string) $args['distanceId']));
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->post('/events/{eventId}/distances/{distanceId}/form-fields', function (Request $request, Response $response, array $args) use ($formFields, $distanceFormGate, $body) {
+            $gate = $distanceFormGate($response, $args, $request);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            try {
+                $created = $formFields->createCustom((string) $args['eventId'], $body($request), (string) $args['distanceId']);
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
+            return JsonResponder::ok($response, $created, 'Form field created', 201);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->post('/events/{eventId}/distances/{distanceId}/form-fields/{fieldId}/override', function (Request $request, Response $response, array $args) use ($formFields, $distanceFormGate) {
+            $gate = $distanceFormGate($response, $args, $request);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            try {
+                $override = $formFields->createOverride((string) $args['eventId'], (string) $args['distanceId'], (string) $args['fieldId']);
+            } catch (\ZmierzymyCzas\Domain\FormFields\FormFieldConflictException $e) {
+                return JsonResponder::error($response, $e->errorCode, $e->getMessage(), 409);
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'not_found', $e->getMessage(), 404);
+            }
+            return JsonResponder::ok($response, $override, 'Form field overridden', 201);
+        })->add(new AuthMiddleware($jwt, $eventManagerRoles));
+        $api->delete('/events/{eventId}/distances/{distanceId}/form-fields/{fieldId}/override', function (Request $request, Response $response, array $args) use ($formFields, $distanceFormGate) {
+            $gate = $distanceFormGate($response, $args, $request);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            try {
+                $reset = $formFields->resetOverride((string) $args['eventId'], (string) $args['distanceId'], (string) $args['fieldId']);
+            } catch (\ZmierzymyCzas\Domain\FormFields\FormFieldConflictException $e) {
+                return JsonResponder::error($response, $e->errorCode, $e->getMessage(), 409);
+            }
+            if (!$reset) {
+                return JsonResponder::error($response, 'not_found', 'Ten Dystans nie nadpisuje tej pozycji.', 404);
+            }
+            return JsonResponder::ok($response, ['reset' => true]);
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         // E2.5: automatic answer-count aggregation for choice-type custom fields
         // (single_choice/multi_choice/consent) — no "zestawialne" flag, see
@@ -2184,6 +2246,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             // their own Zapis on event Y.
             $field = $formFields->find((string) $args['fieldId']);
             if ($field === null || (string) ($field['eventId'] ?? '') !== (string) $gate['registration']['eventId']) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono pola formularza.', 404);
+            }
+            // R-04: a field of another Dystans' form is not part of this Zapis's form.
+            if ((string) ($field['distanceId'] ?? '') !== '' && (string) $field['distanceId'] !== (string) ($gate['registration']['distanceId'] ?? '')) {
                 return JsonResponder::error($response, 'not_found', 'Nie znaleziono pola formularza.', 404);
             }
             try {

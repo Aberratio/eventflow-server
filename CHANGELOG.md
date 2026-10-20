@@ -34,6 +34,11 @@ as the first version.
   sync.
 - Integration with the biuro_zawodow race office: webhook pushes with retries
   and an end-to-end contract test in CI.
+- Registration form per distance: a distance inherits the event form and can
+  override an inherited field (required/visible/hidden, label, variants and
+  prices) or add its own fields. Registration validation and pricing, the
+  public form endpoint (`?distanceId=`) and new organizer endpoints under
+  `/events/{id}/distances/{distanceId}/form-fields` use the distance's form.
 - Operations: PII-redacting structured logs, throttled e-mail alerts,
   `/health`, daily database backups with restore checks, and scripted deploys
   with code snapshots and rollback.

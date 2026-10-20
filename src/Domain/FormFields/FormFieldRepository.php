@@ -95,10 +95,130 @@ final class FormFieldRepository extends Repository
     /** @return array<int, array<string, mixed>> */
     public function listForEvent(string $eventId): array
     {
-        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM form_fields WHERE event_id = :eventId ORDER BY sort_order ASC, created_at ASC');
+        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM form_fields WHERE event_id = :eventId AND distance_scope = \'\' ORDER BY sort_order ASC, created_at ASC');
         $stmt->execute(['eventId' => $eventId]);
         $rows = $stmt->fetchAll();
         return array_map(fn (array $row): array => self::castOptionPrices($this->decode($row, self::JSON_FIELDS)), $rows);
+    }
+
+    /**
+     * R-04: rows that belong to one Dystans only (overrides of inherited Pozycje + Dystans-only fields).
+     * listForEvent() deliberately never returns them, so every event-level reader (public start list,
+     * exports, snapshot, aggregates) keeps seeing exactly the event form.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listForDistanceOnly(string $eventId, string $distanceId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM form_fields WHERE event_id = :eventId AND distance_scope = :scope ORDER BY sort_order ASC, created_at ASC');
+        $stmt->execute(['eventId' => $eventId, 'scope' => $distanceId]);
+        return array_map(fn (array $row): array => self::castOptionPrices($this->decode($row, self::JSON_FIELDS)), $stmt->fetchAll());
+    }
+
+    /**
+     * R-04: the effective form of one Dystans = the event form (inherited) with the Dystans overrides
+     * swapped in at the same position, followed by the Dystans-only fields. Every row carries
+     * `source`: 'event' (inherited as is), 'override' (Dystans replaces the inherited Pozycja) or
+     * 'distance' (exists on this Dystans only). An empty `$distanceId` yields the plain event form.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function effectiveForDistance(string $eventId, ?string $distanceId): array
+    {
+        $event = $this->ensureSystemCatalog($eventId);
+        $distanceId = (string) $distanceId;
+        if ($distanceId === '') {
+            return array_map(static fn (array $f): array => [...$f, 'source' => 'event'], $event);
+        }
+
+        $own = [];
+        foreach ($this->listForDistanceOnly($eventId, $distanceId) as $row) {
+            $own[(string) $row['fieldKey']] = $row;
+        }
+        $effective = [];
+        foreach ($event as $field) {
+            $key = (string) $field['fieldKey'];
+            if (isset($own[$key])) {
+                $effective[] = [...$own[$key], 'sortOrder' => $field['sortOrder'], 'source' => 'override'];
+                unset($own[$key]);
+            } else {
+                $effective[] = [...$field, 'source' => 'event'];
+            }
+        }
+        foreach ($own as $row) {
+            $effective[] = [...$row, 'source' => 'distance'];
+        }
+        return $effective;
+    }
+
+    /**
+     * R-04: "Nadpisz na tym Dystansie" - copies the event-level Pozycja into a Dystans-scoped row that
+     * the organizer then edits through the normal PATCH endpoint. Copy-on-override: from then on the
+     * Dystans row no longer follows later edits of the event row (reset to inherit again).
+     *
+     * @throws \InvalidArgumentException unknown field / Dystans not of this event
+     * @throws FormFieldConflictException the Dystans already overrides this Pozycja
+     */
+    public function createOverride(string $eventId, string $distanceId, string $eventFieldId): array
+    {
+        $this->assertDistanceOfEvent($eventId, $distanceId);
+        $base = $this->find($eventFieldId);
+        if ($base === null || $base['eventId'] !== $eventId || $base['distanceId'] !== null) {
+            throw new \InvalidArgumentException('Nie znaleziono pozycji formularza wydarzenia.');
+        }
+        foreach ($this->listForDistanceOnly($eventId, $distanceId) as $row) {
+            if ($row['fieldKey'] === $base['fieldKey']) {
+                throw new FormFieldConflictException(FormFieldConflictException::OVERRIDE_EXISTS, 'Ten Dystans już nadpisuje tę pozycję.');
+            }
+        }
+
+        $id = $this->id();
+        $this->pdo->prepare(
+            'INSERT INTO form_fields (id, event_id, distance_id, distance_scope, kind, field_key, storage_location, state, sort_order, '
+            . 'label_override, tooltip_override, public_list_visible, field_type, validation_config, options, is_confidential, visible_to_bz) '
+            . 'SELECT :newId, event_id, :distanceId, :scope, kind, field_key, storage_location, state, sort_order, '
+            . 'label_override, tooltip_override, public_list_visible, field_type, validation_config, options, is_confidential, visible_to_bz '
+            . 'FROM form_fields WHERE id = :baseId'
+        )->execute(['newId' => $id, 'distanceId' => $distanceId, 'scope' => $distanceId, 'baseId' => $eventFieldId]);
+
+        return $this->find($id) ?? [];
+    }
+
+    /**
+     * R-04: "Przywróć dziedziczenie" - drops the Dystans override of an event-level Pozycja. Refused
+     * while registrations hold answers stored under the override (they would be deleted with it).
+     *
+     * @throws FormFieldConflictException override has answers
+     */
+    public function resetOverride(string $eventId, string $distanceId, string $eventFieldId): bool
+    {
+        $base = $this->find($eventFieldId);
+        if ($base === null || $base['eventId'] !== $eventId || $base['distanceId'] !== null) {
+            return false;
+        }
+        foreach ($this->listForDistanceOnly($eventId, $distanceId) as $row) {
+            if ($row['fieldKey'] !== $base['fieldKey']) {
+                continue;
+            }
+            if ($this->countAnswers((string) $row['id']) > 0) {
+                throw new FormFieldConflictException(
+                    FormFieldConflictException::HAS_ANSWERS,
+                    'Nie można przywrócić dziedziczenia: zapisy mają już odpowiedzi w nadpisanym polu.'
+                );
+            }
+            $this->pdo->prepare('DELETE FROM form_fields WHERE id = :id')->execute(['id' => $row['id']]);
+            return true;
+        }
+        return false;
+    }
+
+    private function assertDistanceOfEvent(string $eventId, string $distanceId): void
+    {
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM event_distances WHERE id = :id AND event_id = :eventId');
+        $stmt->execute(['id' => $distanceId, 'eventId' => $eventId]);
+        if ((int) $stmt->fetchColumn() === 0) {
+            throw new \InvalidArgumentException('Nie znaleziono dystansu tego wydarzenia.');
+        }
     }
 
     public function find(string $id): ?array
@@ -140,8 +260,11 @@ final class FormFieldRepository extends Repository
      *
      * @param array<string, mixed> $data
      */
-    public function createCustom(string $eventId, array $data): array
+    public function createCustom(string $eventId, array $data, ?string $distanceId = null): array
     {
+        if ($distanceId !== null) {
+            $this->assertDistanceOfEvent($eventId, $distanceId);
+        }
         $type = (string) ($data['fieldType'] ?? '');
         if (!FormFieldType::isValid($type)) {
             throw new \InvalidArgumentException('Nieznany typ pola własnego.');
@@ -156,11 +279,21 @@ final class FormFieldRepository extends Repository
 
         $options = FormFieldType::usesOptions($type) ? self::normalizeOptions($data['options'] ?? []) : null;
 
+        if ($distanceId !== null) {
+            // A Dystans-only field must not shadow (or duplicate) a Pozycja the event already has.
+            $taken = array_column($this->listForEvent($eventId), 'fieldKey');
+            $taken = [...$taken, ...array_column($this->listForDistanceOnly($eventId, $distanceId), 'fieldKey')];
+            if (in_array($key, $taken, true)) {
+                throw new \InvalidArgumentException('Pozycja o tym kluczu już istnieje w formularzu.');
+            }
+        }
+
         $id = $this->id();
         $this->insert('form_fields', $this->encode([
             'id' => $id,
             'event_id' => $eventId,
-            'distance_id' => null, // seam #1 — patrz docblock klasy
+            'distance_id' => $distanceId,
+            'distance_scope' => $distanceId ?? '',
             'kind' => 'custom',
             'field_key' => $key,
             'storage_location' => FormFieldCatalog::STORAGE_REGISTRATION, // model F1: pola własne zawsze na Zapisie
@@ -229,6 +362,10 @@ final class FormFieldRepository extends Repository
         if (!FormFieldType::isValid($newType)) {
             throw new \InvalidArgumentException('Nieznany typ pola własnego.');
         }
+        if ($newType !== $currentType && $field['distanceId'] !== null && $this->inheritsFromEvent($field)) {
+            // spec 10 §6: a Dystans may not retype a Pozycja it inherits from the event.
+            throw new \InvalidArgumentException('Dystans nie może zmienić typu pola odziedziczonego z wydarzenia.');
+        }
 
         $update = [];
         if ($newType !== $currentType) {
@@ -267,6 +404,14 @@ final class FormFieldRepository extends Repository
 
         $this->updateById('form_fields', $id, $update);
         return $this->find($id) ?? [];
+    }
+
+    /** @param array<string, mixed> $field a Dystans-scoped row */
+    private function inheritsFromEvent(array $field): bool
+    {
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM form_fields WHERE event_id = :eventId AND field_key = :key AND distance_scope = ''");
+        $stmt->execute(['eventId' => $field['eventId'], 'key' => $field['fieldKey']]);
+        return (int) $stmt->fetchColumn() > 0;
     }
 
     private function countAnswers(string $fieldId): int

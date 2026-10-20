@@ -873,8 +873,18 @@ SQL;
             }
 
             $answersByFieldId = [];
-            foreach ($answerRepository->forRegistration((string) $registration['id']) as $answer) {
-                $answersByFieldId[$answer['formFieldId']] = $answer['valueText'] ?? $answer['valueJson'] ?? null;
+            $answersByKey = [];
+            foreach ($answerRepository->forRegistrationWithKeys((string) $registration['id']) as $answer) {
+                $value = $answer['valueText'] ?? $answer['valueJson'] ?? null;
+                $answersByFieldId[$answer['formFieldId']] = $value;
+                $answersByKey[(string) $answer['fieldKey']] = $value;
+            }
+            // R-04: an answer given on a Dystans override is stored under the override's id, but the
+            // event-level column is what lists/exports render - match it up by the stable field key.
+            foreach ($columns as $column) {
+                if ($column['kind'] === 'custom' && !array_key_exists($column['id'], $answersByFieldId) && array_key_exists((string) $column['fieldKey'], $answersByKey)) {
+                    $answersByFieldId[$column['id']] = $answersByKey[(string) $column['fieldKey']];
+                }
             }
 
             $registration['formFields'] = array_map(

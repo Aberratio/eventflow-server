@@ -35,7 +35,8 @@ final class ResultRepository extends Repository
     private static function anonymizationJoinSql(): string
     {
         return 'SELECT ' . self::COLUMNS_R . ',
-                COALESCE(comp_reg.is_anonymized, comp_self.is_anonymized, 0) AS isAnonymizedFlag
+                COALESCE(comp_reg.is_anonymized, comp_self.is_anonymized, 0) AS isAnonymizedFlag,
+                COALESCE(comp_reg.id, comp_self.id) AS anonymizedCompetitorId
             FROM results r
             LEFT JOIN registrations reg ON reg.id = r.registration_id
             LEFT JOIN competitors comp_reg ON comp_reg.id = reg.competitor_id
@@ -54,8 +55,9 @@ final class ResultRepository extends Repository
     {
         return array_map(static function (array $row): array {
             $isAnonymized = (bool) $row['isAnonymizedFlag'];
-            unset($row['isAnonymizedFlag']);
-            $row['userName'] = CompetitorNamePresenter::publicName((string) $row['userName'], $isAnonymized);
+            $competitorId = $row['anonymizedCompetitorId'] !== null ? (string) $row['anonymizedCompetitorId'] : null;
+            unset($row['isAnonymizedFlag'], $row['anonymizedCompetitorId']);
+            $row['userName'] = CompetitorNamePresenter::publicName((string) $row['userName'], $isAnonymized, $competitorId);
             return $row;
         }, $rows);
     }

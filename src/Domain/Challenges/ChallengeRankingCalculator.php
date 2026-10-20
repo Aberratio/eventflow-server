@@ -122,7 +122,7 @@ final class ChallengeRankingCalculator
             $scored[] = [
                 'userId' => $publicUserId,
                 'competitorId' => $info['competitorId'],
-                'name' => CompetitorNamePresenter::publicName($realName, $isAnonymized),
+                'name' => CompetitorNamePresenter::publicName($realName, $isAnonymized, $competitor !== null ? (string) $competitor['id'] : null),
                 'isAnonymized' => $isAnonymized,
                 'points' => $points,
                 'isCompleted' => $info['isCompleted'],

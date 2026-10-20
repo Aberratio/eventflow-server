@@ -354,16 +354,16 @@ SQL;
                 return $registration;
             }
 
-            $registration['userName'] = CompetitorNamePresenter::publicName((string) $registration['userName'], true);
+            $registration['userName'] = CompetitorNamePresenter::publicName((string) $registration['userName'], true, (string) $competitorId);
             // PP.3: internal marker consumed only by toPublicStartListEntry() (this
             // method's only caller, via publicStartList()) to null out `userId` —
             // never surfaces itself, since the DTO projection never copies it.
             $registration['__anonymized'] = true;
 
             if (isset($registration['formFields']) && is_array($registration['formFields'])) {
-                $registration['formFields'] = array_map(static function (array $field): array {
+                $registration['formFields'] = array_map(static function (array $field) use ($competitorId): array {
                     if ($field['fieldKey'] === 'first_name') {
-                        $field['value'] = CompetitorNamePresenter::ANONYMIZED_LABEL;
+                        $field['value'] = CompetitorNamePresenter::anonymousLabel((string) $competitorId);
                     } elseif ($field['fieldKey'] === 'last_name') {
                         // Both halves masked into one label rather than
                         // duplicating it on both fields (see this method's

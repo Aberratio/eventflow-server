@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Events;
 
 use Psr\Log\LoggerInterface;
+use ZmierzymyCzas\Domain\Registrations\BibNumberService;
 use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Support\HtmlSanitizer;
 use ZmierzymyCzas\Support\InputRules;
@@ -1173,6 +1174,9 @@ SQL;
                     }
                 }
                 $prepared[] = $entry;
+            }
+            if ($key === 'distances') {
+                BibNumberService::validateRanges(array_map(static fn (array $entry): array => $entry['columns'], $prepared));
             }
             $collections[$key] = $prepared;
         }

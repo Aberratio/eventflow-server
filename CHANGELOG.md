@@ -43,5 +43,9 @@ as the first version.
   `commit`, and the deploy fails its health check when the commit does not
   match. `APP_VERSION` only overrides the version now: clear the old
   `2026xxxx-x` placeholder from existing `.env` files.
+- Start (bib) number ranges per distance: ranges of one event may not overlap,
+  `POST /events/{eventId}/bib-numbers/assign` gives the next free number within
+  each range, and a manual number must be unique in the event (409) and fall
+  inside the distance range (422).
 
 [Unreleased]: https://github.com/Aberratio/eventflow-server/commits/master

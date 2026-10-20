@@ -1614,6 +1614,12 @@ SQL;
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
 
+    /** R-13: bib ranges, automatic assignment and manual-override checks (see BibNumberService). */
+    public function bibNumbers(): BibNumberService
+    {
+        return new BibNumberService($this->pdo);
+    }
+
     public function find(string $id): ?array
     {
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE id = :id');

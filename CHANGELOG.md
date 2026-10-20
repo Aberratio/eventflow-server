@@ -27,6 +27,9 @@ as the first version.
   blocked-account checks on every request.
 - Route-level access control covered by an RBAC test grid over every
   registered route.
+- Caregivers and organizers can report a possible duplicate competitor
+  profile; reports go to a moderator/admin queue next to profile merging and
+  are closed by a rejection or by the merge.
 - Transactional mail through Central Mailer via an outbox with backoff and
   `Retry-After` handling, QR code attachments and the organizer as reply-to.
 - Scheduler (`bin/scheduler.php`) for payment reminders, registration expiry,

@@ -14,6 +14,14 @@ as the first version.
 
 ### Added
 
+- Challenge participation belongs to the competitor (zakres P2, to be confirmed
+  by the client): a caregiver can join a challenge for a ward
+  (`POST /challenges/{id}/join` with an optional `competitorId`; 403 for a
+  competitor outside the caregiver's care), progress and rankings are computed
+  per competitor, and `GET /challenge-participations?userId=<own id>` also
+  returns the wards' participations with `competitorName`. Existing rows are
+  mapped to the account's own competitor profile by migration 120; rows that
+  cannot be mapped keep working by account.
 - REST API (Slim 4, PDO/MySQL, JWT) shaped to the ZmierzymyCzas frontend
   contract: events and their lifecycle, registrations with pricing variants
   and custom form fields, teams and relay member swaps, results with audited
@@ -46,13 +54,5 @@ as the first version.
   `commit`, and the deploy fails its health check when the commit does not
   match. `APP_VERSION` only overrides the version now: clear the old
   `2026xxxx-x` placeholder from existing `.env` files.
-- Challenge participation belongs to the competitor (zakres P2, to be confirmed
-  by the client): a caregiver can join a challenge for a ward
-  (`POST /challenges/{id}/join` with an optional `competitorId`; 403 for a
-  competitor outside the caregiver's care), progress and rankings are computed
-  per competitor, and `GET /challenge-participations?userId=<own id>` also
-  returns the wards' participations with `competitorName`. Existing rows are
-  mapped to the account's own competitor profile by migration 120; rows that
-  cannot be mapped keep working by account.
 
 [Unreleased]: https://github.com/Aberratio/eventflow-server/commits/master

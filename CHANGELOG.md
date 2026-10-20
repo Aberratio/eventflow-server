@@ -19,6 +19,9 @@ as the first version.
   and custom form fields, teams and relay member swaps, results with audited
   corrections, series and challenges with progress and rankings, a shop, and
   info pages.
+- Anonymised competitors appear in public start lists, results and rankings
+  as `Anonim #<code>`, a label stable per competitor across events that
+  carries no personal data.
 - Online payments through Tpay and PayNow, with webhook amount and
   registration cross-checks, payment retries and expiry of unpaid
   registrations.

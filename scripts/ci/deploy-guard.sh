@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Validates deploy/rollback workflow inputs before any job that can read
-# environment secrets is allowed to start. Shared verbatim by eventflow-server
-# and eventflow-platform; keep both copies byte-identical.
+# environment secrets is allowed to start.
 #
 # All input comes from the environment, so no workflow input is ever
 # interpolated into script text. Secrets are never printed; the confirmation
@@ -68,10 +67,11 @@ if [ "$target" = "production" ]; then
   fi
 
   if [ "$ref" != "$prod_ref" ]; then
-    if [ "$op" = "deploy" ] && [[ "$ref" == refs/tags/rollback-?* ]]; then
+    # Releases deploy from their vYYYY.MM.PATCH tag (RELEASING.md).
+    if [ "$op" = "deploy" ] && { [[ "$ref" == refs/tags/rollback-?* ]] || [[ "$ref" =~ ^refs/tags/v[0-9]{4}\.[0-9]{1,2}\.[0-9]+$ ]]; }; then
       :
     else
-      refuse 63 "Production $op must run from $prod_ref (or a refs/tags/rollback-* tag for deploy); got ${ref:-<empty>}."
+      refuse 63 "Production $op must run from $prod_ref (or, for deploy, a vYYYY.MM.PATCH or refs/tags/rollback-* tag); got ${ref:-<empty>}."
     fi
   fi
 fi

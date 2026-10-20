@@ -26,11 +26,13 @@ remote deploy. A push can never reach production; `scripts/ci/deploy-guard.sh` r
 **Dev:** Actions, "Deploy API", "Run workflow", any branch, `deploy_target=dev`. Needs the `dev`
 GitHub Environment with the secrets from section 9.
 
-**Production:** Actions, "Deploy API", "Run workflow", branch `master`, `deploy_target=production`,
-`migration_mode=run`, `confirm_production=DEPLOY_PRODUCTION`. With the CLI:
+**Production:** cut a release first (see [RELEASING.md](../RELEASING.md)), then Actions, "Deploy API",
+"Run workflow" from the release tag (`vYYYY.MM.PATCH`), `deploy_target=production`,
+`migration_mode=run`, `confirm_production=DEPLOY_PRODUCTION`. The guard also accepts `master` and
+`rollback-*` tags. With the CLI:
 
 ```sh
-gh workflow run deploy.yml -R Aberratio/eventflow-server --ref master \
+gh workflow run deploy.yml -R Aberratio/eventflow-server --ref v2026.10.0 \
   -f deploy_target=production -f migration_mode=run -f confirm_production=DEPLOY_PRODUCTION
 ```
 

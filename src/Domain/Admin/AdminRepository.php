@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Admin;
 
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Domain\Retention\RetentionConfig;
 
 final class AdminRepository extends Repository
 {
@@ -15,7 +16,7 @@ final class AdminRepository extends Repository
     public function activityLogs(array $filters = []): array
     {
         $where = ['timestamp >= :retentionCutoff'];
-        $params = ['retentionCutoff' => $this->retentionCutoff()];
+        $params = ['retentionCutoff' => $this->retentionCutoff(null, RetentionConfig::fromEnv()->activityLogMonths)];
         foreach (['action' => 'action', 'userId' => 'user_id', 'targetType' => 'target_type', 'targetId' => 'target_id'] as $input => $column) {
             if (!empty($filters[$input])) {
                 $where[] = "{$column} = :{$input}";

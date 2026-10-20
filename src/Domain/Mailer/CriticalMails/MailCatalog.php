@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Mailer\CriticalMails;
 
 /**
- * The full 15-item mail catalog from 17-katalog-maili-i-kontrakt-z-mailerem.md
+ * The full 15-item mail catalog (plus the two R-01 Event Team mails) from 17-katalog-maili-i-kontrakt-z-mailerem.md
  * §1, as a static lookup: which Central Mailer priority a mail type uses (§2 —
  * `technical` only for authentication, 1-3), whether an organizer may override
  * its template per Wydarzenie (§5 — 4-11 and 13-14 are overridable, 1-3 and 12
@@ -40,6 +40,9 @@ final class MailCatalog
     public const SHOP_ORDER_STATUS = 'shop_order_status';
     public const CHALLENGE_COMPLETED = 'challenge_completed';
     public const REFUND_APPROVED = 'refund_approved';
+    // R-01 (zakres P2, poza katalogiem 17): Zespol Wydarzenia - zaproszenie i odebranie dostepu.
+    public const EVENT_TEAM_INVITATION = 'event_team_invitation';
+    public const EVENT_TEAM_REVOKED = 'event_team_revoked';
 
     /**
      * @return array<string, array{
@@ -181,6 +184,25 @@ final class MailCatalog
                 'defaultSubject' => 'Zwrot pieniędzy zatwierdzony — {{eventName}}',
                 'defaultBodyHtml' => '<p>Zatwierdziliśmy zwrot {{amount}} za {{eventName}}.</p>'
                     . '<p>Sposób zwrotu: {{route}}.</p>',
+            ],
+            // R-01: systemic (the invitation is the platform's, the Owner cannot reword the link mail).
+            self::EVENT_TEAM_INVITATION => [
+                'priority' => self::PRIORITY_STANDARD,
+                'overridable' => false,
+                'variables' => ['eventName', 'inviterName', 'acceptLink', 'expiresInDays'],
+                'defaultSubject' => 'Zaproszenie do zespołu wydarzenia {{eventName}}',
+                'defaultBodyHtml' => '<p>{{inviterName}} zaprasza Cię do zespołu wydarzenia {{eventName}} '
+                    . 'jako współzarządzającego.</p>'
+                    . '<p><a href="{{acceptLink}}">Przyjmij zaproszenie</a> (link jest ważny {{expiresInDays}} dni).</p>'
+                    . '<p>Jeśli nie spodziewasz się tej wiadomości, zignoruj ją.</p>',
+            ],
+            self::EVENT_TEAM_REVOKED => [
+                'priority' => self::PRIORITY_STANDARD,
+                'overridable' => false,
+                'variables' => ['eventName'],
+                'defaultSubject' => 'Dostęp do wydarzenia {{eventName}} został odebrany',
+                'defaultBodyHtml' => '<p>Twój dostęp współzarządzającego do wydarzenia {{eventName}} został odebrany '
+                    . 'przez organizatora.</p>',
             ],
         ];
     }

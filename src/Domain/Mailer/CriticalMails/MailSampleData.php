@@ -37,6 +37,9 @@ final class MailSampleData
         'rewardLink' => 'https://zmierzymyczas.pl/nagrody/PRZYKLAD',
         'amount' => '80,00 zł',
         'route' => 'Zwrot na kartę płatniczą',
+        'inviterName' => 'Anna Nowak',
+        'acceptLink' => 'https://zmierzymyczas.pl/team-invitations/PRZYKLAD',
+        'expiresInDays' => '7',
     ];
 
     /**

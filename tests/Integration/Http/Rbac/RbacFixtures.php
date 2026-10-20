@@ -95,6 +95,11 @@ final class RbacFixtures
                 }
             }
         }
+        // R-01 S2: a pending invitation for the `participant` actor (its address): grid rows for the roster routes,
+        // the public preview and accept. A merely invited member must still get nothing on the manager policies.
+        $issued = $eventTeam->invite((string) $event['id'], $fx->actors['participant']['email'], $organizerId);
+        $fx->values['teamMemberRow'] = (string) $issued['member']['id'];
+        $fx->values['inviteToken'] = $issued['token'];
         $fx->values['dist'] = (string) $event['distances'][0]['id'];
         $fx->values['relay'] = (string) $event['distances'][1]['id'];
 

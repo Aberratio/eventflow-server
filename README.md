@@ -297,7 +297,11 @@ the log directory is writable. Alert keys: `payments.amount_mismatch`,
 Alerts do not use the database or the mail outbox, so they still work when the DB is down.
 
 `GET /api/v1/health` is public and runs `SELECT 1` on the application connection. 200 means
-`{"status":"ok","checks":{"database":"ok"},"version":"..."}`. When the database is
+`{"success":true,"data":{"status":"ok","checks":{"database":"ok"},"version":"2026.10.0","commit":"565a6bb"}}`.
+`version` is the release tag the code was deployed from and `commit` the deployed commit, both
+read from the `.zmierzymy-czas-release` marker; either is `null` when unknown (a local checkout,
+or `version` for a deploy that is not a release). `APP_VERSION` in `.env` overrides `version`
+and should normally stay empty. When the database is
 unreachable it answers 503 `service_unavailable` with a generic message and no details
 (and logs an ERROR with alert key `db.unavailable`). If the connection cannot be opened at
 boot, every request gets the same 503 (the PDO connect timeout is 5 s).

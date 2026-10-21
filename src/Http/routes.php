@@ -50,6 +50,7 @@ use ZmierzymyCzas\Domain\Payments\Tpay\TpayGateway;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotification;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotificationVerifier;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayOAuthClient;
+use ZmierzymyCzas\Domain\Registrations\BibNumberTakenException;
 use ZmierzymyCzas\Domain\Registrations\RegistrationOpenRules;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Registrations\StartListExportFormatter;
@@ -2579,9 +2580,36 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     ['fields' => $policyResult['rejected']]
                 );
             }
+            if (array_key_exists('bibNumber', $policyResult['allowed'])) {
+                // R-13: manual override — inside the distance range, unique within the Event (409).
+                try {
+                    $policyResult['allowed']['bibNumber'] = $registrations->bibNumbers()->checkManual((string) $args['id'], $policyResult['allowed']['bibNumber']);
+                } catch (BibNumberTakenException $e) {
+                    return JsonResponder::error($response, 'bib_number_taken', $e->getMessage(), 409, ['bibNumber' => $e->bibNumber, 'registrationId' => $e->heldByRegistrationId]);
+                }
+            }
             return JsonResponder::ok($response, $registrations->update((string) $args['id'], $policyResult['allowed']));
         })
             ->add(new AuthMiddleware($jwt));
+        // R-13: bulk "assign start numbers" — next free number inside each distance's range.
+        $api->post('/events/{eventId}/bib-numbers/assign', function (Request $request, Response $response, array $args) use ($events, $registrations, $canManageEvent, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $eventId = (string) $args['eventId'];
+            if (!$canManageEvent($events->find($eventId), $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $payload = $body($request);
+            $distanceIds = $payload['distanceIds'] ?? null;
+            if ($distanceIds !== null && (!is_array($distanceIds) || !array_is_list($distanceIds) || array_filter($distanceIds, static fn ($id): bool => !is_string($id)) !== [])) {
+                return JsonResponder::error($response, 'validation_error', 'Pole distanceIds musi być listą identyfikatorów dystansów.', 422, ['field' => 'distanceIds']);
+            }
+            $order = (string) ($payload['order'] ?? 'registered');
+            if (!in_array($order, ['registered', 'name'], true)) {
+                return JsonResponder::error($response, 'validation_error', 'Pole order musi mieć wartość registered albo name.', 422, ['field' => 'order']);
+            }
+            $paidOnly = (bool) ($payload['paidOnly'] ?? true);
+            return JsonResponder::ok($response, $registrations->bibNumbers()->assign($eventId, $distanceIds, $order, $paidOnly));
+        })->add(new AuthMiddleware($jwt));
         $api->post('/registrations/{id}/cancel', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations) {
             $gate = $authorizeRegistration($response, (string) $args['id'], (array) $request->getAttribute('auth'));
             if ($gate instanceof Response) {

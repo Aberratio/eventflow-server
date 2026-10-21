@@ -61,6 +61,30 @@ final class AdminRepositoryTest extends TestCase
             ->execute(['prefix' => $this->prefix . '%']);
     }
 
+    public function testActivityLogsReadWindowFollowsConfiguredRetention(): void
+    {
+        $this->pdo->prepare(
+            'INSERT INTO activity_logs (id, user_id, action, description, target_name, timestamp)
+             VALUES (:id, :userId, :action, :description, :targetName, :timestamp)'
+        )->execute([
+            'id' => $this->prefix . '-18m',
+            'userId' => $this->prefix . '-user',
+            'action' => 'server_action',
+            'description' => '18 months old',
+            'targetName' => $this->prefix . '-18m-target',
+            'timestamp' => (new \DateTimeImmutable('-18 months'))->format(DATE_ATOM),
+        ]);
+
+        Env::set('RETENTION_ACTIVITY_LOG_MONTHS', '24');
+        try {
+            $targetNames = array_column($this->admin->activityLogs(), 'targetName');
+        } finally {
+            Env::restore('RETENTION_ACTIVITY_LOG_MONTHS');
+        }
+
+        self::assertContains($this->prefix . '-18m-target', $targetNames);
+    }
+
     public function testActivityLogsPrunesEntriesOlderThanTheRetentionWindowAndKeepsRecentOnes(): void
     {
         $oldId = $this->prefix . '-old';
@@ -84,8 +108,9 @@ final class AdminRepositoryTest extends TestCase
             'targetName' => $this->prefix . '-recent-target',
         ]);
 
-        $logs = $this->admin->activityLogs();
-        $targetNames = array_column($logs, 'targetName');
+        // R-05: deletion moved from the read path to the scheduler job; reads only filter.
+        $targetNames = array_column($this->admin->activityLogs(), 'targetName');
+        $this->admin->purgeExpiredActivityLogs(new \DateTimeImmutable());
 
         self::assertNotContains($this->prefix . '-old-target', $targetNames);
         self::assertContains($this->prefix . '-recent-target', $targetNames);

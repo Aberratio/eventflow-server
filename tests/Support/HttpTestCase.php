@@ -22,6 +22,9 @@ abstract class HttpTestCase extends TestCase
     protected App $app;
     protected JwtService $jwt;
 
+    /** @var array<string, mixed> server params of every request (e.g. REMOTE_ADDR); empty = no client IP. */
+    protected array $serverParams = [];
+
     protected function setUp(): void
     {
         Env::load(__DIR__ . '/../../.env');
@@ -43,7 +46,7 @@ abstract class HttpTestCase extends TestCase
 
     protected function request(string $method, string $path, array $body = [], array $headers = []): ResponseInterface
     {
-        $request = (new ServerRequestFactory())->createServerRequest($method, $path);
+        $request = (new ServerRequestFactory())->createServerRequest($method, $path, $this->serverParams);
         foreach ($headers as $name => $value) {
             $request = $request->withHeader($name, (string) $value);
         }

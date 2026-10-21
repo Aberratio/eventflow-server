@@ -223,6 +223,9 @@ final class CompetitorMergeService
 
             $this->competitors->markMerged($absorbedId, $survivorId);
 
+            // R-08: otwarte zgłoszenia duplikatu tej pary są tym samym rozstrzygnięte.
+            (new CompetitorDuplicateReportRepository($this->pdo))->markMergedForPair($survivorId, $absorbedId);
+
             $this->pdo->commit();
         } catch (\Throwable $e) {
             $this->pdo->rollBack();

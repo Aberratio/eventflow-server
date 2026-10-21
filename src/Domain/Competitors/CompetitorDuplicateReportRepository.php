@@ -7,14 +7,14 @@ namespace ZmierzymyCzas\Domain\Competitors;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * R-08: zgłoszenia możliwych duplikatów Zawodnika od opiekunów / organizatorów.
- * Zgłoszenie nic nie scala - trafia do kolejki Moderatora/Admina.
+ * Reports of possible duplicate Zawodnicy from caregivers / organizers.
+ * A report merges nothing - it goes to the Moderator/Admin queue.
  */
 final class CompetitorDuplicateReportRepository extends Repository
 {
     /**
-     * Powtórne zgłoszenie tej samej pary przez to samo Konto, dopóki poprzednie jest
-     * otwarte, zwraca istniejący wiersz (bez spamowania kolejki).
+     * A repeated report of the same pair by the same Konto, while the previous one is
+     * still open, returns the existing row (no queue spamming).
      *
      * @return array<string, mixed>
      */
@@ -42,8 +42,8 @@ final class CompetitorDuplicateReportRepository extends Repository
     }
 
     /**
-     * Kolejka dla Moderatora/Admina. Profile tylko jako imię/nazwisko/data urodzenia
-     * (jak CompetitorDuplicatePresenter) - nigdy kod tożsamości ani dane kontaktowe.
+     * Queue for the Moderator/Admin. Profiles only as first name/last name/date of birth
+     * (like CompetitorDuplicatePresenter) - never the identity code or contact data.
      *
      * @param 'open'|'rejected'|'merged'|'all' $status
      * @return list<array<string, mixed>>
@@ -79,7 +79,7 @@ final class CompetitorDuplicateReportRepository extends Repository
     }
 
     /**
-     * Odrzucenie otwartego zgłoszenia. null = brak zgłoszenia; wyjątek = już rozstrzygnięte.
+     * Rejects an open report. null = no such report; exception = already resolved.
      *
      * @return array<string, mixed>|null
      */
@@ -102,8 +102,8 @@ final class CompetitorDuplicateReportRepository extends Repository
     }
 
     /**
-     * Wywoływane w transakcji scalenia: otwarte zgłoszenia dotyczące właśnie scalonej pary
-     * (w dowolnym kierunku) dostają status merged.
+     * Called inside the merge transaction: open reports about the pair just merged
+     * (in either direction) get the status merged.
      */
     public function markMergedForPair(string $survivorId, string $absorbedId): void
     {
@@ -115,7 +115,7 @@ final class CompetitorDuplicateReportRepository extends Repository
     }
 
     /**
-     * Czy Zawodnik ma Zapis na którekolwiek z (niekasowanych) wydarzeń tego organizatora.
+     * Whether the Zawodnik has a Zapis for any of this organizer's (non-deleted) events.
      */
     public function competitorRegisteredOnOrganizersEvent(string $competitorId, string $organizerId): bool
     {
@@ -129,7 +129,7 @@ final class CompetitorDuplicateReportRepository extends Repository
     }
 
     /**
-     * R-01: czy Zawodnik ma Zapis na niekasowanym wydarzeniu, którego aktywnym Współzarządcą jest Konto.
+     * Whether the Zawodnik has a Zapis for a non-deleted event the Konto actively co-manages.
      */
     public function competitorRegisteredOnCoManagedEvent(string $competitorId, string $accountId): bool
     {

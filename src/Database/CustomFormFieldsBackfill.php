@@ -11,11 +11,11 @@ use ZmierzymyCzas\Support\Uuid;
  * PHP-side replacement for migration 041's original backfill of
  * `events.registration_form_config.customFields` into `form_fields`
  * (kind = custom) — see 041_e1_13_form_fields.sql's own comment for why this
- * moved out of plain SQL (E1.14 verification fix): the original single
+ * moved out of plain SQL (verification fix): the original single
  * INSERT ... JOIN JSON_TABLE(...) with a nested JSON_ARRAYAGG(JSON_OBJECT(...))
  * needs MariaDB 10.6 (JSON_TABLE) and 10.5 (JSON_ARRAYAGG); this environment
  * runs 10.4.32, so that statement was a hard syntax error that aborted the
- * entire migration run before 042 (E1.14's own migration) ever executed.
+ * entire migration run before migration 042 ever executed.
  *
  * Same semantics as the original SQL, just computed in PHP:
  *  - one row per legacy customFields[] entry, in array order

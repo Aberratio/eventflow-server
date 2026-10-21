@@ -53,7 +53,7 @@ final class TpayNotification
      * notification documents it as the amount actually paid, which differs from the
      * target tr_amount on overpay/surcharge). A malformed first-present value yields
      * null — it never falls back to a later key. The field names are unverified
-     * against a real account (TD.4).
+     * against a real account.
      *
      * @param array<string, mixed> $fields
      */

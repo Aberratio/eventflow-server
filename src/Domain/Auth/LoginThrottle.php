@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Auth;
 
 /**
- * R-10: brute-force protection for POST /auth/login, per account (normalised e-mail, existing or not)
+ * Brute-force protection for POST /auth/login, per account (normalised e-mail, existing or not)
  * and per IP. Blocked attempts are rejected before the password is checked; a successful login resets
  * only the account counter.
  */

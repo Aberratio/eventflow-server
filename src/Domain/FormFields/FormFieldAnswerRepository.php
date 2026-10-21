@@ -7,11 +7,11 @@ namespace ZmierzymyCzas\Domain\FormFields;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * Odpowiedzi na pola własne, zawsze przypięte do Zapisu (model F1 — sekcja
- * startu żyje na Zapisie, nigdy na Zawodniku). Pola systemowe NIE mają tu
- * odpowiedzi — ich wartości żyją na competitors/registrations wprost
- * (`storage_location` na Pozycji mówi, w której z tych dwóch tabel), ten
- * ticket nie przenosi tamtych kolumn do tego mechanizmu.
+ * Answers to custom fields, always attached to a Zapis (form model — the start section
+ * lives on the Zapis, never on the Zawodnik). System fields have NO
+ * answer here — their values live directly on competitors/registrations
+ * (`storage_location` on the Pozycja says which of those two tables), and this
+ * mechanism does not move those columns.
  */
 final class FormFieldAnswerRepository extends Repository
 {
@@ -19,11 +19,11 @@ final class FormFieldAnswerRepository extends Repository
         . 'value_text AS valueText, value_json AS valueJson, created_at AS createdAt, updated_at AS updatedAt';
 
     /**
-     * Waliduje (FormFieldType::validateAnswer, wyłącznie z typu — model §4)
-     * i zapisuje jedną odpowiedź, upsert po (formFieldId, registrationId).
+     * Validates (FormFieldType::validateAnswer, from the type alone)
+     * and stores one answer, upsert by (formFieldId, registrationId).
      *
-     * @throws \InvalidArgumentException gdy pole nie istnieje, nie jest
-     *         własne, albo wartość nie przechodzi walidacji typu.
+     * @throws \InvalidArgumentException when the field does not exist, is not
+     *         custom, or the value fails type validation.
      */
     public function saveAnswer(FormFieldRepository $fields, string $formFieldId, string $registrationId, mixed $value): array
     {
@@ -87,7 +87,7 @@ final class FormFieldAnswerRepository extends Repository
     }
 
     /**
-     * R-04: like forRegistration() plus the stable `fieldKey` of the answered field.
+     * Like forRegistration() plus the stable `fieldKey` of the answered field.
      *
      * @return array<int, array<string, mixed>>
      */

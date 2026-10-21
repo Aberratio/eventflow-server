@@ -8,14 +8,14 @@ use ZmierzymyCzas\Support\Env;
 
 /**
  * Every Central Mailer-specific value this integration needs, read once from the
- * environment (`.env` / real env vars — see `.env.example`). E1.9: this platform
+ * environment (`.env` / real env vars — see `.env.example`). this platform
  * gets its own `X-API-Key`, distinct from every other application talking to the
- * same Central Mailer install (source doc §1.1 — the key maps 1:1 to `sourceApp`
+ * same Central Mailer install (the key maps 1:1 to `sourceApp`
  * and is the hard visibility boundary between applications' mail).
  *
  * `apiKey`/`baseUrl` are placeholders in dev/test (empty string) — see
  * `.env.example` for what production still needs done manually before launch
- * (kontrakt-central-mailer.md §9 point 9: provisioning a second API key in
+ * (provisioning a second API key in
  * Central Mailer's own `.env` is a deployment task, not something this codebase
  * can do).
  */

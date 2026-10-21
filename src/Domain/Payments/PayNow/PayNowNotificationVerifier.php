@@ -15,7 +15,7 @@ namespace ZmierzymyCzas\Domain\Payments\PayNow;
  * in the Signature header" instruction.
  *
  * Never trust the notification body until this passes — the whole point of the
- * ticket's "nigdy nie ufaj nagłówkom/body bez weryfikacji".
+ * rule "never trust headers/body without verification".
  */
 final class PayNowNotificationVerifier
 {

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Registrations;
 
 /**
- * R-02: a change of Dystans/Wariant the caller may not (or cannot) make right now. The reason is the
+ * A change of Dystans/Wariant the caller may not (or cannot) make right now. The reason is the
  * error code of the HTTP contract (409 unless `status` says otherwise), `details` its extra payload.
  */
 final class DistanceChangeRejected extends \RuntimeException

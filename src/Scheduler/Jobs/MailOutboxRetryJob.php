@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
 use ZmierzymyCzas\Scheduler\ScheduledJob;
 
 /**
- * PP.19: dispatches outbox rows Central Mailer never accepted (deferred mass mails, failed and
+ * Dispatches outbox rows Central Mailer never accepted (deferred mass mails, failed and
  * stale in-flight rows) with backoff, a max-attempts limit and 429/Retry-After handling.
  * 50 rows per 5-minute tick stays well under Central Mailer's intake limit (60 POSTs/min).
  */

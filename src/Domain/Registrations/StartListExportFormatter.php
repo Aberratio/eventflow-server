@@ -7,8 +7,8 @@ namespace ZmierzymyCzas\Domain\Registrations;
 use ZipArchive;
 
 /**
- * E2.6 ("Eksport listy startowej: CSV (Windows-1250) + XLSX", spec 21
- * Answer §3). Pure formatting — takes the {columns, rows} shape
+ * Start list export ("Eksport listy startowej": CSV (Windows-1250) + XLSX).
+ * Pure formatting — takes the {columns, rows} shape
  * RegistrationRepository::startListExportRows() already builds and turns it
  * into file bytes. Deliberately knows nothing about Zapisy, form fields, or
  * the live/frozen fork; that separation keeps this class testable with
@@ -25,7 +25,7 @@ use ZipArchive;
 final class StartListExportFormatter
 {
     /**
-     * CSV content, encoded Windows-1250 (spec: "realny wymóg polskiego
+     * CSV content, encoded Windows-1250 (a "realny wymóg polskiego
      * rynku" — the same reason ResultImportRepository/routes.php already
      * transliterate to ASCII elsewhere, except here the target charset
      * natively supports Polish diacritics, so nothing needs transliterating
@@ -75,10 +75,10 @@ final class StartListExportFormatter
     }
 
     /**
-     * Minimal but spec-compliant OOXML (ECMA-376) workbook: one sheet, one
+     * Minimal but standards-compliant OOXML (ECMA-376) workbook: one sheet, one
      * header row, one row per registration. Uses inline strings
      * (`<c t="inlineStr"><is><t>…</t></is></c>`) for every text cell instead
-     * of a shared-strings table — valid per spec and simpler, since this
+     * of a shared-strings table — valid per the standard and simpler, since this
      * writer never needs to deduplicate strings across cells the way a
      * shared-strings table exists to optimize for. `[Content_Types].xml`,
      * `_rels/.rels`, `xl/workbook.xml` and `xl/_rels/workbook.xml.rels` are
@@ -92,8 +92,7 @@ final class StartListExportFormatter
      * Verified structurally in this environment (no real Excel available
      * here) by reopening the produced bytes with ZipArchive and re-parsing
      * every XML part — see StartListExportFormatterTest — but never
-     * visually confirmed in Excel itself; flagged as a residual risk in the
-     * ticket report.
+     * visually confirmed in Excel itself; flagged as a residual risk.
      *
      * @param array<int, array{key: string, label: string}> $columns
      * @param array<int, array<string, mixed>> $rows
@@ -129,7 +128,7 @@ final class StartListExportFormatter
     }
 
     /**
-     * G-11 (umowa §4.2.4: eksport listy startowej CSV/XML). UTF-8 XML with the same columns, in the
+     * XML start list export. UTF-8 XML with the same columns, in the
      * same order, as the CSV: one `<entry>` per registration, one `<field key="…" label="…">` per
      * column (keys/labels go into attributes, never element names, so a custom form field with an
      * arbitrary label cannot produce an invalid document). Characters illegal in XML 1.0 are

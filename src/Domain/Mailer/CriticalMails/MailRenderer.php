@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Mailer\CriticalMails;
 
 /**
- * Closed-list variable substitution (17-katalog-maili §5): a template body is
+ * Closed-list variable substitution: a template body is
  * plain HTML with `{{variableName}}` placeholders, and each mail type has its
  * own fixed set of variables it may reference (MailCatalog::variablesFor()).
  *
@@ -16,7 +16,7 @@ namespace ZmierzymyCzas\Domain\Mailer\CriticalMails;
  *  - render() runs at *send* time and is intentionally lenient: a placeholder
  *    that isn't in $variables is left untouched rather than throwing, so a
  *    template saved under an older catalog version (fewer variables) never
- *    breaks a live send — see CriticalMailer's determinism note on §6.
+ *    breaks a live send — see CriticalMailer's determinism note.
  */
 final class MailRenderer
 {

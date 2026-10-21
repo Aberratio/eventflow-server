@@ -26,14 +26,14 @@ final class RegistrationRepository extends Repository
     use RegistrationTransfer;
 
     /**
-     * Trasa A (bramka) seam (E1.6/E1.7) — null in every environment without real
+     * Trasa A (bramka) seam — null in every environment without real
      * gateway credentials configured (local dev, CI, this repo's own test suite),
      * in which case create()/retryPayment() simply don't start a payment session
      * (see startGatewaySessionIfNeeded()) rather than attempting a call that could
      * only ever fail. Production wiring lives in routes.php.
      *
      * Two independent gateways can be wired in — Tpay (`$gateway`, the default
-     * provider, E1.6) and PayNow (`$payNowGateway`, E1.7) — both implementing
+     * provider) and PayNow (`$payNowGateway`) — both implementing
      * the exact same PaymentGatewayInterface, so nothing below branches on
      * *behavior* between them; the only place either name appears is
      * gatewayForProvider(), which just picks which already-built instance a
@@ -44,7 +44,7 @@ final class RegistrationRepository extends Repository
     private readonly ?PaymentGatewayInterface $payNowGateway;
 
     /**
-     * E1.10 seam — mirrors $gateway/$payNowGateway above: null whenever Central
+     * Mail seam — mirrors $gateway/$payNowGateway above: null whenever Central
      * Mailer isn't configured (CriticalMailer's own CentralMailerConfig::isConfigured()
      * gate handles that), in which case every send*() call below is a silent
      * no-op rather than an attempted call that could only ever fail.
@@ -52,18 +52,18 @@ final class RegistrationRepository extends Repository
     private readonly ?CriticalMailer $mailer;
 
     /**
-     * E3.4 seam — mirrors $mailer above: null whenever this deployment has no
+     * Webhook seam — mirrors $mailer above: null whenever this deployment has no
      * BZ_WEBHOOK_BASE_URL configured at all (local dev, CI, this repo's own
      * test suite), in which case pushBzCriticalChange() is a silent no-op
      * before it ever touches an Event row, rather than an attempted call that
      * could only ever fail. A non-null instance here does not by itself mean
      * every Event gets pushed to — pushBzCriticalChange() additionally checks
      * that specific Event's own bz_integration_enabled + bz_organization_token
-     * (E3.2) before enqueueing anything.
+     * before enqueueing anything.
      */
     private readonly ?BzWebhookOutboxService $bzWebhookOutbox;
 
-    /** PP.20: PSR-3 logger; defaults to the error_log-backed fallback so nothing is ever silent. */
+    /** PSR-3 logger; defaults to the error_log-backed fallback so nothing is ever silent. */
     private readonly LoggerInterface $logger;
 
     public function __construct(
@@ -82,42 +82,42 @@ final class RegistrationRepository extends Repository
         $this->bzWebhookOutbox = $bzWebhookOutbox;
     }
 
-    /** PP.18: batch sizes and lead/grace times of the scheduler jobs (docs/scheduler.md). */
+    /** Batch sizes and lead/grace times of the scheduler jobs (docs/scheduler.md). */
     public const EXPIRY_BATCH_LIMIT = 500;
     private const EXPIRY_PER_DISTANCE_LIMIT = 50;
     public const GATEWAY_IN_FLIGHT_GRACE_MINUTES = 15;
-    /** R-02: `registration_refunds.reason` of the refund request an owner's paid self-cancellation opens. */
+    /** `registration_refunds.reason` of the refund request an owner's paid self-cancellation opens. */
     public const SELF_CANCEL_REFUND_REASON = 'self_cancel';
-    /** R-02: `registration_refunds.reason` of the refund opened for the overpayment after a change to a cheaper Dystans. */
+    /** `registration_refunds.reason` of the refund opened for the overpayment after a change to a cheaper Dystans. */
     public const DISTANCE_CHANGE_REFUND_REASON = 'distance_change';
 
-    /** PP.63: the format of the registration ids this platform generates (Uuid::v4()). */
+    /** The format of the registration ids this platform generates (Uuid::v4()). */
     private const REGISTRATION_ID_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i';
     public const REMINDER_BATCH_LIMIT = 200;
     public const SNAPSHOT_BATCH_LIMIT = 500;
     private const REMINDER_LEAD_GATEWAY_MINUTES = 15;
     private const REMINDER_LEAD_TRANSFER_HOURS = 24;
 
-    /** Provider name for the default gateway constructor argument ($gateway) — Tpay, E1.6. */
+    /** Provider name for the default gateway constructor argument ($gateway) — Tpay. */
     private const PROVIDER_TPAY = 'tpay';
-    /** Provider name for the second gateway constructor argument ($payNowGateway) — PayNow, E1.7. */
+    /** Provider name for the second gateway constructor argument ($payNowGateway) — PayNow. */
     private const PROVIDER_PAYNOW = 'paynow';
     /**
-     * Gateways whose paid notification must carry an amount (PP.6): a missing or
+     * Gateways whose paid notification must carry an amount: a missing or
      * unparseable amount from one of these is a mismatch. PayNow is deliberately
      * absent — its notification has no amount field (see PayNowNotification).
      */
     private const AMOUNT_REPORTING_GATEWAYS = [self::PROVIDER_TPAY];
 
     /**
-     * E3.5: BZ-return-syncable identity fieldKeys living on `competitors` —
+     * BZ-return-syncable identity fieldKeys living on `competitors` —
      * fieldKey (the same vocabulary bzParticipantList()/FormFieldCatalog use)
      * => the CompetitorRepository::update() input key it maps to.
      */
     private const BZ_SYNCABLE_COMPETITOR_FIELDS = ['first_name' => 'firstName', 'last_name' => 'lastName'];
 
     /**
-     * E3.5/E3.6: BZ-return-syncable fieldKeys living directly on
+     * BZ-return-syncable fieldKeys living directly on
      * `registrations` — fieldKey => the camelCase key bzSyncRow() aliases the
      * column to. Written back to their real snake_case column by
      * applyBzFieldSync() (identical to the fieldKey itself for
@@ -125,7 +125,7 @@ final class RegistrationRepository extends Repository
      * the user_email column, same "system field key not sharing the column's
      * own name" case as bzParticipantList()'s own contact_email handling).
      *
-     * checked_in_at/checked_in_by (E3.6, issue 12 §4, "BZ zwraca status
+     * checked_in_at/checked_in_by ("BZ zwraca status
      * odprawy przy każdej synchronizacji") were added here rather than given
      * a separate endpoint/mechanism: they are return-synced fields on this
      * same `registrations` row, so they fit this exact contract (LWW per
@@ -153,7 +153,7 @@ final class RegistrationRepository extends Repository
 
     /**
      * `payment_config.provider` on the Wydarzenie — which gateway trasa A uses,
-     * defaulting to Tpay (E1.6, the only provider that existed before E1.7) when
+     * defaulting to Tpay (the first provider supported) when
      * unset, so every event configured before PayNow existed keeps behaving
      * exactly as it did.
      */
@@ -236,7 +236,7 @@ SQL;
     }
 
     /**
-     * PP.3: the exact — and only — keys a public, unauthenticated caller ever sees for
+     * The exact — and only — keys a public, unauthenticated caller ever sees for
      * one start-list entry. Never `hydrate()`d: that method runs four extra queries per
      * row and attaches financial/PII fields (userEmail, qrCode, discountCode,
      * checkedInBy, merchandiseOrders with prices, paymentDetails, settlementItems…)
@@ -307,9 +307,9 @@ SQL;
     }
 
     /**
-     * TD.6 (E6.6 follow-up, "wire anonymization masking into public
-     * start-list and results"): the public start list is a second place a
-     * competitor's real name reaches an unauthenticated caller — E6.6 wired
+     * Anonymization masking for the public
+     * start list and results: the public start list is a second place a
+     * competitor's real name reaches an unauthenticated caller — masking was first wired
      * `competitors.is_anonymized` into the Wyzwanie/Series ranking only (see
      * CompetitorNamePresenter's own docblock). Masks both places a name
      * actually surfaces in this response:
@@ -362,7 +362,7 @@ SQL;
             }
 
             $registration['userName'] = CompetitorNamePresenter::publicName((string) $registration['userName'], true, (string) $competitorId);
-            // PP.3: internal marker consumed only by toPublicStartListEntry() (this
+            // Internal marker consumed only by toPublicStartListEntry() (this
             // method's only caller, via publicStartList()) to null out `userId` —
             // never surfaces itself, since the DTO projection never copies it.
             $registration['__anonymized'] = true;
@@ -387,8 +387,8 @@ SQL;
     }
 
     /**
-     * E3.3: "Pull uczestników" — the payload Biuro Zawodów's own polling reads
-     * per Wydarzenie (issue 12 §1/§5). Deliberately hand-built rather than
+     * "Pull uczestników" — the payload Biuro Zawodów's own polling reads
+     * per Wydarzenie. Deliberately hand-built rather than
      * reusing hydrate()'s full row: hydrate() attaches settlementItems/
      * pricePaid/discountAmount/insurancePaid/totalAmount and merchandise
      * lines carry `price` — exactly the financial detail this endpoint must
@@ -400,16 +400,16 @@ SQL;
      *
      * Scope: every non-removed/cancelled/expired Zapis, mirroring
      * publicStartList()'s $showAll=true branch — BZ needs pending/unpaid
-     * entries too (an on-site "biuro zawodów" registration on race day, ticket
-     * 07 pkt 13, is unpaid until checked in) since payment status here is a
+     * entries too (an on-site "biuro zawodów" registration on race day
+     * is unpaid until checked in) since payment status here is a
      * per-record boolean, not a pre-filter.
      *
      * Identity fields (imię/nazwisko/e-mail) are the CONTROL_LOCKED system
      * positions (FormFieldCatalog) — always required, so always resolved here
      * unconditionally, the same way they are not gated by any visibility flag
      * on the public start list either. Custom fields are gated by
-     * FormFieldRepository::bzVisibleColumns() (`visible_to_bz`, issue 12 §5) —
-     * a deliberate subset of formularza z ticketu 10, not everything. Both
+     * FormFieldRepository::bzVisibleColumns() (`visible_to_bz`) —
+     * a deliberate subset of the registration form, not everything. Both
      * groups are resolved through the exact same live/frozen fork
      * (resolveLiveFormFields()/attachFrozenFormFields()) the public start list
      * already uses, so a finished Event serves its frozen snapshot here too
@@ -489,21 +489,21 @@ SQL;
     }
 
     /**
-     * E3.5 (issue 12 §2): "Last-write-wins po znaczniku czasu" — the inbound
+     * "Last-write-wins po znaczniku czasu" — the inbound
      * half of the BZ sync contract, mirror image of bzParticipantList()
      * above. BZ pushes locally-edited fields back with a per-field edit
      * timestamp (`changedAt`); this compares that timestamp against the
      * platform's own last-touch timestamp for the same field/row and applies
      * the edit only when BZ's is newer — never a blind overwrite, never a
-     * blind reject (issue 12 §2's explicit requirement).
+     * blind reject (an explicit requirement of the BZ sync).
      *
      * Field scope is deliberately narrow and explicit, never "whatever keys
      * BZ happens to send": exactly the fields bzParticipantList() itself
      * exposes (this is a return-sync of that same contract, not a
      * general-purpose registration PATCH) minus payment/amount fields, which
-     * §5 says BZ never receives in the first place and so can never
+     * the BZ contract says BZ never receives in the first place and so can never
      * legitimately claim to have edited, PLUS checked_in_at/checked_in_by
-     * (E3.6, issue 12 §4) — the one pair of fields this endpoint accepts that
+     * — the one pair of fields this endpoint accepts that
      * BZ never pulled from bzParticipantList() in the first place, because the
      * Odprawa fact originates at BZ, not on the platform (see this method's
      * "checked_in_at/checked_in_by" paragraph below for the LWW rationale).
@@ -530,14 +530,14 @@ SQL;
      * "never touched since we started tracking" is the correct, permissive
      * starting state for LWW (see migration 050's own docblock).
      *
-     * checked_in_at/checked_in_by (E3.6, issue 12 §4 — "BZ zwraca status
+     * checked_in_at/checked_in_by ("BZ zwraca status
      * odprawy przy każdej synchronizacji"): compared against
      * `registrations.updated_at`, the exact same coarse row-level clock as
      * category/bib_number/contact_email above — deliberately NOT given a
      * special-cased "monotonic, never goes backwards" rule even though a
      * real Odprawa is close to monotonic in practice (once checked in, it
-     * essentially never gets un-checked). Two reasons: (1) the ticket that
-     * asked for this explicitly prefers staying inside the one LWW mechanism
+     * essentially never gets un-checked). Two reasons: (1) the requirement
+     * explicitly prefers staying inside the one LWW mechanism
      * already established here over inventing a second, inconsistent one,
      * and (2) a correctly-behaving BZ always sends an honest `changedAt` for
      * the moment it recorded the check-in, so ordinary LWW already produces
@@ -555,7 +555,7 @@ SQL;
      * dropped — so the caller (routes.php) can write ONE activity-log entry
      * per call that shows every field's fate: applied with old -> new, or
      * rejected-as-stale with both the incoming and the platform's own current
-     * value. That entry is the actual "ślad" the spec requires. This method
+     * value. That entry is the actual audit trail ("ślad") required. This method
      * itself never touches activity_logs (same division of responsibility as
      * correctFormSnapshot() above).
      *
@@ -624,7 +624,7 @@ SQL;
                     $rejected[$fieldKey] = ['reason' => 'stale', 'incomingValue' => $incomingValue, 'currentValue' => $currentValue];
                     continue;
                 }
-                // E3.6: checked_in_at is a timestamp column — validate it parses
+                // checked_in_at is a timestamp column — validate it parses
                 // (or is an explicit null, clearing the check-in) rather than
                 // trusting whatever BZ sends into a column every other reader
                 // treats as DATE_ATOM (see this method's own docblock above).
@@ -674,7 +674,7 @@ SQL;
                 continue;
             }
 
-            // Defense in depth (issue 12 §5, "bez kwot"): any key outside the
+            // Defense in depth (no amounts ever go to BZ): any key outside the
             // three groups above — including a payment/amount-shaped key BZ
             // was never handed and so can never legitimately have edited — is
             // rejected outright, never merged into anything.
@@ -775,21 +775,21 @@ SQL;
     }
 
     /**
-     * E1.14 out-of-scope seam: the spec's "wyniki, certyfikaty i eksporty
+     * Out-of-scope seam: the requirement that "wyniki, certyfikaty i eksporty
      * czytają już jego [snapshotu]" names three subsystems that would need to
      * switch from live to frozen reads once an Event finishes. Grepped before
-     * writing this ticket's code: `src/Domain/Results` and
+     * writing this code: `src/Domain/Results` and
      * `src/Domain/Certificate` have zero references to form fields/answers
      * today, and there is no export subsystem anywhere in this codebase —
      * none of the three read registration form data at all yet, so there is
      * nothing to wire this snapshot into there. Same
-     * documented-seam-not-invented-feature stance as E1.5's
-     * `initiateGatewayRefund()`/E1.10's mail seams: whenever any of the three
+     * documented-seam-not-invented-feature stance as the
+     * `initiateGatewayRefund()` and mail seams: whenever any of the three
      * is actually built, it should read `formSnapshotFor()` (finished Events)
      * the same way `publicStartList()` does below, not re-derive its own live
      * resolution.
      *
-     * E1.13 verification fix: wires FormFieldRepository::publicListColumns()
+     * Wires FormFieldRepository::publicListColumns()
      * (form-item order + public_list_visible flag + unconditional
      * is_confidential exclusion) into the real public start-list path — it
      * was previously only exercised by FormFieldRepositoryTest in isolation,
@@ -807,11 +807,11 @@ SQL;
      * same as an unanswered custom field would. Closing that pre-existing gap
      * is out of scope for this fix.
      *
-     * E1.14: this is now the fork point between "live" and "frozen" — before
+     * This is now the fork point between "live" and "frozen" — before
      * an Event is `finished`, values keep coming straight from the live
      * Competitor/Registration record (attachFrozenFormFields() below is never
      * consulted, so a post-registration typo fix on the Competitor keeps
-     * showing up here exactly as before this ticket); once `finished`, every
+     * showing up here exactly as before the snapshot was introduced); once `finished`, every
      * Zapis instead serves its snapshot (see attachFrozenFormFields()'s own
      * docblock: the scheduler captures it shortly after the finish, the first
      * read after finish is the fallback).
@@ -854,10 +854,10 @@ SQL;
     /**
      * Live resolution, shared by two callers: the pre-finish read path
      * (attachPublicFormFields(), unchanged behavior) and the finished-Event
-     * lazy-capture path (attachFrozenFormFields(), E1.14) — the snapshot that
-     * ticket freezes is always exactly what this method would have returned
+     * lazy-capture path (attachFrozenFormFields()) — the snapshot that
+     * the snapshot freezes is always exactly what this method would have returned
      * live at the moment it is first called after finish. Refactored out of
-     * attachPublicFormFields() rather than duplicated, per the ticket.
+     * attachPublicFormFields() rather than duplicated.
      *
      * @param array<int, array<string, mixed>> $registrations
      * @param array<int, array<string, mixed>> $columns
@@ -886,7 +886,7 @@ SQL;
                 $answersByFieldId[$answer['formFieldId']] = $value;
                 $answersByKey[(string) $answer['fieldKey']] = $value;
             }
-            // R-04: an answer given on a Dystans override is stored under the override's id, but the
+            // An answer given on a Dystans override is stored under the override's id, but the
             // event-level column is what lists/exports render - match it up by the stable field key.
             foreach ($columns as $column) {
                 if ($column['kind'] === 'custom' && !array_key_exists($column['id'], $answersByFieldId) && array_key_exists((string) $column['fieldKey'], $answersByKey)) {
@@ -908,14 +908,14 @@ SQL;
     }
 
     /**
-     * Freezes and serves the finished-Event snapshot (spec 10 pkt 2, "przy
+     * Freezes and serves the finished-Event snapshot ("przy
      * przejściu Wydarzenia w stan zakończony Zapis utrwala snapshot").
-     * PP.18: the scheduler (registrations.form_snapshots, captureMissingFormSnapshots())
+     * The scheduler (registrations.form_snapshots, captureMissingFormSnapshots())
      * captures it shortly after the Event finishes; this read-time capture stays as the
      * fallback for a Zapis the job has not reached yet. Either way the payload is computed
      * once (resolveLiveFormFields(), shared with the pre-finish path) and frozen
      * (captureFormSnapshotIfMissing() — guarded so it can never overwrite an
-     * already-captured snapshot, "stamped once" per the ticket); every later read —
+     * already-captured snapshot, "stamped once"); every later read —
      * including one where the underlying Competitor was edited afterward — serves that
      * same frozen JSON, never recomputed. The only thing that can ever change a captured
      * snapshot afterward is the explicit, audited correction endpoint (correctFormSnapshot()).
@@ -992,7 +992,7 @@ SQL;
     }
 
     /**
-     * PP.18: scheduler entry point (registrations.form_snapshots) — freezes the E1.14 form
+     * Scheduler entry point (registrations.form_snapshots) — freezes the form
      * snapshot for every non-removed Zapis of a finished Event that has none yet, so the
      * snapshot is taken shortly after the finish rather than at "the first read". Idempotent:
      * a captured (or corrected) snapshot is never touched (captureFormSnapshotIfMissing()'s
@@ -1058,7 +1058,7 @@ SQL;
 
     /**
      * Guarded by `form_snapshot_captured_at IS NULL` — the "stamped once, not
-     * recomputed again afterward" half of the ticket's requirement. A
+     * recomputed again afterward" half of the requirement. A
      * retroactive correction (correctFormSnapshot()) writes
      * `form_data_snapshot` directly and deliberately does NOT re-null this
      * column, so a later lazy read here can never clobber a correction with a
@@ -1080,8 +1080,8 @@ SQL;
     }
 
     /**
-     * E2.6 ("Eksport listy startowej: CSV (Windows-1250) + XLSX", spec 21
-     * Answer §3): organizer-facing export rows for one Distance. Reuses the
+     * Start list export ("Eksport listy startowej": CSV (Windows-1250) + XLSX):
+     * organizer-facing export rows for one Distance. Reuses the
      * exact same live/frozen fork as attachPublicFormFields() —
      * eventIsFinished() picks resolveLiveFormFields() (pre-finish) or
      * attachFrozenFormFields() (post-finish, same frozen snapshot the public
@@ -1096,14 +1096,14 @@ SQL;
      *
      * Columns = every qualifying form field (in form order) + numer
      * startowy + status płatności — deliberately never a monetary amount
-     * (spec: "bez kwot", Rozliczenie stays internal per ticket 13); the
+     * (no amounts; Rozliczenie stays internal); the
      * payment-status column is the ONLY money-adjacent thing here, and it is
      * a status label, not a figure.
      *
      * Only the Distance's own Zapisy are included, `removed` excluded (an
      * organizer-deleted Zapis is no longer part of the roster to hand to a
      * printer or an external tool) — pending/confirmed/cancelled/expired are
-     * all kept, because the spec's own payment-status vocabulary
+     * all kept, because the payment-status vocabulary
      * (opłacone/oczekujące/wygasłe/anulowane/zwrócone) only makes sense if
      * rows in every one of those states can appear.
      *
@@ -1154,10 +1154,10 @@ SQL;
 
     /**
      * Status-only label (never an amount) for the export's "Status
-     * płatności" column, covering exactly the five values the spec names
+     * płatności" column, covering exactly the five values
      * (opłacone/oczekujące/wygasłe/anulowane/zwrócone). `registrations.status`
      * already carries four of them directly; the fifth ("zwrócone") is a
-     * refund cycle layered on top (registration_refunds, E1.5) — a
+     * refund cycle layered on top (registration_refunds) — a
      * `confirmed` Zapis with a completed refund cycle is already flipped to
      * `cancelled` by markRefunded() on a full refund, so checking the refund
      * row first and falling back to `status` covers both full and (were a
@@ -1183,12 +1183,12 @@ SQL;
     }
 
     /**
-     * E8.2 (spec 21 Answer §2): built-in organizer cross-sections — NOT from the
-     * configurable form (that's E2.5's FormFieldRepository::aggregatesForEvent(),
+     * Built-in organizer cross-sections — NOT from the
+     * configurable form (that's FormFieldRepository::aggregatesForEvent(),
      * left untouched), only from the Zapis record itself. Every number here is a
-     * live query, per spec §5 ("Zestawienia organizatora... liczą się na żywo") —
+     * live query ("Zestawienia organizatora... liczą się na żywo") —
      * no new materialized counters, the one exception (event_distances.registered_count,
-     * E1.3) is a different, already-built concern this method doesn't touch.
+     * maintained at registration time) is a different, already-built concern this method doesn't touch.
      *
      * Gender/club are genuinely OMITTED (key absent, not an empty/zeroed array)
      * when the corresponding system Pozycja formularza (FormFieldCatalog) is
@@ -1198,7 +1198,7 @@ SQL;
      * system form-field key at all (FormFieldCatalog's closed 13-position
      * catalog has no "age_category" entry) — the only existing per-Distance
      * age-classification config in the schema is `event_distances.age_categories`
-     * (written by ticket 10's distance editor, read nowhere until this ticket),
+     * (written by the distance editor, read nowhere else),
      * so a Distance's age-category breakdown is included only when that JSON
      * array is non-empty for that Distance, and the whole `ageCategories` key is
      * omitted event-wide when no Distance configures any.
@@ -1265,7 +1265,7 @@ SQL;
     }
 
     /**
-     * Same five-value vocabulary as exportPaymentStatusLabel() (E2.6) —
+     * Same five-value vocabulary as exportPaymentStatusLabel() —
      * refunded takes priority over the underlying `cancelled` a full refund
      * already flips the Zapis to (markRefunded()), so a Zapis is never
      * double-counted under both buckets. Deliberately keeps `removed` out
@@ -1316,15 +1316,15 @@ SQL;
     }
 
     /**
-     * "Krzywa zapisów w czasie" (spec 21 Answer §2) — daily registration counts
-     * since the Event's registration opened, the cross-section the spec calls
+     * "Krzywa zapisów w czasie" — daily registration counts
+     * since the Event's registration opened, the cross-section
      * out as the one organizers look at most. Bucketed on the date portion of
      * `registered_at` (DATE_ATOM string, so the first 10 characters are always
      * the calendar date regardless of timezone offset suffix) — a plain SQL
      * substring + GROUP BY, no new column. Days with zero Zapisy are filled in
      * with count 0 so a client-side line/area chart never has to guess whether
      * a gap in the data means "zero that day" or "no data fetched for that
-     * day" — same "seed every bucket, even at zero" stance E2.5's
+     * day" — same "seed every bucket, even at zero" stance
      * countAnswersForField() already takes for configured option values.
      *
      * @return array<int, array{date: string, count: int}>
@@ -1427,7 +1427,7 @@ SQL;
     /**
      * Age-category breakdown, per Distance — classifies each live Zapis's
      * Competitor (gender + birth year, both on `competitors`) against that
-     * Distance's own `event_distances.age_categories` (ticket 10's distance
+     * Distance's own `event_distances.age_categories` (the distance
      * editor writes {id, name, gender, birthYearFrom, birthYearTo}; this is
      * the first code anywhere that reads it — see FormFieldCatalog's docblock,
      * grepped before writing this). Distances with an empty/absent
@@ -1510,7 +1510,7 @@ SQL;
     }
 
     /**
-     * Retroactive correction ("korekta wsteczna ze śladem", spec 10 pkt 2) —
+     * Retroactive correction ("korekta wsteczna ze śladem") —
      * the ONLY way to change a finished Event's frozen form-field snapshot.
      * Correcting the live Competitor/Registration record directly is how a
      * pre-finish typo is already fixed today (attachPublicFormFields() reads
@@ -1529,8 +1529,8 @@ SQL;
      * $updates) so the caller (routes.php, per this codebase's established
      * convention — see $logActivity's own doc comment) can write an
      * activity-log entry precise enough to reconstruct who changed what, from
-     * what value, to what value, and when — the actual "ślad w rejestrze" the
-     * spec requires. This method itself never touches activity_logs.
+     * what value, to what value, and when — the actual "ślad w rejestrze"
+     * (audit trail) required. This method itself never touches activity_logs.
      *
      * @param array<string, mixed> $updates fieldKey => new value
      * @return array{changes: array<string, array{old: mixed, new: mixed}>}
@@ -1613,7 +1613,7 @@ SQL;
             'gender' => $competitor['gender'] ?? null,
             'phone' => $competitor['phone'] ?? null,
             'club' => $competitor['club'] ?? null,
-            // B-07: the address fields live on competitors (migration 085).
+            // The address fields live on competitors (migration 085).
             'country' => $competitor['country'] ?? null,
             'city' => $competitor['city'] ?? null,
             'postal_code' => $competitor['postalCode'] ?? null,
@@ -1631,7 +1631,7 @@ SQL;
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
 
-    /** R-13: bib ranges, automatic assignment and manual-override checks (see BibNumberService). */
+    /** Bib ranges, automatic assignment and manual-override checks (see BibNumberService). */
     public function bibNumbers(): BibNumberService
     {
         return new BibNumberService($this->pdo);
@@ -1646,7 +1646,7 @@ SQL;
     }
 
     /**
-     * E8.1 (competitor merge): every Zapis carrying this Zawodnik as its
+     * Every Zapis carrying this Zawodnik as its
      * identity — the side-by-side merge comparison's "co niesie ten profil"
      * list, and the repointing/conflict-detection pass both start here.
      *
@@ -1660,7 +1660,7 @@ SQL;
     }
 
     /**
-     * E8.1: the repointing half of a competitor merge — moves one Zapis from
+     * The repointing half of a competitor merge — moves one Zapis from
      * the absorbed profile onto the surviving one. Deliberately a raw column
      * write, not routed through update() (which only accepts the identity
      * *display* fields a registrant fills in, not this administrative
@@ -1672,7 +1672,7 @@ SQL;
     }
 
     /**
-     * Bilet is not a stored entity (E0.2) — it is this Zapis, read as a ticket.
+     * Bilet is not a stored entity — it is this Zapis, read as a ticket.
      * There is a 1:1 relationship, so the Zapis id doubles as the ticket id.
      *
      * @return array<int, array<string, mixed>>
@@ -1706,7 +1706,7 @@ SQL;
             || (bool) ($registration['paymentDetails']['startFeePaid'] ?? false);
         $qrCode = $startCodeVisible && ($registration['qrCode'] ?? '') !== '' ? (string) $registration['qrCode'] : null;
 
-        // E1.4: an expired Zapis never got paid and never will (it must be re-created
+        // An expired Zapis never got paid and never will (it must be re-created
         // from scratch to try again) — the same terminal, "nothing to show up for"
         // shape as cancelled/removed from the Bilet's point of view.
         $status = in_array($registration['status'], ['cancelled', 'removed', 'expired'], true)
@@ -1731,10 +1731,10 @@ SQL;
             'registrationStatus' => $registration['status'],
             'status' => $status,
             'checkedInAt' => $registration['checkedInAt'],
-            // E3.6 (issue 12 §4): "kto potwierdził" — BZ's own opaque
+            // "kto potwierdził" — BZ's own opaque
             // identifier/name for whoever confirmed check-in, surfaced next
             // to checkedInAt on the exact same read path so the competitor's
-            // ticket/history view (E1.4's asTicket()) never needs a second
+            // ticket/history view (asTicket()) never needs a second
             // fetch to show "odprawiono Cię o 7:42".
             'checkedInBy' => $registration['checkedInBy'] ?? null,
             'issuedAt' => $registration['registeredAt'],
@@ -1744,26 +1744,24 @@ SQL;
     /**
      * `paymentDetails` in `$data` is honoured only for trusted internal callers
      * (result-import office entry, dev seed, fixtures). The HTTP route never forwards
-     * it (PP.52) and passes `$confirmWhenNothingDue = true`: a Zapis whose frozen
+     * it and passes `$confirmWhenNothingDue = true`: a Zapis whose frozen
      * Rozliczenie owes 0 is born `confirmed` because there is nothing left to pay
-     * (spec 13 "Maszyna stanów": the Zapis status follows the Rozliczenie; spec 07
-     * pkt 10 "Zapis o cenie zerowej").
+     * (the Zapis status follows the Rozliczenie; a "Zapis o cenie zerowej" needs no payment).
      *
      * @param array<string, mixed> $data
      */
     public function create(array $data, bool $confirmWhenNothingDue = false, bool $dryRun = false): array
     {
-        // E1.4: free up any slots an overdue Zapis of THIS Dystans is still holding before
+        // Free up any slots an overdue Zapis of THIS Dystans is still holding before
         // this new one checks capacity/tier thresholds below — this is exactly the
-        // "wygaśnięcie natychmiast odblokowuje miejsce w tańszej puli" guarantee the
-        // spec asks for. PP.18: scoped to the Dystans (the full sweep is the scheduler's job),
-        // with the same money guards as the scheduler (paid / in-flight Zapisy are kept).
+        // "wygaśnięcie natychmiast odblokowuje miejsce w tańszej puli" guarantee. Scoped to the Dystans
+        // (the full sweep is the scheduler's job), with the same money guards as the scheduler (paid / in-flight Zapisy are kept).
         $this->expireOverdueForDistance((string) ($data['distanceId'] ?? ''), new \DateTimeImmutable());
 
         $id = $this->id();
         $this->pdo->beginTransaction();
         try {
-            // E1.3: locks the Dystans row (SELECT ... FOR UPDATE) for the rest of
+            // Locks the Dystans row (SELECT ... FOR UPDATE) for the rest of
             // this transaction — a concurrent create() for the same distance blocks
             // here until this one commits or rolls back, so the capacity check and
             // the price-tier's registeredCount below can never race with another
@@ -1772,19 +1770,19 @@ SQL;
             // there still catches an overrun even if isolation level ever changes).
             $distanceRow = $this->lockDistanceForRegistration((string) $data['eventId'], (string) $data['distanceId']);
             $this->enforceCapacity($distanceRow);
-            // PP.79: the Kategoria wiekowa comes from the Zawodnik's data, never from the client.
+            // The Kategoria wiekowa comes from the Zawodnik's data, never from the client.
             $category = $this->resolveRegistrationCategory($data, $distanceRow);
             $team = $this->resolveTeamForRegistration($data, $distanceRow);
 
-            // TD.8 (spec 07 pkt 10 / spec 23 §3): "za drużynę" puts the whole
+            // "za drużynę" puts the whole
             // opłata startowa on the captain's Zapis and zeroes it for every
             // other member — but only for a Zapis actually JOINING an
             // existing team (teamId set, createTeam not truthy). The captain
             // (createTeam truthy) is always priced normally, in both modes.
-            // B-07: form answers + identity values of the Zapis's form (the HTTP layer sets
+            // Form answers + identity values of the Zapis's form (the HTTP layer sets
             // `enforceRegistrationForm`; internal/office callers skip the form).
             $isJoiningExistingTeam = $team['teamId'] !== null && empty($data['createTeam']);
-            // B-02: the one pricing path — quote() runs exactly this, minus every write.
+            // The one pricing path — quote() runs exactly this, minus every write.
             ['data' => $data, 'form' => $form, 'pricing' => $pricing] = $this->priceRegistration($data, $distanceRow, $isJoiningExistingTeam);
             $paymentDetails = $data['paymentDetails'] ?? null;
             $startFeePaid = is_array($paymentDetails) && (bool) ($paymentDetails['startFeePaid'] ?? false);
@@ -1803,21 +1801,21 @@ SQL;
                 'category' => $category,
                 'registered_at' => date(DATE_ATOM),
                 'status' => $bornConfirmed ? 'confirmed' : 'pending',
-                // E1.11: kod startowy — generowany zawsze, tu, przez platformę (nigdy przez
-                // BZ, patrz generateStartCode()'s docblock), więc nigdy nie ma Zapisu bez
-                // kodu i nie ma osobnej operacji "wygeneruj kody" po stronie organizatora.
+                // Kod startowy — always generated here by the platform (never by BZ, see
+                // generateStartCode()'s docblock), so there is never a Zapis without a
+                // code and no separate "generate codes" operation on the organizer side.
                 'qr_code' => $this->generateStartCode(),
                 'team_name' => $team['teamName'],
                 'team_id' => $team['teamId'],
                 'registered_by_id' => $data['registeredById'] ?? null,
                 'discount_code' => $pricing['discountCode'],
-                // E1.4: frozen at creation, same moment the price itself freezes
+                // Frozen at creation, same moment the price itself freezes
                 // (07 pkt 5) — a startFeePaid Zapis is born 'confirmed' and never
                 // needs to expire, so it gets no deadline at all.
                 'payment_expires_at' => $bornConfirmed ? null : $this->paymentExpiryDeadline($distanceRow),
             ]);
-            // E1.3: this Zapis is created as 'pending' or 'confirmed' — both count
-            // against the Dystans capacity (rozstrzygnięcie 4: "nieanulowane" =
+            // This Zapis is created as 'pending' or 'confirmed' — both count
+            // against the Dystans capacity ("nieanulowane" =
             // pending + confirmed) — so the counter always advances here. Guarded by
             // the same WHERE the lock above already makes redundant in practice, but
             // kept as the atomic affected-rows check (belt-and-braces, see above).
@@ -1830,11 +1828,11 @@ SQL;
                 $this->markDiscountUsed($pricing['discountId'], $id, $data, $pricing);
             }
             $this->insertMerchandiseOrders($id, $pricing['merchandiseOrders']);
-            // Klient nigdy nie przysyła kwot (rozstrzygnięcie 14): niezależnie od tego,
-            // co ewentualnie przyszło w paymentDetails.startFeeAmount/insuranceAmount,
-            // te dwie kwoty nadpisujemy tym, co właśnie policzyliśmy z Rozliczenia.
-            // Flagi startFeePaid/insurancePaid (i ich znaczniki czasu) to potwierdzenie
-            // płatności, nie jej kwota — te zostają, czyje by nie były (ticket 20).
+            // The client never sends amounts: whatever may have arrived in
+            // paymentDetails.startFeeAmount/insuranceAmount, those two amounts are
+            // overwritten with what was just computed from the Rozliczenie.
+            // The startFeePaid/insurancePaid flags (and their timestamps) confirm a
+            // payment rather than state its amount, so they are kept as given.
             if (is_array($paymentDetails)) {
                 $computed = $this->computedPaymentAmounts($pricing['settlementItems']);
                 $this->upsertPaymentDetails($id, [
@@ -1853,7 +1851,7 @@ SQL;
                 ]);
             }
             if ($dryRun) {
-                // G-08 (spec 08 axis 3): a test-mode Zapis is never real. Everything above ran
+                // A test-mode Zapis is never real. Everything above ran
                 // (validation, pricing, capacity), so the organizer sees the true outcome; the
                 // rollback leaves no Zapis, no counter bump, no discount use, no start-list row.
                 $preview = $this->find($id);
@@ -1869,7 +1867,7 @@ SQL;
         }
 
         $registration = $this->find($id);
-        // E1.6/E1.7: trasa A (bramka) starts its gateway session only once the Zapis (and
+        // Trasa A (bramka) starts its gateway session only once the Zapis (and
         // its frozen Rozliczenie) are safely committed — never inside the
         // transaction above, which would hold the Dystans row lock for as long as
         // the outbound HTTP call takes. A startFeePaid Zapis is born 'confirmed'
@@ -1878,7 +1876,7 @@ SQL;
             $registration['paymentSession'] = $this->startGatewaySessionIfNeeded($registration);
         }
 
-        // E1.10 mail #4 ("Potwierdzenie zapisu", 17 §1) — fires for every newly
+        // Mail "Potwierdzenie zapisu" — fires for every newly
         // created Zapis, paid or not yet. A Zapis born already `confirmed`
         // (startFeePaid at creation, e.g. free entry or an admin-entered paid
         // record) additionally gets mail #5 right away — that really is both
@@ -1901,7 +1899,7 @@ SQL;
     }
 
     /**
-     * B-02: the Rozliczenie a Zapis with this payload would get right now, WITHOUT creating it.
+     * The Rozliczenie a Zapis with this payload would get right now, WITHOUT creating it.
      * Same input as create() (the HTTP layer prepares it identically for both), same pricing code
      * (priceRegistration()), so the total equals the one of the Zapis created from the same data.
      * Writes nothing and takes no lock: no Zapis, no answers, no counter bump, no discount use, no
@@ -1947,7 +1945,7 @@ SQL;
     }
 
     /**
-     * Shared by create() and quote(): form answers -> modifier lines (B-07), then the six-step
+     * Shared by create() and quote(): form answers -> modifier lines, then the six-step
      * Rozliczenie. Reads only (RegistrationFormService::prepare() validates, persist() writes later).
      *
      * @param array<string, mixed> $data
@@ -1971,8 +1969,8 @@ SQL;
     }
 
     /**
-     * E1.3: statuses that count against a Dystans's capacity limit and price-tier
-     * threshold — "nieanulowane" (rozstrzygnięcie 4 w 07-model-cenowy-zapisu.md).
+     * Statuses that count against a Dystans's capacity limit and price-tier
+     * threshold — "nieanulowane" (not cancelled).
      * Defined as everything *except* the two terminal not-counted statuses (rather
      * than an explicit ['pending', 'confirmed'] allowlist) so it agrees with every
      * other "not cancelled" predicate already in this codebase (publicStartList(),
@@ -1981,24 +1979,23 @@ SQL;
     private const NOT_COUNTED_STATUSES = ['cancelled', 'removed', 'expired'];
 
     /**
-     * E1.4 default gateway window (trasa A / `admin_gateway`), used whenever the
+     * Default gateway window (trasa A / `admin_gateway`), used whenever the
      * event's `paymentConfig.gatewayWindowMinutes` is missing or non-positive —
      * mirrors EventRepository::DEFAULT_GATEWAY_WINDOW_MINUTES's fallback.
      */
     private const DEFAULT_GATEWAY_WINDOW_MINUTES = 45;
 
     /**
-     * TD.7 (fixes E1.4's pragmatic placeholder, cleared once E1.6-E1.8 landed a
-     * real per-Zapis payment method): default transfer window (trasa B /
+     * Default transfer window (trasa B /
      * `organizer_bank`), used whenever `paymentConfig.transferWindowDays` is
      * missing or non-positive — mirrors EventRepository::DEFAULT_TRANSFER_WINDOW_DAYS.
      */
     private const DEFAULT_TRANSFER_WINDOW_DAYS = 3;
 
     /**
-     * E1.11 (spec 11, "Kod startowy"): the platform-generated QR token that belongs to
+     * The platform-generated QR token that belongs to
      * this Zapis, not to any account/Zawodnik — `zqr_` (kod tożsamości, Zawodnik-owned)
-     * is a different token entirely and is E1.12's job, not this one's. Bit-for-bit the
+     * is a different token entirely and is a separate concern. Bit-for-bit the
      * same format Biuro Zawodów already generates itself today
      * (`biuro_zawodow-api/src/QrCodeService.php`: `pqr_` + 48 hex chars from
      * `random_bytes(24)`, regex `^pqr_[a-f0-9]{48}$`) — kept identical on purpose so BZ's
@@ -2010,7 +2007,7 @@ SQL;
      * entirely derived from `registrations.status` elsewhere (an expired/cancelled/removed
      * Zapis simply has a dead code, nothing to unset here). Distance changes never touch
      * this — same Zapis, same code; only a reassignment of the Zapis to a different person
-     * rotates it — see swapTeamMember() (G-04).
+     * rotates it — see swapTeamMember().
      */
     private function generateStartCode(): string
     {
@@ -2054,7 +2051,7 @@ SQL;
     }
 
     /**
-     * Seat-capacity limit (rozstrzygnięcie 4: "limit miejsc na Dystansie") — a null
+     * Seat-capacity limit ("limit miejsc na Dystansie") — a null
      * or zero `participant_limit` means unlimited. Checked against the locked
      * row's registeredCount, so this can never observe a stale count from a
      * concurrent Zapis still in flight.
@@ -2070,33 +2067,33 @@ SQL;
     }
 
     /**
-     * E7.1 (issue 23 Answer §1): resolves what this new Zapis's
+     * Resolves what this new Zapis's
      * `team_id`/`team_name` should actually be, formalizing what used to be
      * two free-text fields the client could set to anything.
      *
      * Two real, server-validated intents, both keyed off the same
      * `teams` entity (TeamRepository):
      *  - `data['teamId']` set — JOINING an existing Drużyna. Must exist,
-     *    PP.54: the joiner must present the team's `teamInviteToken` or be
+     *    The joiner must present the team's `teamInviteToken` or be
      *    the captain (`actorUserId`) — 403-class `registration_team_invite_required`
      *    otherwise (team ids are public, so an id alone is no invitation),
      *    must belong to this exact event+distance, and must not already be
      *    at `relay_max_team_size` ("team full" — a distinct, legitimate
      *    rejection, not a capacity/limit error: the Dystans' own limit,
-     *    E1.3, is completely unaffected by a team being full).
+     *    is completely unaffected by a team being full).
      *  - `data['createTeam']` truthy (no `teamId`) — CREATING a brand-new
      *    Drużyna out of this Zapis. Only legal on a `start_type='relay'`
-     *    Dystans (Answer §1's roster concept doesn't exist on an individual
+     *    Dystans (the roster concept doesn't exist on an individual
      *    Dystans) — rejected otherwise.
      *
      * Anything else (no `teamId`, no `createTeam`) is the pre-existing,
      * UNCHANGED "za drużynę" classification label some organizers collect
-     * on ANY Dystans via the general `collectTeam` form option (E1.13) —
+     * on ANY Dystans via the general `collectTeam` form option —
      * plain free text, no roster, no size limit, no `teams` row, exactly as
-     * it worked before this ticket. This is deliberate: E7.1 only formalizes
-     * the relay roster case (issue 23), not that unrelated general-purpose
+     * it worked before. This is deliberate: only the
+     * the relay roster case, not that unrelated general-purpose
      * team-name-for-classification feature, which `ResultRepository::
-     * teamClassification()` (E2.7) and the public start list already read
+     * teamClassification()` and the public start list already read
      * straight off `registrations.team_name` regardless of whether a real
      * `teams` row exists behind it.
      *
@@ -2129,11 +2126,11 @@ SQL;
             if ($name === '') {
                 throw new \RuntimeException('registration_team_name_required');
             }
-            // E7.5 (issue 23 Answer §7): the captain's optional, manual
+            // The captain's optional, manual
             // Kategoria specjalna declaration, validated here against the
-            // SAME configured list ticket 10's individual-registration
+            // SAME configured list the individual-registration
             // `category` free text is offered from (never against the
-            // roster — this ticket's whole point is that it must NOT be
+            // roster — the whole point is that it must NOT be
             // derived from who's on the team).
             $specialCategoryRaw = isset($data['specialCategory']) ? trim((string) $data['specialCategory']) : '';
             $specialCategory = $specialCategoryRaw !== '' ? $specialCategoryRaw : null;
@@ -2158,7 +2155,7 @@ SQL;
 
     /**
      * Read-only checks for JOINING an existing Drużyna (create() and quote() share them): the team
-     * exists, the joiner holds the invitation or is the captain (PP.54, spec 23 §1), the team belongs to
+     * exists, the joiner holds the invitation or is the captain, the team belongs to
      * this event+distance and is not at `relay_max_team_size`. `actorUserId` is set by the HTTP layer
      * from the JWT, never from the body (RegistrationCreatePolicy drops it); internal callers that omit
      * it fall back to the invitation check only, i.e. fail closed.
@@ -2196,7 +2193,7 @@ SQL;
      * + enforceCapacity()). The WHERE clause is redundant with the row lock
      * already held by the caller under normal operation, but keeps the guarantee
      * even if this method is ever called without that lock, and matches the
-     * ticket's "affected-rows check" pattern.
+     * "affected-rows check" pattern.
      */
     private function incrementRegisteredCount(string $distanceId): void
     {
@@ -2217,7 +2214,7 @@ SQL;
      * it should never go negative given the counter starts consistent
      * (033_e13 backfill) and only ever decrements once per Zapis via
      * updateStatus()'s old-status check, but a floor is cheap insurance against
-     * any future write path this ticket didn't anticipate.
+     * any future write path nobody anticipated.
      */
     private function decrementRegisteredCount(string $distanceId): void
     {
@@ -2227,7 +2224,7 @@ SQL;
     }
 
     /**
-     * E1.4/TD.7: the frozen payment-window deadline for a brand-new pending Zapis —
+     * The frozen payment-window deadline for a brand-new pending Zapis —
      * `registered_at` (now) plus the event's configured window for whichever route
      * this event's `paymentConfig.type` actually uses: the (short) gateway window
      * for trasa A, or the (longer, day-granularity) transfer window for trasa B
@@ -2263,9 +2260,9 @@ SQL;
     }
 
     /**
-     * PP.18: the scheduler's expiry batch (registrations.expire_unpaid) — `pending` -> `expired`
+     * The scheduler's expiry batch (registrations.expire_unpaid) — `pending` -> `expired`
      * for every Zapis whose payment window has passed, releasing the Dystans slot. It replaces the
-     * old "sweep on every read" (E1.4): reads no longer change status. create() still expires the
+     * old "sweep on every read": reads no longer change status. create() still expires the
      * overdue Zapisy of its own Dystans (expireOverdueForDistance()) so a lapsed one never blocks
      * the next registrant, and retryPayment() expires its own row.
      *
@@ -2346,14 +2343,14 @@ SQL;
     }
 
     /**
-     * PP.18: mail #7 reminders (§5.16), sent by the scheduler (registrations.payment_reminders) —
+     * Mail #7 reminders, sent by the scheduler (registrations.payment_reminders) —
      * once per payment window (`registrations.payment_reminder_for` holds the `payment_expires_at`
      * the reminder was sent for), 24 h before the deadline for a bank transfer and 15 min before for
      * a gateway payment. Runs after the expiry job, so a lapsed Zapis is never reminded.
      * The claim happens before the send (at most once); the outbox row is durable even when the
-     * HTTP call fails (PP.19 retries failed outbox rows).
+     * HTTP call fails (failed outbox rows are retried).
      *
-     * `failed` counts reminders whose send threw (the outbox row is normally kept as `failed`; PP.19 retries it).
+     * `failed` counts reminders whose send threw (the outbox row is normally kept as `failed` and retried).
      *
      * @return array{checked: int, sent: int, failed: int}|array{skipped: int}
      */
@@ -2453,7 +2450,7 @@ SQL;
     /**
      * Expires exactly one Zapis, transactionally: locks the row and re-checks under the lock that
      * it is still `pending` and past its deadline (offset-aware, against the injected $now). Money
-     * guards (PP.18): a Zapis whose start fee is already paid, or that has a `paid` /
+     * guards: a Zapis whose start fee is already paid, or that has a `paid` /
      * `amount_mismatch` gateway transaction (money arrived, needs a human) is never expired, and one
      * with an open `created` gateway transaction gets GATEWAY_IN_FLIGHT_GRACE_MINUTES past the
      * deadline (the payer may be on the gateway page right now; a late "paid" is handled by
@@ -2535,7 +2532,7 @@ SQL;
     }
 
     /**
-     * E1.3: status changes cross the counted/not-counted boundary defined by
+     * Status changes cross the counted/not-counted boundary defined by
      * NOT_COUNTED_STATUSES — a cancel (the only such path that exists in this
      * repo today, per update()/cancel()) must decrement, and — since update()
      * accepts an arbitrary status and nothing here invents a "reactivate" feature
@@ -2605,7 +2602,7 @@ SQL;
             }
         }
         if ($mapped !== []) {
-            // E3.5 (issue 12 §2): any write through this single choke-point counts as
+            // Any write through this single choke-point counts as
             // "the platform touched this Zapis" for BZ return-sync LWW comparisons —
             // see applyBzFieldSync()'s own docblock and migration 050. `bibNumber` is
             // the one BZ-in-scope field with a real write path through this method
@@ -2619,7 +2616,7 @@ SQL;
             // Read before the transition, not after: this is the only way to tell
             // a genuine "organizer just cancelled this" edge from a repeated call
             // (e.g. two clicks, or a retried request) against an already-cancelled
-            // Zapis — needed below for the E3.4 webhook push, which must fire once
+            // Zapis — needed below for the webhook push, which must fire once
             // per real cancellation, not once per call.
             $before = $this->find($id);
             $wasCancelledAlready = $before !== null ? ((string) ($before['status'] ?? '') === 'cancelled') : null;
@@ -2630,10 +2627,10 @@ SQL;
             $this->updateById('registrations', $id, $mapped);
         }
         if (array_key_exists('merchandise', $data) || array_key_exists('merchandiseOrders', $data)) {
-            // Krok 5 (Gadżety): nawet na dopisanie do istniejącego Zapisu cena×ilość
-            // liczy się z katalogu (`event_merchandise`), nigdy z tego, co przyśle klient —
-            // patrz resolveMerchandiseLines(). Zamrożone pozycje Rozliczenia (ticket 20:
-            // przeliczenie salda) tym się nie zajmuje, tylko sama tabela zamówień.
+            // Step 5 (merchandise): even when adding to an existing Zapis, price x quantity
+            // is computed from the catalog (`event_merchandise`), never from what the client sends —
+            // see resolveMerchandiseLines(). The frozen Rozliczenie lines (balance
+            // recalculation) are not touched here, only the orders table itself.
             $eventId = (string) ($this->registrationEventId($id) ?? '');
             $lines = $data['merchandise'] ?? $data['merchandiseOrders'] ?? [];
             $this->replaceMerchandise($id, $this->resolveMerchandiseLines($eventId, $lines)['orders']);
@@ -2644,7 +2641,7 @@ SQL;
 
         $result = $this->find($id);
 
-        // E3.4: "rezygnacja" trigger. Fires for every path that lands a Zapis on
+        // "rezygnacja" trigger. Fires for every path that lands a Zapis on
         // `cancelled` through this method — the single-registration organizer
         // cancel route (cancel(), below) and any future direct PATCH doing the
         // same — but deliberately NOT for markRefunded()'s own full-refund ->
@@ -2664,10 +2661,10 @@ SQL;
     }
 
     /**
-     * R-02 (spec 20 §2, zakres P2): a cancellation with its trail. Authorisation and the self-service
+     * A cancellation with its trail. Authorisation and the self-service
      * window are decided by the caller (SelfServicePolicy) - this does the work:
      *  - owner cancelling a paid Zapis (`confirmed`, non-zero Rozliczenie) files the refund request first
-     *    (requestRefund() needs a `confirmed` Zapis; organizer/admin approves it as usual, spec 13);
+     *    (requestRefund() needs a `confirmed` Zapis; organizer/admin approves it as usual);
      *    a manager's cancel keeps its old behaviour and does not open a refund by itself;
      *  - the Zapis goes `cancelled` through cancel() (counter back to the pool, Biuro Zawodów push);
      *  - a `registration_changes` row is written, and for the owner's own cancellation the registrant gets
@@ -2717,18 +2714,18 @@ SQL;
     }
 
     /**
-     * G-04 (spec 23 Answer §2, spec 20 "Transfer", spec 11 §4): swaps the Zawodnik on a relay
+     * Swaps the Zawodnik on a relay
      * member's Zapis. It is a swap of the person on an existing Zapis, NOT a cancel-and-recreate:
-     * the Zapis id, the Drużyna, the Rozliczenie (frozen price — spec 07 pkt 12 resets it only
+     * the Zapis id, the Drużyna, the Rozliczenie (frozen price — reset only
      * when the product changes, not the person), the bib number and the status all stay; the
      * person, the contact data and the Kategoria (derived from the new person) are replaced and
      * the start code rotates (the old one was mailed to the previous person). Answers to the
      * Zapis's custom form fields belonged to the previous person and are dropped — the new person
      * fills them in. The write stamps `updated_at`, which is how Biuro Zawodów picks the change
-     * up on its pull (spec 12 §1 lists only cancellation/refund/distance change as push-worthy
+     * up on its pull (only cancellation/refund/distance change count as push-worthy
      * critical changes, a swap is not among them).
      *
-     * Authorization (spec 23 §2 + 09): the Drużyna's captain until the Dystans's swap deadline
+     * Authorization: the Drużyna's captain until the Dystans's swap deadline
      * (`relay_swap_deadline`, default: the day before the Event), the Event's manager always.
      *
      * @param array<string, mixed> $input  `competitorId` (existing Zawodnik) or `newPerson` (data of a new one)
@@ -2793,7 +2790,7 @@ SQL;
     }
 
     /**
-     * Shared core of the person swap on an existing Zapis (G-04 team swap, R-02 transfer): resolves the
+     * Shared core of the person swap on an existing Zapis (relay team swap, Zapis transfer): resolves the
      * new Zawodnik (existing `competitorId` or created from `newPerson`), refuses the same person and a
      * person already registered for the Event, then replaces the person, the contact data and the
      * Kategoria (derived from the new person), rotates the start code and drops the answers to the
@@ -2818,7 +2815,7 @@ SQL;
                 throw new \RuntimeException('team_swap_competitor_not_found');
             }
             // The captain names only people they may register (Opieka or own profile — the
-            // capped permission of spec 10/23, no new Opieka is granted); the Event's manager
+            // capped permission, no new Opieka is granted); the Event's manager
             // is organising the start list and may name any Zawodnik.
             if (!$isManager && !(new \ZmierzymyCzas\Domain\Care\CareRepository($this->pdo))->canRegister($actorId, $newCompetitorId)) {
                 throw new \RuntimeException('not_authorized_to_register');
@@ -2859,7 +2856,7 @@ SQL;
             ], true);
         }
 
-        // Same derivation as POST /registrations (PP.52/PP.44): the Zapis hangs on the
+        // Same derivation as POST /registrations: the Zapis hangs on the
         // Zawodnik's own Konto when there is one, else on whoever stands behind them.
         $kontoId = (string) ($competitor['userId'] ?? '');
         $konto = null;
@@ -2899,7 +2896,7 @@ SQL;
     }
 
     /**
-     * G-04: the roster the captain (or the Event's manager) picks the person to swap out of —
+     * The roster the captain (or the Event's manager) picks the person to swap out of —
      * active Zapisy of the Drużyna only (a cancelled/expired/removed one holds no place).
      *
      * @return list<array{registrationId: string, name: string, status: string, bibNumber: ?string, competitorId: ?string}>
@@ -2926,7 +2923,7 @@ SQL;
     }
 
     /**
-     * Captain's swap window (G-04): up to and including the Dystans's `relay_swap_deadline`;
+     * Captain's swap window: up to and including the Dystans's `relay_swap_deadline`;
      * without one, until the day before the Event (the same "locked once under way" stance as
      * TeamRepository::updateSpecialCategory()). DATE granularity, like the rest of the Event dates.
      *
@@ -2945,7 +2942,7 @@ SQL;
 
     /**
      * Records Odprawa (check-in) against this Zapis. This is not the full Odprawa
-     * model (Biuro Zawodów, separate ticket) — just enough to not lose "czy i kiedy
+     * model (Biuro Zawodów, separate concern) — just enough to not lose "czy i kiedy
      * sprawdzono zapis" now that Bilet is a view of Zapis, not a separate entity.
      */
     public function checkIn(string $id): ?array
@@ -2961,7 +2958,7 @@ SQL;
     }
 
     /**
-     * E1.5, spec 13 rozstrzygnięcie 1: Zawodnik never triggers a refund directly —
+     * Zawodnik never triggers a refund directly —
      * this only ever creates a *request*, which an organizer (own Wydarzenie) or
      * admin must separately approveRefund(). Only valid from a `confirmed`
      * (opłacona) Zapis. Idempotent (point 6): calling again while a cycle is
@@ -3011,7 +3008,7 @@ SQL;
 
     /**
      * Organizator (own Wydarzenie) or admin approves a pending refund request —
-     * spec's "do zwrotu". `$amount` is the saldo to refund (rozstrzygnięcie 3: same
+     * "do zwrotu". `$amount` is the saldo to refund (same
      * arithmetic mechanism for a full cancellation and a partial refund); when
      * omitted it defaults to the whole frozen Rozliczenie total (full refund), and
      * is always clamped to that total as a ceiling regardless of what is passed —
@@ -3038,7 +3035,7 @@ SQL;
 
             $ceiling = $this->totalAmountFor($id);
             if ((string) ($existing['reason'] ?? '') === self::DISTANCE_CHANGE_REFUND_REASON && $existing['amount'] !== null) {
-                // R-02: the overpayment of a cheaper Dystans was fixed when the change was made; it is the
+                // The overpayment of a cheaper Dystans was fixed when the change was made; it is the
                 // ceiling (and the default) here, not the - now smaller - Rozliczenie total.
                 $ceiling = (float) $existing['amount'];
             }
@@ -3062,7 +3059,7 @@ SQL;
             throw $e;
         }
 
-        // E1.10 mail #14 ("Zwrot pieniędzy zatwierdzony") — the "do zwrotu"
+        // Mail ("Zwrot pieniędzy zatwierdzony") — the "do zwrotu"
         // transition itself, sent once per approval (not repeated at
         // markRefunded()'s later "zwrócona" transition — one notification per
         // refund cycle is enough, and the amount/route are already final here).
@@ -3071,7 +3068,7 @@ SQL;
         // inline for every affected registrant — see routes.php's cancel handler.
         $this->sendRefundApprovedMail($id, $resolvedAmount, $route);
 
-        // E1.6/E1.7: trasa A really calls the gateway's (Tpay or PayNow, whichever
+        // Trasa A really calls the gateway's (Tpay or PayNow, whichever
         // took the original payment) refund API now, once the "do zwrotu" approval
         // itself is safely committed — same "never hold the row lock across an
         // outbound HTTP call" reasoning as startGatewaySessionIfNeeded(). Trasa B
@@ -3081,7 +3078,7 @@ SQL;
             $gatewayRefundFailed = !$this->initiateGatewayRefund($id);
         }
 
-        // E3.4: "zwrot" trigger, "do zwrotu" sub-state — one push per approval,
+        // "zwrot" trigger, "do zwrotu" sub-state — one push per approval,
         // same "runs only on the genuine fresh transition" guarantee as
         // sendRefundApprovedMail() just above (the early-return for an
         // already-`approved` cycle never reaches this line).
@@ -3089,7 +3086,7 @@ SQL;
 
         $result = $this->find($id);
         if ($gatewayRefundFailed && $result !== null && isset($result['refund']) && is_array($result['refund'])) {
-            // TD.13: the approval itself did commit (see docblock on
+            // The approval itself did commit (see docblock on
             // initiateGatewayRefund() for why that's deliberately not rolled
             // back), but the caller must not get a plain 200 that reads as
             // "refund succeeded end to end" when the actual gateway call
@@ -3104,17 +3101,17 @@ SQL;
     /**
      * Executes the terminal `approved` -> `refunded` transition. Route B (przelew
      * tradycyjny) is fully manual and this IS the real "organizator odznacza
-     * zwrócono" action for it — in scope per the ticket. Route A (Tpay or PayNow)
-     * now really does call the gateway's refund API from approveRefund() (E1.6/
-     * E1.7, see initiateGatewayRefund()) — but both gateways confirm a refund
+     * zwrócono" action for it — in scope. Route A (Tpay or PayNow)
+     * now really does call the gateway's refund API from approveRefund() (see
+     * initiateGatewayRefund()) — but both gateways confirm a refund
      * asynchronously via their own notification, and wiring that specific
-     * notification straight into this method is E1.10 (mail) territory sharing
+     * notification straight into this method belongs with the mail handling sharing
      * the same webhook, so today this action still doubles as the admin's manual
      * bookkeeping confirmation once they see the refund landed on the gateway's
      * side. Idempotent: marking an
      * already-`refunded` cycle refunded again is a no-op. When the refunded amount
      * covers the whole frozen Rozliczenie (a full refund, not a partial one), the
-     * Zapis itself also moves to `cancelled` — rozstrzygnięcie: registrations.status
+     * Zapis itself also moves to `cancelled` — registrations.status
      * must stay consistent with the refund state machine, never a second, silently
      * diverging source of truth (a partial refund leaves the Zapis `confirmed`,
      * since the registrant is still attending).
@@ -3152,7 +3149,7 @@ SQL;
 
             $refundedAmount = (float) $existing['amount'];
             $ceiling = $this->totalAmountFor($id);
-            // R-02: a refund of the overpayment after a change of Dystans is partial by nature, even when it
+            // A refund of the overpayment after a change of Dystans is partial by nature, even when it
             // exceeds the (smaller) new total - the Zapis stays.
             $isFullRefund = (string) ($existing['reason'] ?? '') !== self::DISTANCE_CHANGE_REFUND_REASON
                 && $refundedAmount >= ($ceiling - 0.005);
@@ -3172,7 +3169,7 @@ SQL;
             throw $e;
         }
 
-        // E3.4: "zwrot" trigger, terminal "zwrócono" sub-state — one push per
+        // "zwrot" trigger, terminal "zwrócono" sub-state — one push per
         // completed refund cycle (the early-return for an already-`refunded`
         // cycle above never reaches this line). Deliberately reported as
         // `refund_refunded`, not also as a `cancellation` push, even when this
@@ -3185,7 +3182,7 @@ SQL;
     }
 
     /**
-     * Route A (Tpay or PayNow) — the real gateway refund call E1.5 deliberately
+     * Route A (Tpay or PayNow) — the real gateway refund call that was deliberately
      * left this seam empty for. Finds the Zapis's most recently `paid` gateway
      * transaction and asks whichever gateway processed it (its `gateway` column,
      * see below) to refund it for the approved refund amount
@@ -3196,7 +3193,7 @@ SQL;
      * payment — TpayNotification/PayNowNotification) that integration is
      * expected to call markRefunded() itself, the same terminal transition a
      * route B organizer triggers by hand today; wiring that specific
-     * notification-to-markRefunded() call is left to E1.10 territory (mail
+     * notification-to-markRefunded() call is left to the mail handling (mail
      * seam) alongside it, not duplicated here.
      *
      * No-op (not an error) when there is no gateway configured for the paying
@@ -3206,7 +3203,7 @@ SQL;
      * markRefunded() remain the source of truth for whether a refund is
      * recorded as done on this platform.
      *
-     * TD.13: a thrown exception from $gateway->refund() itself is still not
+     * A thrown exception from $gateway->refund() itself is still not
      * allowed to unwind approveRefund() (same reasoning as above — the
      * platform-side `approved` state must not flip-flop on a gateway hiccup,
      * and there is no `failed` state in migration 035's refund state machine
@@ -3255,7 +3252,7 @@ SQL;
         try {
             $gateway->refund($transactionId, (float) $refund['amount']);
         } catch (\Throwable $e) {
-            // TD.13: was silently swallowed — a failed gateway refund call had
+            // Was silently swallowed — a failed gateway refund call had
             // no log, no alert, nothing beyond a customer complaint. The
             // platform-side `approved` state is deliberately left as-is (see
             // docblock above), but the failure itself must be investigable.
@@ -3291,10 +3288,10 @@ SQL;
     }
 
     /**
-     * "Ponowienie" (spec: „nie wiem jak zapłacić" — jednoklikowe ponowienie
+     * "Ponowienie" (the "nie wiem jak zapłacić" case — one-click retry of
      * płatności): reopens a fresh `pending` state with a brand-new payment window,
      * for a Zapis that has already `expired`. Deliberately does not call any
-     * gateway (E1.6/E1.7 out of scope, rozstrzygnięcie 8) — it only re-establishes
+     * gateway (out of scope here) — it only re-establishes
      * the same slot-holding state a brand-new Zapis would have, ready for whichever
      * gateway integration lands later to hang its "start new session" call off.
      * Re-checks Dystans capacity under the same row lock create() uses, since the
@@ -3302,7 +3299,7 @@ SQL;
      */
     public function retryPayment(string $id): ?array
     {
-        // PP.18: a lapsed-but-not-yet-swept Zapis can be retried right away (single-row expiry).
+        // A lapsed-but-not-yet-swept Zapis can be retried right away (single-row expiry).
         $this->expireRegistration($id, new \DateTimeImmutable());
         $this->pdo->beginTransaction();
         try {
@@ -3312,7 +3309,7 @@ SQL;
                 return null;
             }
             if ($registration['status'] === 'pending') {
-                // B-05: a still-open window on the gateway route gets a fresh gateway session for the
+                // A still-open window on the gateway route gets a fresh gateway session for the
                 // SAME Zapis and the same frozen amount; the window and the slot are left untouched.
                 // A transfer (organizer_bank) Zapis has no gateway session to restart.
                 if ($this->paymentConfigType((string) $registration['eventId']) === 'organizer_bank') {
@@ -3347,8 +3344,8 @@ SQL;
             throw $e;
         }
 
-        // E1.6/E1.7: "ponowienie" now really does hang a fresh gateway session off the
-        // re-opened `pending` state, per the ticket — the seam retryPayment()'s
+        // "ponowienie" now really does hang a fresh gateway session off the
+        // re-opened `pending` state — the seam retryPayment()'s
         // own docblock (above) was left waiting for.
         $registration = $this->find($id);
         if ($registration !== null && $registration['status'] === 'pending') {
@@ -3359,7 +3356,7 @@ SQL;
     }
 
     /**
-     * Bulk trigger for "odwołanie Wydarzenia" (spec rozstrzygnięcie 2): every
+     * Bulk trigger for "odwołanie Wydarzenia": every
      * `confirmed` Zapis of the Wydarzenie is marked straight to `approved` ("do
      * zwrotu") in one action — skipping the `requested` step entirely, since an
      * organizer/admin cancelling their own event is already the approving party,
@@ -3383,7 +3380,7 @@ SQL;
     }
 
     /**
-     * E1.10 note: deliberately does not call sendRefundApprovedMail() (unlike
+     * Note: deliberately does not call sendRefundApprovedMail() (unlike
      * the public approveRefund() above) — event cancellation sends mail #8 to
      * every registrant instead, which already states the refund status inline;
      * a second, separate mail #14 per registrant here would be redundant noise.
@@ -3420,10 +3417,10 @@ SQL;
             if ($route === 'gateway') {
                 $this->initiateGatewayRefund($id);
             }
-            // E3.4: same "do zwrotu" push as the single-registration
+            // Same "do zwrotu" push as the single-registration
             // approveRefund() above — an organizer cancelling their whole
             // Wydarzenie is still, per-registration, exactly the "zwrot"
-            // critical change BZ needs to hear about (issue 12 §1 explicitly
+            // critical change BZ needs to hear about (explicitly
             // frames the push as mattering most "blisko wydarzenia", which is
             // exactly when a bulk event cancellation happens); only the mail
             // side (sendRefundApprovedMail(), see this method's doc comment)
@@ -3529,7 +3526,7 @@ SQL;
     }
 
     /**
-     * E1.6/E1.7: starts a new gateway session for a fresh `pending` Zapis on
+     * Starts a new gateway session for a fresh `pending` Zapis on
      * trasa A (gdy payment_config.type nie jest 'organizer_bank') and records
      * it in `registration_gateway_transactions`, keyed by the gateway's own
      * transaction id — that key is what makes the webhook idempotent later
@@ -3540,7 +3537,7 @@ SQL;
      * Wydarzenie is reconfigured afterwards (see initiateGatewayRefund()).
      * The amount is always `totalAmountFor()` — the frozen Rozliczenie's DO
      * ZAPŁATY total — never anything the caller of create()/retryPayment()
-     * passed in, per the ticket's hard "klient nigdy nie przysyła kwot"
+     * passed in, per the hard rule that the client never sends amounts
      * requirement extended to the gateway leg.
      *
      * Returns null (never throws) whenever there is nothing to do: no gateway
@@ -3581,7 +3578,7 @@ SQL;
         } catch (\Throwable $e) {
             // Gateway unreachable/misconfigured: the Zapis itself was already
             // committed successfully above — never let a gateway hiccup fail
-            // the registration. PP.20: but it must leave a trace. Never log the
+            // the registration. but it must leave a trace. Never log the
             // startSession() arguments (user e-mail/name).
             $this->logger->error('Gateway payment session could not be started; registration left pending without a session', [
                 'registrationId' => (string) $registration['id'],
@@ -3607,13 +3604,13 @@ SQL;
     }
 
     /**
-     * E1.6/E1.7 webhook entry point — apply (or idempotently ignore) one already
+     * Webhook entry point — apply (or idempotently ignore) one already
      * signature-verified gateway notification (Tpay or PayNow — both webhook
      * routes call this same, provider-agnostic method). `$transactionId`/`$paid`
      * must come from TpayNotification/PayNowNotification, never straight off
      * unverified request data.
      *
-     * Paid-amount check (PP.6): `$notifiedAmountGrosze` is the amount the gateway
+     * Paid-amount check: `$notifiedAmountGrosze` is the amount the gateway
      * says it collected, in integer grosze (null = the notification reported no
      * usable amount). It is compared, with no tolerance, against the amount frozen
      * in registration_gateway_transactions when the session was started. A paid
@@ -3630,16 +3627,16 @@ SQL;
      * `amount_mismatch` -> `paid` (a later notification with the exact amount, e.g.
      * after a surcharge) | `failed`; `paid`/`failed` are terminal.
      *
-     * Idempotency (ticket point 4): the gateway transaction row is looked up and
+     * Idempotency: the gateway transaction row is looked up and
      * locked by `$transactionId` (its primary key) — a retried webhook for the
      * same transaction finds it already `paid`/`failed` and does nothing further,
      * so a gateway retry-after-timeout can never mark a Rozliczenie paid twice or
-     * double-fire whatever side effect eventually hangs off this (E1.10 mail —
+     * double-fire whatever side effect eventually hangs off this (mail —
      * that seam is the `applied` return value below: true only the one time this
      * call is the one that actually flipped the state to paid/failed). A repeated
      * mismatch is a no-op and is not logged again.
      *
-     * Registration identity check (PP.63): `$notifiedRegistrationId` is the registration id the gateway
+     * Registration identity check: `$notifiedRegistrationId` is the registration id the gateway
      * echoed back in the notification (Tpay hiddenDescription/tr_crc, PayNow externalId). The locked
      * transaction row stays the source of truth; the notified id is only compared against it. When the
      * notified id is present AND has the format of the ids this platform generates (UUID v4) but differs
@@ -3647,7 +3644,7 @@ SQL;
      * row becomes `amount_mismatch`, nothing is marked paid/failed/confirmed, one PII-free ERROR line
      * (alert `payments.registration_mismatch`, the notified id is NOT logged) and the caller still acks
      * the gateway. An absent, empty or differently-formatted id cannot be told apart from a gateway that
-     * does not echo our id verbatim (real field names are unverified until TD.4), so it never blocks: a
+     * does not echo our id verbatim (real field names are unverified until checked against a real account), so it never blocks: a
      * WARNING (`check` = payments.registration_id_unverifiable, no alert) is logged and the normal flow
      * continues. A row that is already `paid`/`failed` ignores the check (idempotency).
      *
@@ -3679,7 +3676,7 @@ SQL;
                 return ['applied' => false, 'registrationId' => $registrationId, 'amountMismatch' => false, 'registrationMismatch' => false];
             }
 
-            // PP.63: identity check first — a wrong identity makes the amount meaningless, and a
+            // Identity check first — a wrong identity makes the amount meaningless, and a
             // mismatched "not paid" must not close our row as `failed` either.
             $registrationMismatch = false;
             if ($notifiedRegistrationId !== null && preg_match(self::REGISTRATION_ID_PATTERN, $notifiedRegistrationId) === 1) {
@@ -3746,7 +3743,7 @@ SQL;
             throw $e;
         }
 
-        // PP.18: money arrived (the transaction row above is the truth about the money) but the Zapis
+        // Money arrived (the transaction row above is the truth about the money) but the Zapis
         // could not be confirmed. No "payment confirmed" mail — it would promise a place the payer
         // does not have. PII-free ERROR for an admin to resolve (refund or manual admission).
         if ($outcome === 'paid_after_expiry' || $outcome === 'not_pending') {
@@ -3779,7 +3776,7 @@ SQL;
             ]);
         }
 
-        // E1.10 mail #5 ("Potwierdzenie płatności / bilet") — sent only after the
+        // Mail ("Potwierdzenie płatności / bilet") — sent only after the
         // `pending` -> `confirmed` transition is safely committed, never from
         // inside markGatewayPaymentPaid() itself (that runs inside this method's
         // transaction; an outbound HTTP call must never happen before a commit
@@ -3792,7 +3789,7 @@ SQL;
     }
 
     /**
-     * PP.18: the Zapis side of a cleared gateway payment, inside applyGatewayNotification()'s
+     * The Zapis side of a cleared gateway payment, inside applyGatewayNotification()'s
      * transaction. A `pending` Zapis is confirmed as before. An `expired` one (the scheduler
      * lapsed it before the payer finished) is revived to `pending` and confirmed when its Dystans
      * still has a free slot; with no free slot it stays `expired` (never admitted over the limit
@@ -3856,7 +3853,7 @@ SQL;
     }
 
     /**
-     * PP.63: ids and gateway name only. The notified id is attacker-influenced body data and is
+     * Ids and gateway name only. The notified id is attacker-influenced body data and is
      * deliberately never written; the line only says it differs from the row's.
      */
     private function logRegistrationMismatch(string $transactionId, string $registrationId, string $gateway, bool $paid): void
@@ -3944,17 +3941,17 @@ SQL;
     }
 
     /**
-     * E1.8: trasa B "oznacz jako opłacone" — the organizer (own Wydarzenie) or
+     * Trasa B "oznacz jako opłacone" — the organizer (own Wydarzenie) or
      * admin manually confirms a bank transfer they saw land in their own
      * account. This performs *exactly* the same `pending` -> `confirmed`
      * transition applyGatewayNotification() performs for trasa A —
      * markGatewayPaymentPaid() is reused as-is, not duplicated, per the
-     * ticket's "no parallel ad-hoc status path" requirement. The only
+     * "no parallel ad-hoc status path" requirement. The only
      * difference from the webhook is what triggers it: an authenticated
      * organizer/admin clicking a button (permission-checked in routes.php
      * via $canManageEvent), not a signed gateway callback.
      *
-     * Guards against exactly the misuse the ticket calls out: a trasa-A
+     * Guards against exactly the misuse to avoid: a trasa-A
      * (gateway) registration must never be marked paid through this door —
      * it throws rather than silently doing nothing, so the route/http layer
      * can surface a clear error instead of a no-op 200.
@@ -3989,7 +3986,7 @@ SQL;
             throw $e;
         }
 
-        // E1.10 mail #5 — see applyGatewayNotification()'s identical comment on
+        // Confirmation mail — see applyGatewayNotification()'s identical comment on
         // why this happens after the commit, not inside markGatewayPaymentPaid().
         $this->sendPaymentConfirmedMail($id);
 
@@ -4061,10 +4058,9 @@ SQL;
     }
 
     /**
-     * E3.4: "Push zmian krytycznych (rezygnacja, zwrot) webhookiem" (issue 12
-     * §1). Two independent gates, both required, mirrored from the opposite
+     * "Push zmian krytycznych (rezygnacja, zwrot) webhookiem". Two independent gates, both required, mirrored from the opposite
      * direction of routes.php's own BZ pull endpoint (`GET
-     * /events/{eventId}/bz/participants`, E3.3):
+     * /events/{eventId}/bz/participants`):
      *  1. This RegistrationRepository must actually have a BzWebhookOutboxService
      *     at all — null whenever BZ_WEBHOOK_BASE_URL isn't configured for this
      *     deployment (see $bzWebhookOutbox's doc comment), same "unconfigured
@@ -4072,16 +4068,16 @@ SQL;
      *     this class.
      *  2. The specific Event this Zapis belongs to must have
      *     bz_integration_enabled = true AND a non-empty bz_organization_token
-     *     (E3.2) — an Event that never turned BZ on gets zero pushes, exactly
+     * — an Event that never turned BZ on gets zero pushes, exactly
      *     like it gets rejected on the pull side.
      *
-     * Payload is a deliberate whitelist (issue 12 §5, "bez kwot" — the exact
+     * Payload is a deliberate whitelist (no amounts — the exact
      * same money-leakage discipline bzParticipantList() already applies to the
      * pull direction): just enough for BZ to resolve which participant record
      * changed (eventId, registrationId, and qrCode as a second identity
      * anchor — the same field BZ already receives from the pull and can index
      * on), what kind of critical change this is, and a timestamp for BZ's own
-     * last-write-wins reconciliation (issue 12 §2). Never a settlement amount,
+     * last-write-wins reconciliation. Never a settlement amount,
      * a price, or anything else hydrate()-shaped.
      *
      * Any failure enqueueing/sending is deliberately swallowed — same "never
@@ -4134,13 +4130,13 @@ SQL;
                 // refund_refunded) happens at most once per Zapis — its own
                 // caller already guards against firing on a repeated/no-op
                 // transition (see the three call sites above).
-                // R-02: a change that can repeat (distance_change) adds the id of its history row.
+                // A change that can repeat (distance_change) adds the id of its history row.
                 'idempotencyKey' => sprintf('bz-push:%s:%s', $registrationId, $changeType) . ($discriminator !== '' ? ':' . $discriminator : ''),
                 'organizationToken' => $organizationToken,
                 'payload' => $payload,
             ]);
         } catch (\Throwable $e) {
-            // Deliberately swallowed (see this method's doc comment), but PP.20
+            // Deliberately swallowed (see this method's doc comment), but a log line
             // leaves a trace. Never log organizationToken/payload.
             $this->logger->warning('BZ critical change push failed', [
                 'eventId' => $eventId,
@@ -4177,8 +4173,8 @@ SQL;
     }
 
     /**
-     * The full six-step sequential pricing algorithm (spec:
-     * 07-model-cenowy-zapisu.md). Klient nigdy nie przysyła kwot (rozstrzygnięcie 14)
+     * The full six-step sequential pricing algorithm.
+     * The client never sends amounts
      * — every amount below is derived server-side from ids/selections the client
      * sends (pricingVariantId, discountCode, merchandise, insuranceVariantId); any
      * money-like field on $data (price, discountAmount, pricePaid, totalAmount,
@@ -4186,12 +4182,12 @@ SQL;
      *
      * Steps 1–3 (Wariant → Próg → Kod rabatowy) freeze into "opłata startowa";
      * step 4 (Modyfikatory) is a real, always-called stage that today always
-     * returns no items (ticket 10 / E1.13 owns its source); steps 5–6 (Gadżety,
+     * returns no items (the form module owns its source); steps 5–6 (Gadżety,
      * NNW) are added on top. The running total is rounded to cents after every
      * step; nothing here lets it go below 0 except where a single step's own
      * result is clamped to ≥0 (step 3's result, and the final total).
      *
-     * TD.8 (spec 07 pkt 10): $suppressStartFee, when true, skips steps 1–3
+     * $suppressStartFee, when true, skips steps 1–3
      * entirely (startFeeBaseItems() is never called, and the discount-code
      * block never runs) — $items starts empty, the running total starts at
      * 0.0, and no discount is looked up or applied. This is how a relay
@@ -4199,12 +4195,12 @@ SQL;
      * 'per_team'` Dystans gets a zero-priced opłata startowa (the whole fee
      * already landed on the captain's own Zapis) — see create()'s
      * $suppressStartFee derivation. Steps 4–6 (modifiers, gadżety, NNW)
-     * always run regardless of this flag: the spec is explicit that
+     * always run regardless of this flag: it is explicit that
      * "Gadżety, NNW i modyfikatory zawsze zostają przy Zapisie zamawiającego".
      *
      * @param array<string, mixed> $data
      * @param array<string, mixed> $row locked Dystans row from lockDistanceForRegistration()
-     * @param bool $suppressStartFee TD.8: true suppresses steps 1–3 (opłata startowa + discount code) for a relay team member joining under 'per_team' pricing
+     * @param bool $suppressStartFee true suppresses steps 1–3 (opłata startowa + discount code) for a relay team member joining under 'per_team' pricing
      * @return array{
      *     eventName: string,
      *     distanceName: string,
@@ -4218,7 +4214,7 @@ SQL;
     private function pricingForRegistration(array $data, array $row, bool $suppressStartFee = false): array
     {
         if ($suppressStartFee) {
-            // TD.8: this Zapis is a relay team member joining a 'per_team'
+            // This Zapis is a relay team member joining a 'per_team'
             // priced team — the whole opłata startowa already landed on the
             // captain's Zapis, so steps 1–3 (and any discount code) simply
             // never run for this one.
@@ -4228,12 +4224,12 @@ SQL;
             $discountId = null;
             $usedBy = [];
         } else {
-            // ── Kroki 1+2: Wariant opłaty + jego własny Próg ────────────────
+            // ── Steps 1+2: fee Wariant + its own threshold ─────────────────
             $base = $this->startFeeBaseItems($row, isset($data['pricingVariantId']) && $data['pricingVariantId'] !== null && $data['pricingVariantId'] !== '' ? (string) $data['pricingVariantId'] : null, $data);
             $items = $base['items'];
             $runningTotal = $base['resolvedPrice'];
 
-            // ── Krok 3: Kod rabatowy (tylko na wynik kroku 2, wynik ≥ 0) ────
+            // ── Step 3: discount code (applies only to the result of step 2, result ≥ 0) ────
             $discountCode = trim((string) ($data['discountCode'] ?? ''));
             $discountId = null;
             $usedBy = [];
@@ -4266,18 +4262,18 @@ SQL;
         }
         // = OPŁATA STARTOWA (zamrożona: $items so far)
 
-        // ── Krok 4: Modyfikatory — ticket 10 / E1.13 dziedziczy ten krok ────
+        // ── Step 4: modifiers — filled from the registration form ────
         foreach ($this->modifierSettlementItems($data) as $modifierItem) {
             $items[] = $modifierItem;
         }
 
-        // ── Krok 5: Gadżety (cena × ilość, cena zawsze z katalogu) ──────────
+        // ── Step 5: merchandise (price x quantity, price always from the catalog) ──
         $merchandise = $this->resolveMerchandiseLines((string) $data['eventId'], $data['merchandise'] ?? $data['merchandiseOrders'] ?? []);
         foreach ($merchandise['items'] as $merchandiseItem) {
             $items[] = $merchandiseItem;
         }
 
-        // ── Krok 6: NNW (wariant z katalogu globalnego, wiek na dzień wydarzenia) ─
+        // ── Step 6: accident insurance (variant from the global catalog, age on the Event date) ──
         $insuranceItem = $this->insuranceSettlementItem($data, (string) $row['eventDate']);
         if ($insuranceItem !== null) {
             $items[] = $insuranceItem;
@@ -4300,10 +4296,10 @@ SQL;
      * the legacy Dystans price — backward compatibility for distances that never
      * got variants) plus that same Wariant's own Próg. Returns the base price as
      * one settlement line and, if a tier applies, the tier's own price as a second
-     * line relative to the base (matching the spec's worked example, which shows
+     * line relative to the base (matching the documented worked example, which shows
      * "Wariant STANDARDOWA 110,00" and "próg „Early bird" −60,00" as two lines).
      *
-     * PP.65: a Wariant marked `office_only` or hidden from the public form may only be picked by
+     * A Wariant marked `office_only` or hidden from the public form may only be picked by
      * staff or the Event's own organizer (see actorMaySelectRestrictedVariants()); anyone else
      * gets 422, so a participant cannot reach a cheaper hidden price by sending its id.
      *
@@ -4376,7 +4372,7 @@ SQL;
     }
 
     /**
-     * PP.79: the stored category for a new Zapis (see AgeCategoryResolver). The Zawodnik's facts
+     * The stored category for a new Zapis (see AgeCategoryResolver). The Zawodnik's facts
      * come from `competitorId` (the ward / adult under care the route resolved), never from the
      * caller. Thin glue: the rules live in the pure resolver.
      *
@@ -4409,7 +4405,7 @@ SQL;
     }
 
     /**
-     * PP.65 (decision Q9): who may pick an office-only / hidden Wariant. Looks at the ACTOR (the
+     * Who may pick an office-only / hidden Wariant. Looks at the ACTOR (the
      * authenticated caller, `actorUserId` set by the HTTP layer), not at the Zawodnik being
      * registered, so a guardian registering a ward gets no more than the guardian has. The role
      * is read from the database, not from the token. Fails closed: no actor means public.
@@ -4447,7 +4443,7 @@ SQL;
             return true;
         }
 
-        // R-01: an active Co-manager (any global role) is on the Event's Team like the Owner.
+        // An active Co-manager (any global role) is on the Event's Team like the Owner.
         $team = $this->pdo->prepare("SELECT 1 FROM event_team_members WHERE event_id = :eventId AND user_id = :userId AND status = 'active' LIMIT 1");
         $team->execute(['eventId' => (string) ($data['eventId'] ?? ''), 'userId' => $actorUserId]);
 
@@ -4491,8 +4487,8 @@ SQL;
 
     /**
      * Step 4 (Modyfikatory): pricing contributions from form-field-variant choices —
-     * "posiłek wegetariański +5", "udział w losowaniu −5" (rozstrzygnięcie 8 w
-     * spec). B-07: RegistrationFormService::prepare() builds the items from the field
+     * "posiłek wegetariański +5", "udział w losowaniu −5" (chosen by the participant).
+     * RegistrationFormService::prepare() builds the items from the field
      * configuration on the server (never from the client's amounts) and create()
      * hands them over as `formModifierItems`. They may be negative; the Zapis's
      * total is floored at 0 by amountDueFromItems()/hydrate().
@@ -4550,7 +4546,7 @@ SQL;
         if (!empty($discount['valid_to']) && strtotime((string) $discount['valid_to']) < $now) {
             throw new \RuntimeException('discount_code_expired');
         }
-        // R-02: re-checking the code of a Zapis that already holds one of its uses (change of Dystans).
+        // Re-checking the code of a Zapis that already holds one of its uses (change of Dystans).
         if ($discount['max_uses'] !== null && (int) $discount['used_count'] >= (int) $discount['max_uses']
             && !($ownRegistrationId !== null && $this->discountUsedBy($discount, $ownRegistrationId))) {
             throw new \RuntimeException('discount_code_used_up');
@@ -4603,9 +4599,9 @@ SQL;
     /** @param array<string, mixed> $row */
     private function hydrate(array $row): array
     {
-        // E1.8: deterministic, unique bank-transfer title for trasa B — pure
+        // Deterministic, unique bank-transfer title for trasa B — pure
         // `ZC-{id}` derived from the Zapis id, exactly like a QR/ticket code
-        // (E0.2's asTicket()) is derived rather than stored. Always present
+        // (asTicket()) is derived rather than stored. Always present
         // (trasa A ignores it), so the client never has to special-case its
         // absence.
         $row['transferTitle'] = 'ZC-' . $row['id'];
@@ -4649,8 +4645,8 @@ SQL;
         if ($hasInsurance) {
             $row['insurancePaid'] = $this->roundMoney($insuranceTotal);
         }
-        // DO ZAPŁATY: the full six-step total, floored at 0 (rozstrzygnięcie: spec
-        // §"Algorytm"). Always present — unlike pricePaid/discountAmount/insurancePaid,
+        // DO ZAPŁATY: the full six-step total, floored at 0 (by design).
+        // Always present — unlike pricePaid/discountAmount/insurancePaid,
         // which stay null when their step never fired, "how much is owed in total" is
         // meaningful even for a registration with no discount/insurance/merchandise.
         $row['totalAmount'] = $this->roundMoney(max(0, $total));
@@ -4661,7 +4657,7 @@ SQL;
     /**
      * Rozliczenie: the positioned, frozen line items belonging to this Zapis
      * (name, basis, amount, freeze timestamp) — replaces the old flat
-     * `price_paid` / `discount_amount` / `insurance_paid` columns (E0.3).
+     * `price_paid` / `discount_amount` / `insurance_paid` columns.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -4815,10 +4811,10 @@ SQL;
     /**
      * Step 6 (NNW): the client picks one catalog variant by id — the price formula
      * itself is never sent, only the choice. Validates that the variant is both a
-     * real, active catalog row and one this event actually offers (rozstrzygnięcie
-     * 9: organizator wybiera oferowane spośród admina katalogu). Age is computed
+     * real, active catalog row and one this event actually offers (the organizer
+     * picks the offered ones from the admin catalog). Age is computed
      * against the event's own date, not today or the registration timestamp
-     * (rozstrzygnięcie 9, ostatnie zdanie).
+     * (the Event date).
      *
      * @param array<string, mixed> $data
      * @return array{name: string, basis: string, amount: float}|null

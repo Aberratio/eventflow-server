@@ -15,15 +15,15 @@ final class ResultRepository extends Repository
 
     /**
      * Same column list as COLUMNS above, `r.`-qualified for byEvent()'s
-     * anonymization join below (TD.6) — needed once the query also touches
+     * anonymization join below — needed once the query also touches
      * `registrations`/`competitors`, both of which have their own `id`
      * column that would otherwise collide with `results.id`.
      */
     private const COLUMNS_R = 'r.id, r.event_id AS eventId, r.event_name AS eventName, r.distance_id AS distanceId, r.distance_name AS distanceName, r.user_id AS userId, r.registration_id AS registrationId, r.user_name AS userName, r.bib_number AS bibNumber, r.category, r.time, r.time_in_seconds AS timeInSeconds, r.net_time AS netTime, r.net_time_in_seconds AS netTimeInSeconds, r.position, r.category_position AS categoryPosition, r.gender_position AS genderPosition, r.status, r.is_virtual AS isVirtual, r.publication_status AS publicationStatus, r.gender, r.birth_year AS birthYear';
 
     /**
-     * Shared FROM/JOIN shape behind byEvent()'s anonymization masking (TD.6),
-     * now also reused by list() and byUser() below (TD.6 follow-up) - both
+     * Shared FROM/JOIN shape behind byEvent()'s anonymization masking,
+     * now also reused by list() and byUser() below - both
      * are equally public/unauthenticated `GET` endpoints (routes.php has no
      * AuthMiddleware on any of the three) reading the exact same `results`
      * table, so they share the exact same real-name leak byEvent() was fixed
@@ -63,7 +63,7 @@ final class ResultRepository extends Repository
     }
 
     /**
-     * TD.6 follow-up: `GET /results` is public/unauthenticated (routes.php)
+     * `GET /results` is public/unauthenticated (routes.php)
      * just like `GET /events/{eventId}/results` - it must not leak an
      * anonymized competitor's real name either. See
      * anonymizationJoinSql()/maskAnonymizedRows() above for the shared
@@ -76,7 +76,7 @@ final class ResultRepository extends Repository
     {
         $where = [];
         $params = [];
-        // PP.76: only scalar query params count; an array value (?search[]=x) is ignored.
+        // Only scalar query params count; an array value (?search[]=x) is ignored.
         $scalar = static fn (mixed $value): bool => (is_string($value) || is_int($value)) && !empty($value);
         foreach (['eventId' => 'event_id', 'distanceId' => 'distance_id', 'category' => 'category', 'gender' => 'gender'] as $input => $column) {
             if ($scalar($filters[$input] ?? null)) {
@@ -85,7 +85,7 @@ final class ResultRepository extends Repository
             }
         }
         if ($scalar($filters['search'] ?? null)) {
-            // PP.76: native prepares (ATTR_EMULATE_PREPARES=false) reject a repeated named placeholder (HY093).
+            // Native prepares (ATTR_EMULATE_PREPARES=false) reject a repeated named placeholder (HY093).
             $where[] = '(r.user_name LIKE :searchName OR r.bib_number LIKE :searchBib)';
             $params['searchName'] = $params['searchBib'] = '%' . $filters['search'] . '%';
         }
@@ -108,10 +108,10 @@ final class ResultRepository extends Repository
     }
 
     /**
-     * TD.6 (E6.6 follow-up): public individual classification — `GET
+     * Public individual classification — `GET
      * /events/{eventId}/results` is unauthenticated (routes.php's own
      * comment on this endpoint), so a competitor's `is_anonymized` flag must
-     * be respected here the same way E6.6 already wired it into the
+     * be respected here the same way it is already applied in the
      * Wyzwanie/Series ranking. `results.user_name` is a flat snapshot with no
      * FK to `competitors` on its own — the join below resolves identity the
      * same way lifetimeRecordsForCompetitor() already documents as this
@@ -141,7 +141,7 @@ final class ResultRepository extends Repository
     }
 
     /**
-     * TD.6 follow-up: `GET /users/{userId}/results` is public/unauthenticated
+     * `GET /users/{userId}/results` is public/unauthenticated
      * (routes.php) just like byEvent() above - same leak, same fix. See
      * anonymizationJoinSql()/maskAnonymizedRows() for the shared logic.
      *
@@ -167,9 +167,9 @@ final class ResultRepository extends Repository
     }
 
     /**
-     * Miedzyczasy (punkty kontrolne): opcjonalna lista par nazwa+czas -
-     * spec 14 sekcja 2. Nie sa wymagane do publikacji podstawowego wyniku, wiec
-     * zyja w osobnej tabeli zamiast kolumny na `results`.
+     * Splits (checkpoints, "miedzyczasy"): an optional list of name+time pairs.
+     * They are not required to publish the basic result, so they
+     * live in a separate table instead of a column on `results`.
      *
      * @return array<int, array{id: string, label: string, timeSeconds: float}>
      */
@@ -199,17 +199,17 @@ final class ResultRepository extends Repository
     }
 
     /**
-     * Spec 14 sekcja 1: DNF/DNS/DSQ sa statusami wyniku, wylaczonymi z
-     * klasyfikacji miejsc - ResultImportRepository juz to wymusza dla importu
-     * CSV, ale reczny wpis/edycja (POST/PATCH /results) szedl wprost przez
-     * ta klase bez tej samej gwarancji. Egzekwujemy ja tutaj niezaleznie od
-     * tego, co przyszlo w payloadzie (organizator moglby zostawic stare
-     * miejsce przy zmianie statusu na DNS, np.).
+     * DNF/DNS/DSQ are result statuses excluded from the place
+     * classification - ResultImportRepository already enforces this for CSV
+     * import, but manual entry/edit (POST/PATCH /results) went straight through
+     * this class without the same guarantee. It is enforced here regardless of
+     * what came in the payload (an organizer could leave a stale
+     * place when changing the status to DNS, for example).
      */
     private const NON_CLASSIFIED_STATUSES = ['dnf', 'dns', 'dsq'];
 
     /**
-     * PP.76: request-body rules for POST/PATCH /results (see InputRules). eventName/distanceName
+     * Request-body rules for POST/PATCH /results (see InputRules). eventName/distanceName
      * are deliberately lenient here: create() derives them from the event when absent.
      */
     private const INPUT_RULES = [
@@ -235,7 +235,7 @@ final class ResultRepository extends Repository
     ];
 
     /**
-     * PP.76: every split needs a label and a non-negative time (both NOT NULL in result_splits).
+     * Every split needs a label and a non-negative time (both NOT NULL in result_splits).
      *
      * @param array<string, mixed> $data
      */
@@ -307,7 +307,7 @@ final class ResultRepository extends Repository
     }
 
     /**
-     * PP.76: eventName/distanceName are NOT NULL snapshots; when the caller omits them they come
+     * EventName/distanceName are NOT NULL snapshots; when the caller omits them they come
      * from the event and distance (server-authoritative). Unknown ids are a validation error.
      *
      * @param array<string, mixed> $data
@@ -342,11 +342,11 @@ final class ResultRepository extends Repository
         return $data;
     }
 
-    /** Fields whose change counts as a correction (spec 14 pkt 6) and is kept in the trail. */
+    /** Fields whose change counts as a correction and is kept in the trail. */
     private const CORRECTION_FIELDS = ['time', 'netTime', 'status', 'position', 'categoryPosition'];
 
     /**
-     * G-03 (spec 14 pkt 6): stores who/when/what for one correction of a result - the previous and
+     * Stores who/when/what for one correction of a result - the previous and
      * new value of every tracked field that actually changed. Nothing is stored when none did.
      *
      * @param array<string, mixed> $before the result before the update
@@ -412,7 +412,7 @@ final class ResultRepository extends Repository
         }
 
         InputRules::check($data, self::INPUT_RULES, false);
-        // G-03: a place is a positive integer (manual override, flagged so renumbering keeps it) or null
+        // A place is a positive integer (manual override, flagged so renumbering keeps it) or null
         // (releases the override - the computed ranking takes over again).
         $manualPlaces = [];
         foreach (['position' => ['position', 'Miejsce'], 'categoryPosition' => ['category_position', 'Miejsce w kategorii']] as $field => [$column, $label]) {
@@ -494,7 +494,7 @@ final class ResultRepository extends Repository
         $stmt->execute(['eventId' => $eventId, 'distanceId' => $distanceId]);
         $rows = $stmt->fetchAll();
 
-        // G-03: a manually corrected place is left as the organizer set it, and the automatic places
+        // A manually corrected place is left as the organizer set it, and the automatic places
         // of the others skip the numbers taken by a manual one - so a manual place never coincides
         // with a computed one (two manual places cannot coincide either, see assertManualPlacesFree()).
         $takenOpen = [];
@@ -535,7 +535,7 @@ final class ResultRepository extends Repository
     }
 
     /**
-     * G-03: "miejsce wg płci" - rank by time among the finishers of the same gender in the event+distance
+     * "miejsce wg płci" - rank by time among the finishers of the same gender in the event+distance
      * (0 for a result without a known gender or one that did not finish). Never manual.
      */
     public static function recomputeGenderPositions(\PDO $pdo, string $eventId, string $distanceId): void
@@ -556,7 +556,7 @@ final class ResultRepository extends Repository
     }
 
     /**
-     * G-03: a manually set place must be free in its classification - no other result of the event+distance
+     * A manually set place must be free in its classification - no other result of the event+distance
      * (and, for the category place, of the same category) may already hold that number as a manual place.
      * The automatic places move around manual ones, so they never collide.
      *
@@ -593,37 +593,37 @@ final class ResultRepository extends Repository
     }
 
     /**
-     * E2.3 (spec 14 sekcja 6): "Organizator publikuje wyniki wstepne od razu
+     * "Organizator publikuje wyniki wstepne od razu
      * po imporcie/recznym wpisaniu ... Po weryfikacji ... organizator
      * oznacza wyniki jako oficjalne."
      *
-     * Granulacja: per event+distance (klasyfikacja), NIE per pojedynczy
-     * Result ani per cale Wydarzenie. Rozumowanie: `renumberEventDistance()`
-     * powyzej i `ResultImportRepository::positions()` juz traktuja
-     * event+distance jako jednostke, w ktorej wyniki tworza jedna spojna
-     * tabele klasyfikacji - organizator zatwierdza "wyniki 10 km", nie
-     * pojedynczego zawodnika (za drobnoziarniste - reklamacje dotycza
-     * pojedynczych wpisow, ale publikacja to decyzja o calej tabeli) ani cale
-     * Wydarzenie (za grube - wydarzenie z kilkoma dystansami może miec
-     * niezalezne tempo weryfikacji reklamacji na mecie dla kazdego z nich,
-     * np. 5 km gotowe do ogloszenia oficjalnych zanim komisja skonczy
-     * sprawdzac 10 km).
+     * Granularity: per event+distance (classification), NOT per single
+     * Result nor per whole Wydarzenie. Reasoning: `renumberEventDistance()`
+     * above and `ResultImportRepository::positions()` already treat
+     * event+distance as the unit in which results form one coherent
+     * classification table - the organizer approves "the 10 km results", not
+     * a single competitor (too fine-grained: complaints concern single
+     * entries, but publication is a decision about the whole table) nor the whole
+     * Wydarzenie (too coarse: an event with several distances can have
+     * an independent complaint-verification pace at the finish for each of them,
+     * e.g. 5 km ready to be declared official before the committee finishes
+     * checking 10 km).
      *
-     * Ta "oficjalnosc" nie jest osobna tabela event+distance -> status, tylko
-     * kolumna na kazdym wierszu `results` (ten sam wzorzec denormalizacji co
-     * juz obecne na tej tabeli distance_id/distance_name) - unika JOINa przy
-     * kazdym odczycie (GET /results, /events/{id}/results) kosztem
-     * masowego UPDATE tutaj, ktory i tak jest rzadka, recznie wywolywana
-     * akcja organizatora.
+     * This "official" state is not a separate event+distance -> status table, but a
+     * column on every `results` row (the same denormalization pattern as the
+     * distance_id/distance_name already on this table) - it avoids a JOIN on
+     * every read (GET /results, /events/{id}/results) at the cost of a
+     * mass UPDATE here, which is a rare, manually triggered
+     * organizer action anyway.
      *
      * Korekta pojedynczego wyniku (PATCH /results/{id} -> update() powyzej)
-     * celowo NIE dotyka tej kolumny - `map()` jej nie zna, wiec
-     * publication_status przetrwa kazda korekte bez zmian, zgodnie ze
-     * specyfikacja: "Korekta jest mozliwa zawsze, takze po ogloszeniu
-     * oficjalnych" - oficjalnosc nie jest cofana ani odzyskiwana przy kazdej
-     * zmianie, tylko trwa, dopoki organizator jej jawnie nie zmieni.
+     * deliberately does NOT touch this column - `map()` does not know it, so
+     * publication_status survives every correction unchanged, as required:
+     * "Korekta jest mozliwa zawsze, takze po ogloszeniu
+     * oficjalnych" - the official state is not revoked or regained on every
+     * change, it persists until the organizer explicitly changes it.
      *
-     * @return int liczba zaktualizowanych wierszy (0, gdy event+distance nie ma jeszcze zadnych wynikow)
+     * @return int number of updated rows (0 when the event+distance has no results yet)
      */
     public function markOfficial(string $eventId, string $distanceId): int
     {
@@ -648,10 +648,9 @@ final class ResultRepository extends Repository
     }
 
     /**
-     * E2.4 (spec 14 sekcja 3): "Rekord zyciowy liczy sie per etykieta/dlugosc
-     * dystansu ... niezaleznie od tego, na ktorym Wydarzeniu czy w ktorej
-     * edycji padl - nie per Wydarzenie. Tylko wyniki ze startu na zywo bija
-     * rekord."
+     * A lifetime record counts per distance label/length,
+     * regardless of which Wydarzenie or edition it was set at - not per Wydarzenie.
+     * Only results from a live start count as records.
      *
      * Grouping key: distance LENGTH (normalized to meters), not
      * distance_id/event_id (each Event creates its own event_distances row
@@ -680,12 +679,12 @@ final class ResultRepository extends Repository
      * (PATCH /results/{id}) or a fresh import is picked up on the very next
      * call with no extra invalidation step - there is no stale/wrong record
      * to leave standing (acceptance criterion 5). This is a read-heavy, not
-     * write-heavy, path (unlike event_distances.registered_count from E1.3,
+     * write-heavy, path (unlike event_distances.registered_count,
      * which is a per-write counter maintained precisely because it's read on
      * every hot list view under write contention) - a live query is simpler
      * and there's no established performance reason here to materialize it.
      *
-     * Competitor identity: results.registration_id (E2.1) links to
+     * Competitor identity: results.registration_id links to
      * registrations.competitor_id when present - the authoritative source
      * (migration 027: "Zawodnik jako zrodlo tozsamosci zapisu"). Falls back
      * to results.user_id = competitors.user_id for older/manual results that
@@ -770,14 +769,14 @@ SQL);
     }
 
     /**
-     * LEGACY, superseded by teamClassification() below (E2.7) - kept only so
+     * LEGACY, superseded by teamClassification() below - kept only so
      * old fixture/seeder data (EventFixtureImporter::importTeamResults(),
      * database/seeders/001_demo.sql) still round-trips, and so nothing that
      * still points at `team_results` breaks. Do NOT build new features on
      * this: `team_results` stores a team result as a manually-entered,
      * standalone row (see TeamResultsManager.tsx's "Dodaj drużynę" dialog on
      * the client, and EventFixtureImporter::importTeamResults()) - exactly
-     * the model spec 14 sekcja 4 rejects ("Wynik drużyny/sztafety jest
+     * the model that was rejected ("Wynik drużyny/sztafety jest
      * liczony z wyników indywidualnych członków, nie wpisywany osobno").
      * TeamResultsManager.tsx's add/delete handlers were never actually wired
      * to a write endpoint either (ResultsTab.tsx's handleAddTeamResult/
@@ -785,7 +784,7 @@ SQL);
      * so nothing outside fixtures ever persisted a row here through normal
      * use; this GET was the only route ever exposed for it.
      *
-     * TD.6 KNOWN GAP (checked, not closed): `members` is an opaque JSON blob
+     * KNOWN GAP (checked, not closed): `members` is an opaque JSON blob
      * with no FK to `competitors`/`users` at all (see the CREATE TABLE in
      * migration 001 and EventFixtureImporter::importTeamResults() — it writes
      * whatever the fixture's `members` array already contains, verbatim).
@@ -797,7 +796,7 @@ SQL);
      * paragraph) superseded by teamClassification() below, which carries no
      * individual member names at all and has nothing to mask.
      *
-     * E2.7 removes TeamResultsManager.tsx from the client results view
+     * TeamResultsManager.tsx is removed from the client results view
      * entirely (replaced by the live-computed classification table) rather
      * than leaving two competing "team results" UIs visible to an organizer
      * side by side. The `team_results` table and this method are left in
@@ -818,7 +817,7 @@ SQL);
     }
 
     /**
-     * E2.7 (spec 14 sekcja 4): "Wynik drużyny/sztafety jest liczony z
+     * "Wynik drużyny/sztafety jest liczony z
      * wyników indywidualnych członków, nie wpisywany osobno ... klasyfikacja
      * drużynowa to osobna tabela obok klasyfikacji indywidualnej na tym
      * samym Dystansie, nie osobny byt wyniku." See teamResults() above for
@@ -826,7 +825,7 @@ SQL);
      *
      * Grouping key: registrations.team_id shared by >1 (or even exactly 1 -
      * nothing here requires more than one member) registrations on this
-     * event+distance - the lightweight grouping the spec/ticket calls for,
+     * event+distance - the lightweight grouping,
      * not a dedicated "Drużyna" entity (out of scope, stage 7). team_name is
      * read off whichever member row happens to carry it (they're expected to
      * agree - RegistrationRepository::create()/update() write the same
@@ -845,7 +844,7 @@ SQL);
      * or a dnf/dns/dsq result) is EXCLUDED from the ranking entirely, not
      * shown with a partial/placeholder value. Reasoning: unlike an
      * individual classification (where a dnf/dns/dsq row is still shown,
-     * just unranked - spec 14 sekcja 1), there is no meaningful "partial"
+     * just unranked), there is no meaningful "partial"
      * aggregate to display for sum/average (missing a member understates the
      * total) or even best (an incomplete team could still "win" on one fast
      * member despite not having finished as a team), so surfacing a
@@ -859,7 +858,7 @@ SQL);
      * completeness rule above, which excludes the whole team from this
      * table), never the member's own individual result - their row keeps
      * its own status/time/history untouched in the individual classification
-     * (E2.2), exactly as spec 14 sekcja 1 already guarantees for individual
+     *, exactly as already guaranteed for individual
      * results. There is deliberately no partial-credit path (e.g. "drop the
      * DNF member and aggregate the rest") - the configured rule (sum/best/
      * average) is defined over "the team's members", and silently
@@ -867,7 +866,7 @@ SQL);
      * something different for every incomplete team.
      *
      * Aggregation rule: 'sum' (total of all finished members' GROSS
-     * time_in_seconds - net is optional per spec 14 sekcja 2, so it can't be
+     * time_in_seconds - net is optional, so it can't be
      * the universal key, same reasoning as lifetimeRecordsForCompetitor()),
      * 'best' (the fastest single member time), or 'average' (arithmetic
      * mean). Falls back to 'sum' when the distance's
@@ -876,8 +875,7 @@ SQL);
      * or returning an empty table.
      *
      * Live query, not materialized: same reasoning as
-     * lifetimeRecordsForCompetitor() above - this is a read path (E2.4
-     * precedent), so a correction to any member's result (PATCH /results/{id})
+     * lifetimeRecordsForCompetitor() above - this is a read path, so a correction to any member's result (PATCH /results/{id})
      * or a fresh import is reflected on the very next call, with no
      * invalidation step to get wrong.
      *

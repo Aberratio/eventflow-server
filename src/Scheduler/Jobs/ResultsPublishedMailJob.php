@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Mailer\ResultsPublication\ResultsPublicationNotifier;
 use ZmierzymyCzas\Scheduler\ScheduledJob;
 
 /**
- * PP.19: fans pending "results published" requests out to deferred outbox rows. It also runs when Central
+ * Fans pending "results published" requests out to deferred outbox rows. It also runs when Central
  * Mailer is not configured, so pending requests are drained and nothing is blasted later when it gets
  * configured; the request backlog never grows.
  */

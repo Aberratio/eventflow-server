@@ -8,7 +8,7 @@ use PDO;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * PP.7: opaque one-time tokens for mail links (password reset, e-mail verification,
+ * Opaque one-time tokens for mail links (password reset, e-mail verification,
  * e-mail change). Only sha256(token) is stored. Raw tokens are never logged, never
  * returned in an API response and never stored. All time comparisons use the DB clock
  * (NOW()) for writes and reads alike, so there is no PHP/DB timezone skew.

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Shop;
 
 /**
- * PP.17: the only shape a shop order has when returned to its buyer (GET /me/orders*).
+ * The only shape a shop order has when returned to its buyer (GET /me/orders*).
  * Allowlist: a key that is not listed here (including any column added later) is dropped.
  */
 final class OwnOrderPresenter

@@ -6,7 +6,7 @@ namespace ZmierzymyCzas\Domain\Auth;
 
 use ZmierzymyCzas\Support\Env;
 
-/** R-10: limits of the login throttle. Every value has a safe default and can be overridden in the environment. */
+/** Limits of the login throttle. Every value has a safe default and can be overridden in the environment. */
 final class LoginThrottleConfig
 {
     /** @param list<int> $lockoutSeconds growing lockout per consecutive lockout; the last entry repeats */

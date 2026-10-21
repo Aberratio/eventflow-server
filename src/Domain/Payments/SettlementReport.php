@@ -7,15 +7,15 @@ namespace ZmierzymyCzas\Domain\Payments;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * Raport rozliczeniowy trasy A (spec 13): pieniadze zebrane bramka Tpay/PayNow leza na koncie
- * platformy, a wyplata do organizatora jest recznym przelewem admina na podstawie tego raportu.
+ * Settlement report for route A (trasa A): money collected through the Tpay/PayNow gateway sits on
+ * the platform account, and the payout to the organizer is a manual transfer by an admin based on this report.
  *
- * Wszystkie kwoty sa w groszach (int). Linie to wplaty (`registration_gateway_transactions`
- * ze statusem `paid`, wg `processed_at`) i zwroty trasy A (`registration_refunds` ze statusem
- * `refunded` i trasa `gateway`, wg `completed_at`) w zadanym okresie. Do wyplaty = wplaty
- * - zwroty - prowizja platformy. Spec: platforma nie pobiera prowizji od oplaty startowej,
- * wiec domyslna stawka to 0 bps (`SETTLEMENT_COMMISSION_BPS`); prowizja od zwrotu jest
- * cofana proporcjonalnie.
+ * All amounts are in grosze (int). The lines are payments (`registration_gateway_transactions`
+ * with status `paid`, by `processed_at`) and route A refunds (`registration_refunds` with status
+ * `refunded` and route `gateway`, by `completed_at`) in the requested period. Payout = payments
+ * - refunds - platform commission. The platform charges no commission on the start fee,
+ * so the default rate is 0 bps (`SETTLEMENT_COMMISSION_BPS`); the commission on a refund is
+ * reversed proportionally.
  */
 final class SettlementReport extends Repository
 {
@@ -125,8 +125,8 @@ final class SettlementReport extends Repository
     }
 
     /**
-     * Kolumny i wiersze dla eksportu CSV/XLSX (ten sam format co eksport listy startowej);
-     * kwoty w PLN z przecinkiem, linia podsumowania na koncu.
+     * Columns and rows for the CSV/XLSX export (same shape as the start list export);
+     * PLN amounts with a decimal comma, summary line at the end.
      *
      * @param array<int, array<string, mixed>> $lines
      * @param array<string, int> $summary

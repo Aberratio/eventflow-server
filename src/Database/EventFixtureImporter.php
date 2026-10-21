@@ -426,7 +426,7 @@ final class EventFixtureImporter
                 'category' => (string) ($registration['category'] ?? ''),
                 'registered_at' => $registeredAt,
                 'status' => (string) ($registration['status'] ?? 'pending'),
-                // E1.11: kod startowy, tak jak generuje go RegistrationRepository::create().
+                // Kod startowy, tak jak generuje go RegistrationRepository::create().
                 // Generowany tu, a nie brany z fixtury: `qr_code` jest NOT NULL bez DEFAULT
                 // i UNIQUE, a ten import biegnie bez STRICT_TRANS_TABLES, gdzie pominiecie
                 // kolumny to nie blad, tylko ciche '' w kazdym wierszu -- czyli 1062 na
@@ -476,7 +476,7 @@ final class EventFixtureImporter
 
     /**
      * Fixtures still describe the old flat `pricePaid` / `discountAmount` /
-     * `insurancePaid` registration fields (E0.3 dropped the columns behind them).
+     * `insurancePaid` registration fields (the columns behind them were dropped).
      * Translates them into Rozliczenie line items instead of writing dead columns.
      * The gross start fee is reconstructed as pricePaid + discountAmount, mirroring
      * RegistrationRepository::pricingForRegistration's `pricePaid = price - discount`.

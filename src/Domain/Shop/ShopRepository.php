@@ -86,7 +86,7 @@ SQL;
     }
 
     /**
-     * E5.2: locks a shop_products row (SELECT ... FOR UPDATE) for the rest of
+     * Locks a shop_products row (SELECT ... FOR UPDATE) for the rest of
      * the caller's transaction — mirrors
      * RegistrationRepository::lockDistanceForRegistration() for the analogous
      * overselling race, here on a shop order's stock decrement instead of a

@@ -21,7 +21,7 @@ use PDO;
  */
 final class EventCoherence
 {
-    /** publication_status values that describe a published, publicly listed event (E1.1). */
+    /** publication_status values that describe a published, publicly listed event. */
     private const PUBLISHED = ['published', 'finished', 'cancelled'];
 
     /**
@@ -32,7 +32,7 @@ final class EventCoherence
         $fixed = [];
 
         // An event whose day has passed is finished, whatever the seeder said. Same rule
-        // as EventRepository::lazilyFinishPastEvents() (E1.1), just applied eagerly here
+        // as EventRepository::lazilyFinishPastEvents(), just applied eagerly here
         // over the whole seeded table instead of lazily on read.
         $fixed['marked_finished'] = self::run(
             $pdo,
@@ -41,7 +41,7 @@ final class EventCoherence
         );
 
         // And one still ahead of us has not finished yet. `cancelled` is excluded — it's
-        // terminal and manual (E1.1), a seeder saying `date > CURDATE()` doesn't undo it.
+        // terminal and manual, a seeder saying `date > CURDATE()` doesn't undo it.
         $fixed['marked_upcoming'] = self::run(
             $pdo,
             "UPDATE events SET publication_status = 'published'

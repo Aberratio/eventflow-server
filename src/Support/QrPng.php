@@ -8,7 +8,7 @@ use BaconQrCode\Common\ErrorCorrectionLevel;
 use BaconQrCode\Encoder\Encoder;
 
 /**
- * PP.19: a QR code as PNG bytes without GD/Imagick (neither is guaranteed on the hosting).
+ * A QR code as PNG bytes without GD/Imagick (neither is guaranteed on the hosting).
  * bacon/bacon-qr-code only builds the module matrix (its renderers need imagick); the PNG is
  * written here: 8-bit greyscale, black modules on white, with a quiet zone. Central Mailer sniffs
  * the attachment MIME type from the bytes and accepts image/png only, so this must be a real PNG.

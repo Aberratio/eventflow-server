@@ -8,11 +8,11 @@ use ZmierzymyCzas\Domain\Competitors\CompetitorNamePresenter;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 
 /**
- * E6.6 (issue 15 §6, "Ranking: publiczny, z respektowaniem anonimizacji"):
+ * Public ranking that respects anonymization:
  * turns one or more Wyzwania's `challenge_participations` into a public
  * ranking — descending by points, ex-aequo ties sharing a rank, anonymized
- * competitors masked. Takes a single challenge id (the Wyzwanie ranking, this
- * ticket's core deliverable) or several (the Series ranking, §6's "Klasyfikacja
+ * competitors masked. Takes a single challenge id (the Wyzwanie ranking, the
+ * main case) or several (the Series ranking, "Klasyfikacja
  * Serii" — a Series has no participations of its own, so its ranking is the
  * union of its linked Wyzwania's participants, points summed across them).
  *
@@ -23,14 +23,14 @@ use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
  * has a repository that owns that query shape; duplicating those SQL
  * statements here would drift from them over time.
  *
- * Point-total edge case (issue 15 §6 doesn't resolve this — E6.2/E6.3 only
+ * Point-total edge case (the requirements don't resolve this — the scorer/evaluator only
  * modeled `point_threshold` as ONE node type among four): a Wyzwanie whose
  * tree has zero `point_threshold` nodes anywhere (e.g. a pure
- * `event_threshold`/`sub_challenge_threshold` root — "ukoncz wszystkie
- * wydarzenia" with no points concept at all) has no meaningful point total
+ * `event_threshold`/`sub_challenge_threshold` root — "finish all
+ * events" with no points concept at all) has no meaningful point total
  * to rank by. Judgment call, documented here: such a Wyzwanie still produces
- * a ranking, but "points" falls back to a binary 1/0 ("ukonczyl" beats "nie
- * ukonczyl", ex-aequo shared by the same rank-sharing rule) rather than
+ * a ranking, but "points" falls back to a binary 1/0 ("completed" beats "not
+ * completed", ex-aequo shared by the same rank-sharing rule) rather than
  * hiding the ranking entirely — a participant still wants to see where they
  * stand, and a binary ranking is honest about what the Wyzwanie actually
  * measures instead of inventing a fake point value. `hasPoints` on the
@@ -72,7 +72,7 @@ final class ChallengeRankingCalculator
             }
         }
 
-        // R-06: one row per Zawodnik (key = competitor id); a participation the migration could not map
+        // One row per Zawodnik (key = competitor id); a participation the migration could not map
         // to a Zawodnik is keyed by the Konto and read by user_id, as before.
         /** @var array<string, array{userId: string, competitorId: ?string, userName: string, isCompleted: bool}> $participants */
         $participants = [];
@@ -139,8 +139,8 @@ final class ChallengeRankingCalculator
      * number, and the next distinct value skips as many ranks as there were
      * tied competitors ahead of it — NOT "1,1,2" (dense ranking) and NOT
      * "1,2,2" (ties get the lower participant's rank rather than sharing
-     * one). Chosen because it's the convention issue 15 §2's own "Remisy"
-     * note implies ("dzielą miejsce w klasyfikacji") and the one most
+     * one). Chosen because it's the convention implied by the "Remisy" (ties)
+     * rule (ties share the place in the classification) and the one most
      * competitors recognize from real classifications (shared golf/running
      * placings): two people tied for 1st means the next person is 3rd, not
      * 2nd.

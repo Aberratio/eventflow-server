@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Scheduler\Jobs;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Scheduler\ScheduledJob;
 
-/** PP.18: pending -> expired for lapsed payment windows, with the money guards (see RegistrationRepository). */
+/** Pending -> expired for lapsed payment windows, with the money guards (see RegistrationRepository). */
 final class ExpireUnpaidRegistrationsJob implements ScheduledJob
 {
     public function __construct(private readonly RegistrationRepository $registrations)

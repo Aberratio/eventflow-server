@@ -7,12 +7,12 @@ namespace ZmierzymyCzas\Database;
 use PDO;
 
 /**
- * Backfill for migration 054 (E6.1): every challenge with no condition-tree node AT
+ * Backfill for migration 054: every challenge with no condition-tree node AT
  * ALL gets a single root `event_threshold` node mirroring its current
- * `challenge_events` (N = M = linked count, i.e. "ukończ wszystkie", what the flat
+ * `challenge_events` (N = M = linked count, i.e. "complete all", what the flat
  * model implicitly meant before that migration).
  *
- * PP.13: this needs to run on every `Migrator::applyAll()` call, not only when 054
+ * This needs to run on every `Migrator::applyAll()` call, not only when 054
  * itself (re-)applies through the ledger — it is an ongoing catch-up for challenges
  * created outside the app's own tree-building path (`ChallengeRepository::create()`
  * always gives its root node a fresh UUID and populates node_events itself, so an

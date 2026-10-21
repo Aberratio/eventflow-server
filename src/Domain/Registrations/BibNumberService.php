@@ -8,7 +8,7 @@ use PDO;
 use ZmierzymyCzas\Support\InputValidationException;
 
 /**
- * R-13 (contract 5.1): start (bib) number ranges per distance, automatic assignment inside
+ * Start (bib) number ranges per distance, automatic assignment inside
  * the range and the manual override with uniqueness within the Event.
  *
  * Numbers are compared numerically when both sides are digits ("007" == "7"), otherwise as

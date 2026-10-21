@@ -7,14 +7,14 @@ namespace ZmierzymyCzas\Domain\Challenges;
 use PDO;
 
 /**
- * E6.2 (issue 15 §2, "Punktacja: za miejsce, N najlepszych startow"): scores
- * one `point_threshold` condition-tree node (E6.1) for one competitor.
+ * Scoring (points per placement, N best starts): scores
+ * one `point_threshold` condition-tree node for one competitor.
  *
- * Deliberately narrow scope, per the ticket: this computes ONE node's own
+ * Deliberately narrow scope: this computes ONE node's own
  * points/satisfaction as a building block. Recursively evaluating a whole
  * tree (group AND/threshold over its children, including nested
- * point_threshold results) for automatic completion detection is E6.3
- * ("Weryfikacja automatyczna ukonczenia z Wynikow"), a separate ticket - this
+ * point_threshold results) for automatic completion detection is the job of
+ * ChallengeConditionTreeEvaluator, a separate class - this
  * class doesn't know about `group`/`sub_challenge_threshold` nodes at all.
  *
  * Identity convention: results.user_id directly, matching the existing
@@ -29,19 +29,19 @@ use PDO;
  * convention this repo has (ResultRepository::renumberEventDistance() ranks
  * strictly by ascending time_in_seconds into consecutive integers - there is
  * no existing ex-aequo/shared-place convention at the Event classification
- * level to reuse). The spec's "remisy" note (issue 15 §2) is about two
+ * level to reuse). The "remisy" (ties) rule is about two
  * COMPETITORS tying on total Wyzwanie POINTS sharing a rank in the
  * Wyzwanie's own classification - a cross-competitor ranking concern that
- * belongs to whatever builds that classification (E6.6 "ranking"), not to
+ * belongs to whatever builds that classification (the ranking calculator), not to
  * this per-competitor, per-node scorer, which only ever looks at one
  * competitor's own results.
  *
- * Only `status = 'finished'` results count (spec 14 sekcja 1: dnf/dns/dsq
+ * Only `status = 'finished'` results count (dnf/dns/dsq
  * are excluded from classification placement) and non-virtual ones are
  * intentionally NOT excluded here (unlike
  * ResultRepository::lifetimeRecordsForCompetitor()'s record-keeping, which
- * excludes virtual results because "a virtual result nie ma tej samej
- * wiarygodnosci" for a personal record specifically) - issue 15 has no such
+ * excludes virtual results because a virtual result is not as
+ * trustworthy for a personal record specifically) - Wyzwanie scoring has no such
  * carve-out for Wyzwanie scoring, and a virtual result that an organizer
  * verified into an official classification position is still a real
  * placement in that Event's results table.
@@ -119,7 +119,7 @@ final class ChallengePointThresholdScorer
     private function placementFor(string $eventId, string $userId, ?string $competitorId): ?int
     {
         if ($competitorId !== null) {
-            // R-06: progress is per Zawodnik - results of a registration made for a ward
+            // Progress is per Zawodnik - results of a registration made for a ward
             // belong to the ward, not to the caregiver whose user_id is on the result.
             $stmt = $this->pdo->prepare(
                 "SELECT r.position FROM results r" . ChallengeResultOwnership::JOINS

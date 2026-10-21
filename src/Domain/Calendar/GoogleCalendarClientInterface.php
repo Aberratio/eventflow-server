@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Calendar;
 
-/** R-17: Google Calendar API v3, events resource. Event shape = the API's own (summary, start, end, ...). */
+/** Google Calendar API v3, events resource. Event shape = the API's own (summary, start, end, ...). */
 interface GoogleCalendarClientInterface
 {
     /**

@@ -31,7 +31,7 @@ final class Connection
     }
 
     /**
-     * PP.76: optional per-session sql_mode, set only when DB_SESSION_SQL_MODE is configured.
+     * Optional per-session sql_mode, set only when DB_SESSION_SQL_MODE is configured.
      * Tests set it (tests/Support/TestDatabase::applySessionSqlMode) so local MariaDB runs with
      * MySQL 8.4's strict defaults and NOT NULL / ENUM / numeric violations fail locally the same
      * way they fail in production. Production does not set it: the server default applies.

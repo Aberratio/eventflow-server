@@ -17,7 +17,7 @@ use Psr\Log\LoggerInterface;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerClientInterface;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
 
-/** PP.20: the only place that knows the Monolog handler wiring. */
+/** The only place that knows the Monolog handler wiring. */
 final class LoggerFactory
 {
     public const CHANNEL = 'zc';

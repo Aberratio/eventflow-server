@@ -12,7 +12,7 @@ use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * R-17 (§5.9 / §4.4.13): puts an approved Event into the configured Google calendar.
+ * Puts an approved Event into the configured Google calendar.
  *
  * Approval never talks to Google: it only enqueues a row (enqueueForApprovedEvent) and the scheduler job
  * `calendar.outbox_retry` sends it, with backoff and a bounded number of attempts, so a Google outage can

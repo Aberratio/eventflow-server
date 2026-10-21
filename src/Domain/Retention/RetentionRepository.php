@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Domain\Retention;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * R-05 (specs 09, 10): data kept only for a bounded time. Run by the scheduler job
+ * Data kept only for a bounded time. Run by the scheduler job
  * 'retention.purge', never as a side effect of a read.
  */
 final class RetentionRepository extends Repository

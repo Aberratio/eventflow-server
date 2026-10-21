@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Support\HtmlSanitizer;
 
 /**
- * NNW (insurance) is a catalog of variants, not a single global setting (E0.3):
+ * NNW (insurance) is a catalog of variants, not a single global setting:
  * admin defines variants — each with its own name and premium-formula parameters
  * (base fee, age multiplier, max age) — and organizers pick which ones are offered
  * on their event. `getSettings()`/`updateSettings()` remain as a thin read/write on

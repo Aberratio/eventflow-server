@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Scheduler;
 use PDO;
 
 /**
- * PP.18: MySQL/MariaDB advisory lock (GET_LOCK). Session-scoped, released automatically when the
+ * MySQL/MariaDB advisory lock (GET_LOCK). Session-scoped, released automatically when the
  * connection or process dies, needs no table or privileges. Namespaced per database because
  * staging and production can share a MySQL server.
  */

@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Bz\Http\HttpClientInterface;
  * genuine outbound POST; only the destination (BzWebhookConfig::baseUrl, from
  * env) is a deployment setting (see BzWebhookClientInterface's doc comment).
  *
- * Payload discipline (issue 12 §5, "bez kwot"): this class never adds anything
+ * Payload discipline (no amounts): this class never adds anything
  * to the payload beyond what BzWebhookOutboxService already built — no
  * settlement amounts, no prices, ever. It is a pure transport, not a place that
  * decides what data to send.

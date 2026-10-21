@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Mailer\CriticalMails;
 
 /**
- * B-03: realistic example values for every placeholder a mail type may reference
+ * Realistic example values for every placeholder a mail type may reference
  * (MailCatalog::variablesFor()), used only by the template preview. Values are fixed and obviously
  * fictional so a preview is reproducible and can never leak real data.
  */

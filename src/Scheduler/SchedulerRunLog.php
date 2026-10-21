@@ -8,7 +8,7 @@ use PDO;
 use Psr\Log\LoggerInterface;
 
 /**
- * PP.18: per-job last-run state in scheduler_job_runs. Never throws (a missing table, i.e. the
+ * Per-job last-run state in scheduler_job_runs. Never throws (a missing table, i.e. the
  * migration not applied yet, must not stop the jobs) and stores only the exception CLASS, never
  * a message (messages can carry third-party response bodies).
  */

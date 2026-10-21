@@ -40,8 +40,8 @@ use ZmierzymyCzas\Domain\Retention\RetentionRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * PP.18: the job registry and the single plug-in point for new jobs (PP.19 added
- * 'mail.results_published' and 'mail.outbox_retry' after 'mail.outbox_reconcile'). Order matters: expiry runs
+ * The job registry and the single plug-in point for new jobs (the
+ * 'mail.results_published' and 'mail.outbox_retry' jobs follow 'mail.outbox_reconcile'). Order matters: expiry runs
  * before reminders so an already-lapsed Zapis never gets a "you are about to expire" mail.
  */
 final class SchedulerJobs
@@ -53,10 +53,10 @@ final class SchedulerJobs
         'registrations.payment_reminders',
         'bz.outbox_retry',
         'mail.outbox_reconcile',
-        'mail.results_published',   // PP.19: fan-out first, so the new deferred rows go out in the same tick
-        'mail.outbox_retry',        // PP.19: dispatch deferred / failed / stale rows (429-aware)
-        'calendar.outbox_retry',    // R-17: send approved Events to Google Calendar (skipped while off / no key)
-        'retention.purge',          // R-05: configurable retention (90 d / 12 mo default) of confidential answers + activity log
+        'mail.results_published',   // Fan-out first, so the new deferred rows go out in the same tick
+        'mail.outbox_retry',        // Dispatch deferred / failed / stale rows (429-aware)
+        'calendar.outbox_retry',    // Send approved Events to Google Calendar (skipped while off / no key)
+        'retention.purge',          // Configurable retention (90 d / 12 mo default) of confidential answers + activity log
     ];
 
     /** @return list<ScheduledJob> in NAMES order */

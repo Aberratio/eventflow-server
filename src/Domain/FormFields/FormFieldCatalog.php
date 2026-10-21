@@ -5,31 +5,31 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\FormFields;
 
 /**
- * Zamknięty katalog 13 pozycji systemowych (model-formularza-zapisow.md §2).
- * Organizator nie tworzy nowych pozycji systemowych i nie zmienia ich
- * `storageLocation`/`controlClass` — jedyne, czym może sterować, to `state`
- * (w granicach dozwolonych przez klasę, patrz `controlClassFor()`), etykieta,
- * tooltip i widoczność na publicznej liście.
+ * Closed catalog of the 13 system items.
+ * An organizer cannot create new system items or change their
+ * `storageLocation`/`controlClass` — the only things they control are `state`
+ * (within the limits allowed by the class, see `controlClassFor()`), the label,
+ * the tooltip and visibility on the public list.
  */
 final class FormFieldCatalog
 {
     public const STORAGE_COMPETITOR = 'competitor';
     public const STORAGE_REGISTRATION = 'registration';
 
-    public const CONTROL_LOCKED = 'locked'; // nieusuwalne: tylko `required`
-    public const CONTROL_AGE_DRIVEN = 'age_driven'; // napędzające logikę: `required`, albo `hidden`/`shown` gdy odblokowane
-    public const CONTROL_FREE = 'free'; // swobodne: `hidden` | `shown` | `required`
+    public const CONTROL_LOCKED = 'locked'; // non-removable: only `required`
+    public const CONTROL_AGE_DRIVEN = 'age_driven'; // logic-driving: `required`, or `hidden`/`shown` when unlocked
+    public const CONTROL_FREE = 'free'; // free: `hidden` | `shown` | `required`
 
     public const STATE_HIDDEN = 'hidden';
     public const STATE_SHOWN = 'shown';
     public const STATE_REQUIRED = 'required';
 
-    /** Anonimizacja jest jedynym systemowym polem bez stanu `required` (model §2: "Nie / Pokaż"). */
+    /** Anonymization is the only system field without a `required` state ("No / Show"). */
     public const ANONYMIZATION_STATES = [self::STATE_HIDDEN, self::STATE_SHOWN];
 
     /**
-     * Kolejność = kolejność z modelu §2 (kolumna "Pozycja"), używana też jako
-     * domyślny `sort_order` przy zasiewie (migracja 041).
+     * Order = the order of the catalog (column "Pozycja"), also used as the
+     * default `sort_order` when seeding (migration 041).
      *
      * @return array<int, array{key: string, label: string, storageLocation: string, controlClass: string}>
      */
@@ -79,19 +79,19 @@ final class FormFieldCatalog
     }
 
     /**
-     * Stany dozwolone dla danej pozycji systemowej *dziś* (model §3).
+     * States allowed for a given system item *today*.
      *
-     * Napędzające logikę (`birth_date`, `gender`) powinny odblokować `hidden`/
-     * `shown` wyłącznie gdy Dystans wydarzenia nie klasyfikuje wiekowo i nie ma
-     * widełek wieku ani składki NNW zależnej od wieku. Ten sygnał nie istnieje
-     * jeszcze w kodzie: `event_distances.age_categories` jest zapisywaną, ale
-     * nigdzie nieczytaną kolumną (grepped przed napisaniem tego kodu — brak
-     * jakiegokolwiek odczytu w src/). Zamiast wymyślać nowy stan Dystansu w tym
-     * tickecie, zostawiamy te dwie pozycje zawsze `required` — bezpieczniejszy
-     * default (zbieramy więcej, nie mniej) niż zgadywanie. To udokumentowana
-     * luka: gdy klasyfikacja wieku zostanie wpięta (osobny ticket), ta metoda
-     * jest jedynym miejscem do zmiany — sprawdzić tu Dystanse wydarzenia i
-     * zwrócić pełny zestaw stanów, gdy żaden nie klasyfikuje wiekowo.
+     * Logic-driving items (`birth_date`, `gender`) should unlock `hidden`/
+     * `shown` only when the event's Dystans does not classify by age and has no
+     * age brackets or age-dependent NNW premium. That signal does not exist yet
+     * in the code: `event_distances.age_categories` is a written but never-read
+     * column (grepped before writing this code — no read anywhere in
+     * src/). Rather than inventing a new Dystans state here,
+     * we leave these two items always `required` — a safer
+     * default (we collect more, not less) than guessing. This is a documented
+     * gap: once age classification is wired in, this method
+     * is the only place to change — check the event's Dystanse here and
+     * return the full set of states when none of them classifies by age.
      *
      * @return list<string>
      */
@@ -100,7 +100,7 @@ final class FormFieldCatalog
         $controlClass = self::controlClassFor($key);
         return match ($controlClass) {
             self::CONTROL_LOCKED => [self::STATE_REQUIRED],
-            self::CONTROL_AGE_DRIVEN => [self::STATE_REQUIRED], // patrz docblock powyżej — odblokowanie odłożone
+            self::CONTROL_AGE_DRIVEN => [self::STATE_REQUIRED], // see the docblock above — unlocking deferred
             self::CONTROL_FREE => $key === 'anonymization'
                 ? self::ANONYMIZATION_STATES
                 : [self::STATE_HIDDEN, self::STATE_SHOWN, self::STATE_REQUIRED],
@@ -108,7 +108,7 @@ final class FormFieldCatalog
         };
     }
 
-    /** Zamknięta lista 16 województw (model §5). */
+    /** Closed list of the 16 voivodeships. */
     public static function voivodeships(): array
     {
         return [

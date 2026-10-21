@@ -84,7 +84,7 @@ final class PayNowGateway implements PaymentGatewayInterface
     /**
      * POST {base}/v1/payments/{paymentId}/refunds — the real gateway-side
      * refund call that RegistrationRepository::initiateGatewayRefund() was left
-     * as an empty seam for (E1.5). PayNow confirms the refund asynchronously
+     * as an empty seam for. PayNow confirms the refund asynchronously
      * (its own `refundId`/status lifecycle, separate from the payment
      * notification), which is out of this method's job — it only starts the
      * refund, it does not wait for or apply its outcome.

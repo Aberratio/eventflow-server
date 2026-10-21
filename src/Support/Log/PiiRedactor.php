@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Support\Log;
 use Throwable;
 
 /**
- * PP.20: the single PII/secret redaction rule set for everything that is logged or alerted.
+ * The single PII/secret redaction rule set for everything that is logged or alerted.
  *
  * Order: C (Throwable to summary) then A (key denylist) then B (string scrubbing).
  * Call sites must still never put request bodies/headers/query strings into a log context;

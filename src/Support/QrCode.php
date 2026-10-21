@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Support;
 
 /**
- * The two QR tokens of spec 11 ("Tozsamosc zawodnika i kody QR"), in one place.
+ * The two QR tokens (start code and identity code), in one place.
  *
- * Spec §3: both codes have an identical syntactic shape and differ only by prefix —
- * `pqr_` for the kod startowy, which belongs to a Zapis (E1.11), and `zqr_` for the
- * kod tozsamosci, which belongs to a Zawodnik (E1.12). The shape is bit-for-bit what
+ * Both codes have an identical syntactic shape and differ only by prefix —
+ * `pqr_` for the kod startowy, which belongs to a Zapis, and `zqr_` for the
+ * kod tozsamosci, which belongs to a Zawodnik. The shape is bit-for-bit what
  * Biuro Zawodow already generates for itself (`biuro_zawodow-api/src/QrCodeService.php`:
  * prefix + 48 hex chars from `random_bytes(24)`), so BZ's existing validation regex and
  * its offline scanner need no changes. What the platform took over is *who* generates
@@ -29,10 +29,10 @@ namespace ZmierzymyCzas\Support;
  */
 final class QrCode
 {
-    /** Kod startowy — nalezy do Zapisu (E1.11). */
+    /** Kod startowy — nalezy do Zapisu. */
     public const START_PREFIX = 'pqr_';
 
-    /** Kod tozsamosci — nalezy do Zawodnika (E1.12). */
+    /** Kod tozsamosci — nalezy do Zawodnika. */
     public const IDENTITY_PREFIX = 'zqr_';
 
     /** Entropy in bytes; 24 -> 48 hex characters, matching BZ's own generator. */

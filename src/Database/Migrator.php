@@ -66,14 +66,14 @@ final class Migrator
             $applied[] = $name;
         }
 
-        // E1.14 verification fix: migration 041's legacy customFields JSON
+        // Migration 041's legacy customFields JSON
         // backfill moved out of SQL (see that file's own comment — it needed
         // JSON_TABLE/JSON_ARRAYAGG, unavailable on this environment's MariaDB).
         // Runs after every applyAll() call, ledger or not, so `form_fields`
         // always already exists and any newly added field is backfilled.
         CustomFormFieldsBackfill::run($pdo);
 
-        // PP.13: CompetitorProfileBackfill (invoked from inside 027 via its
+        // CompetitorProfileBackfill (invoked from inside 027 via its
         // `-- @php:` marker) is an ongoing catch-up, not a one-time schema
         // backfill — its own docblock explains it exists precisely because
         // "every seeded Konto is waiting for the next migrate run to get its
@@ -87,13 +87,13 @@ final class Migrator
         // same run (027 ran AND this call) is a safe no-op the second time.
         CompetitorProfileBackfill::run($pdo);
 
-        // PP.13: same reasoning as CompetitorProfileBackfill above — 054's
+        // Same reasoning as CompetitorProfileBackfill above — 054's
         // condition-tree backfill is an ongoing catch-up for challenges
         // inserted directly by seeders/fixtures after migrations (and the
         // ledger) have already run. See ChallengeConditionTreeBackfill's docblock.
         ChallengeConditionTreeBackfill::run($pdo);
 
-        // PP.13: same reasoning again — 041's system form-field catalogue for
+        // Same reasoning again — 041's system form-field catalogue for
         // events inserted directly by seeders/fixtures. See FormFieldsCatalogBackfill.
         FormFieldsCatalogBackfill::run($pdo);
 
@@ -310,7 +310,7 @@ final class Migrator
                 // every caller sees only the raw driver message, with no clue
                 // which file/statement caused it — exactly what let migration
                 // 041's JSON_TABLE statement block 042 for a long time before
-                // anyone noticed (E1.14 verification fix).
+                // anyone noticed.
                 throw new \RuntimeException(sprintf(
                     'Migration failed in %s: %s (statement: %s)',
                     basename($file),

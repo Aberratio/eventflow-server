@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Mailer\CriticalMails;
 
 /**
- * The full 15-item mail catalog (plus the two R-01 Event Team mails) from 17-katalog-maili-i-kontrakt-z-mailerem.md
- * §1, as a static lookup: which Central Mailer priority a mail type uses (§2 —
- * `technical` only for authentication, 1-3), whether an organizer may override
- * its template per Wydarzenie (§5 — 4-11 and 13-14 are overridable, 1-3 and 12
- * are systemic/admin-only), the closed list of variables it may reference (§5,
- * validated at template-save time by MailTemplateRepository and substituted at
+ * The full 15-item mail catalog (plus the two Event Team mails)
+ * as a static lookup: which Central Mailer priority a mail type uses
+ * (`technical` only for authentication, 1-3), whether an organizer may override
+ * its template per Wydarzenie (4-11 and 13-14 are overridable, 1-3 and 12
+ * are systemic/admin-only), the closed list of variables it may reference
+ * (validated at template-save time by MailTemplateRepository and substituted at
  * render time by MailRenderer), and a built-in default subject/body so sending
  * works before any admin has ever opened the template editor.
  *
@@ -21,7 +21,7 @@ final class MailCatalog
 {
     // Central Mailer priorities (CentralMailerClient::VALID_PRIORITIES): the
     // catalog's "technical" queue maps 1:1 to Central Mailer's own `technical`
-    // priority; "standard" maps to `normal` (17 §2).
+    // priority; "standard" maps to `normal`.
     public const PRIORITY_TECHNICAL = 'technical';
     public const PRIORITY_STANDARD = 'normal';
 
@@ -40,7 +40,7 @@ final class MailCatalog
     public const SHOP_ORDER_STATUS = 'shop_order_status';
     public const CHALLENGE_COMPLETED = 'challenge_completed';
     public const REFUND_APPROVED = 'refund_approved';
-    // R-01 (zakres P2, poza katalogiem 17): Zespol Wydarzenia - zaproszenie i odebranie dostepu.
+    // Event Team mails (outside the numbered catalog): invitation and access revocation.
     public const EVENT_TEAM_INVITATION = 'event_team_invitation';
     public const EVENT_TEAM_REVOKED = 'event_team_revoked';
 
@@ -56,7 +56,7 @@ final class MailCatalog
     public static function all(): array
     {
         return [
-            // 1-3: uwierzytelnianie — `technical` queue, systemic (§2, §5).
+            // 1-3: authentication — `technical` queue, systemic.
             self::EMAIL_VERIFICATION => [
                 'priority' => self::PRIORITY_TECHNICAL,
                 'overridable' => false,
@@ -82,7 +82,7 @@ final class MailCatalog
                 'defaultBodyHtml' => '<p>Twoje konto zostało zablokowane. Powód: {{reason}}.</p>'
                     . '<p>W razie pytań skontaktuj się z nami: {{supportContact}}.</p>',
             ],
-            // PP.82: password-set link for an account an admin created (systemic, technical queue).
+            // Password-set link for an account an admin created (systemic, technical queue).
             self::ACCOUNT_SETUP => [
                 'priority' => self::PRIORITY_TECHNICAL,
                 'overridable' => false,
@@ -94,7 +94,7 @@ final class MailCatalog
                     . '„Nie pamiętam hasła” na stronie logowania.</p>'
                     . '<p>Jeśli nie spodziewasz się tej wiadomości, zignoruj ją.</p>',
             ],
-            // 4-11, 13-14: nadpisywalne per Wydarzenie (§5), `normal` queue (§2).
+            // 4-11, 13-14: overridable per Wydarzenie, `normal` queue.
             self::REGISTRATION_CREATED => [
                 'priority' => self::PRIORITY_STANDARD,
                 'overridable' => true,
@@ -160,7 +160,7 @@ final class MailCatalog
                 'defaultBodyHtml' => '<p>Twój wynik wirtualny w {{eventName}} został: {{decision}}.</p>'
                     . '<p>{{reason}}</p>',
             ],
-            // 12: sklep jest własnością platformy, nie organizatora — systemic (§5).
+            // 12: the shop belongs to the platform, not the organizer — systemic.
             self::SHOP_ORDER_STATUS => [
                 'priority' => self::PRIORITY_STANDARD,
                 'overridable' => false,
@@ -185,7 +185,7 @@ final class MailCatalog
                 'defaultBodyHtml' => '<p>Zatwierdziliśmy zwrot {{amount}} za {{eventName}}.</p>'
                     . '<p>Sposób zwrotu: {{route}}.</p>',
             ],
-            // R-01: systemic (the invitation is the platform's, the Owner cannot reword the link mail).
+            // Systemic (the invitation is the platform's, the Owner cannot reword the link mail).
             self::EVENT_TEAM_INVITATION => [
                 'priority' => self::PRIORITY_STANDARD,
                 'overridable' => false,

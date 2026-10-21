@@ -12,7 +12,7 @@ final class SeriesRepository extends Repository
     private const COLUMNS = 'id, name, slug, type, description, organizer_id AS organizerId, organizer_name AS organizerName, rules, start_date AS startDate, end_date AS endDate, status';
     private const STATUSES = ['active', 'completed', 'upcoming', 'archived'];
 
-    /** PP.76: request-body rules for POST/PATCH /series (see InputRules). */
+    /** Request-body rules for POST/PATCH /series (see InputRules). */
     private const INPUT_RULES = [
         'name' => [InputRules::TEXT_REQUIRED, 'Nazwa serii'],
         'slug' => [InputRules::TEXT_REQUIRED, 'Adres URL (slug) serii'],
@@ -181,7 +181,7 @@ final class SeriesRepository extends Repository
     }
 
     /**
-     * TD.23: batched into one multi-row INSERT and one multi-row UPDATE
+     * Batched into one multi-row INSERT and one multi-row UPDATE
      * instead of two queries per event — same 0-based `sort_order`
      * (unchanged from the original `$index`), same `events.series_id`
      * backfill for every listed event, same no-op on an empty list (beyond

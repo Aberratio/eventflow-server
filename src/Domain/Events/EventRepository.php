@@ -15,7 +15,7 @@ use ZmierzymyCzas\Support\Log\LoggerFactory;
 
 final class EventRepository extends Repository
 {
-    /** PP.59: PSR-3 logger for dropped child keys; defaults to the error_log-backed fallback. */
+    /** PSR-3 logger for dropped child keys; defaults to the error_log-backed fallback. */
     private readonly LoggerInterface $logger;
 
     public function __construct(\PDO $pdo, ?LoggerInterface $logger = null)
@@ -26,27 +26,27 @@ final class EventRepository extends Repository
 
     private const CREDIT_KINDS = ['standard', 'virtual', 'timing'];
 
-    // PP.5: rich-text columns sanitized on write via HtmlSanitizer (second line of
+    // Rich-text columns sanitized on write via HtmlSanitizer (second line of
     // defence; the client also sanitizes on every render).
     private const RICH_TEXT_COLUMNS = ['description', 'rules_html', 'organizers_html', 'final_acceptance_html'];
 
     /**
-     * E1.4: the two payment-window durations (docs/20-... pkt 1) live as two more
+     * The two payment-window durations (docs/20-... pkt 1) live as two more
      * keys inside the already-existing `payment_config` JSON blob (001_init.sql) —
      * no schema change needed, same column the organizer already edits for
      * type/bank-account fields via the generic PATCH /events/{id}. These are the
      * defaults applied in hydrate() whenever an event's paymentConfig doesn't carry
-     * its own values yet (a brand-new event, or one created before this ticket) —
-     * "bramka: domyślnie 30-60 minut" / "przelew: domyślnie 3-5 dni roboczych".
+     * its own values yet (a brand-new event, or one created before these defaults existed) —
+     * "gateway: default 30-60 minutes" / "bank transfer: default 3-5 business days".
      */
     private const DEFAULT_GATEWAY_WINDOW_MINUTES = 45;
     private const DEFAULT_TRANSFER_WINDOW_DAYS = 3;
 
     /**
-     * E3.2: Biuro Zawodów (BZ) integration toggle per Wydarzenie (issue 12 §3). Unlike
+     * Biuro Zawodów (BZ) integration toggle per Wydarzenie. Unlike
      * `payment_config`, this is a single small toggle+string, not a multi-field JSON
-     * blob — so it lives as two flat columns (047_e3_2_...sql), the same shape as
-     * E1.1's `visibility`/`is_test` rather than a JSON column. The platform never
+     * blob — so it lives as two flat columns, the same shape as
+     * the `visibility`/`is_test` columns rather than a JSON column. The platform never
      * creates a BZ organization itself: the organizer pastes an existing organization
      * token/identifier when flipping the switch on. `bz_organization_token` is
      * intentionally never wiped when disabling — routes.php's generic PATCH only
@@ -58,12 +58,12 @@ final class EventRepository extends Repository
      */
 
     /**
-     * The workflow axis (E1.1). `approved` and `rejected` are legal ENUM values on the
+     * The workflow axis. `approved` and `rejected` are legal ENUM values on the
      * column (schema future-proofing, per spec) but the application never actually rests
      * a row there: approve() lands directly on `published`, reject() lands directly on
      * `draft` (with rejection_reason kept for the UI). `cancelled` is terminal and manual.
-     * Soft-delete used to be folded into this same field (`status = 'deleted'`) — E1.1
-     * splits that out to its own `deleted_at` column, since "is this row gone" is not part
+     * Soft-delete used to be folded into this same field (`status = 'deleted'`) — it is now
+     * split out to its own `deleted_at` column, since "is this row gone" is not part
      * of the publication workflow.
      */
     private const PUBLICATION_STATUSES = ['draft', 'submitted', 'approved', 'published', 'finished', 'rejected', 'cancelled'];
@@ -126,7 +126,7 @@ SQL;
 
     /**
      * @param array<string, mixed> $filters
-     * @param array{userId: string, isOrganizer: bool}|null $privateViewer PP.55: set by the route only;
+     * @param array{userId: string, isOrganizer: bool}|null $privateViewer set by the route only;
      *        null = no private Events unless `includePrivate` (staff) is set.
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, pageSize: int}
      */
@@ -153,7 +153,7 @@ SQL;
         }
         if (empty($filters['includePrivate'])) {
             if ($privateViewer !== null && $privateViewer['userId'] !== '') {
-                // R-01: an active Co-manager sees the private Events of the Teams it belongs to, as the Owner does.
+                // An active Co-manager sees the private Events of the Teams it belongs to, as the Owner does.
                 $teamExists = "EXISTS (SELECT 1 FROM event_team_members pv_t WHERE pv_t.event_id = events.id"
                     . " AND pv_t.user_id = :privateViewerTeamUserId AND pv_t.status = 'active')";
                 $params['privateViewerTeamUserId'] = $privateViewer['userId'];
@@ -297,7 +297,7 @@ SQL;
         $payload['organizerName'] = $organizer['companyName'] ?: $organizer['name'];
         $payload['publicationStatus'] = 'draft';
         $payload['createdBy'] = $actorId;
-        // PP.59: untrusted HTTP body, validated before the transaction (and any write) starts.
+        // Untrusted HTTP body, validated before the transaction (and any write) starts.
         $prepared = $this->prepareChildren($payload, false);
         $this->pdo->beginTransaction();
         try {
@@ -315,11 +315,11 @@ SQL;
     }
 
     /**
-     * E6.4 (issue 15 §3): a barebones "Wydarzenie zewnętrzne" — the reference
+     * A barebones "external Wydarzenie" — the reference
      * point a Moderator/Admin creates so a Zawodnik's manual challenge-entry
      * proof (a Korona half-marathon that never ran on this platform, or a
      * pre-platform completion) can point at a real Event row instead of
-     * free text. Deliberately minimal per the ticket's own scoping: no
+     * free text. Deliberately minimal in scope: no
      * `distances`/registration payload is ever accepted here (unlike
      * create()/createForOrganizer(), which both call syncChildren()), so
      * an external Event can never accidentally grow Dystans or registration
@@ -409,7 +409,7 @@ SQL;
     }
 
     /**
-     * Soft delete (E1.1). Used to be `status = 'deleted'`, folded into the same column
+     * Soft delete. Used to be `status = 'deleted'`, folded into the same column
      * as the moderation workflow; split out to its own timestamp because "is this row
      * gone" isn't part of the publication_status axis.
      */
@@ -419,8 +419,8 @@ SQL;
     }
 
     /**
-     * Pre-E1.1 this was a free-form status PATCH (draft/past/archived, staff- or
-     * organizer-triggered). E1.1 replaces every one of those manual targets: `past`/
+     * Formerly this was a free-form status PATCH (draft/past/archived, staff- or
+     * organizer-triggered). The publication workflow replaced every one of those manual targets: `past`/
      * `archived` are now the automatic lazy Published→Finished check
      * (lazilyFinishPastEvents(), below), and the remaining transitions each have their
      * own method — submit()/approve()/reject()/cancel()/setVisibility()/setIsTest().
@@ -440,11 +440,11 @@ SQL;
     }
 
     /**
-     * Draft -> Submitted. Also clears is_test irreversibly (E1.1: the flag only exists to
+     * Draft -> Submitted. Also clears is_test irreversibly (the flag only exists to
      * let an organizer walk the registration form before moderation; once submitted for
      * real, the event can never go back into test mode, even if rejected back to Draft).
      *
-     * E5.6 (issue 16 §2, umowa §5.5): this is where the "pakiet organizatora" credit is
+     * This is where the "pakiet organizatora" credit is
      * actually spent — never at Draft creation, never at publication. An organizer may
      * freely create and edit Drafts; the first thing that costs a credit is asking a
      * moderator to look at it. No available credit is a 4xx business error
@@ -511,9 +511,9 @@ SQL;
      * `rejected` is a legal ENUM value but not a resting state the application ever writes
      * — rejecting an event is a new Draft cycle, not a persistent "Rejected" status.
      *
-     * E5.6: rejection refunds the "pakiet organizatora" credit spent at submit() — the
+     * Rejection refunds the "pakiet organizatora" credit spent at submit() — the
      * platform decided this Wydarzenie doesn't meet the bar, so it shouldn't cost the
-     * organizer money (issue 16 §2). Refund and status change happen in the same
+     * organizer money. Refund and status change happen in the same
      * transaction as submit()'s consumption does, for the same desync-safety reason.
      * approve() (below) deliberately has no equivalent — consumption is one-shot, at
      * submission time, and approval never touches the credit.
@@ -543,7 +543,7 @@ SQL;
 
     /**
      * Published -> Cancelled. Manual, terminal, irreversible. Bulk refund handling for
-     * paid registrations (E1.5, spec 13 rozstrzygnięcie 2) is triggered by the caller
+     * paid registrations is triggered by the caller
      * (routes.php's `/events/{id}/cancel` handler) via
      * RegistrationRepository::bulkApproveRefundsForEvent() once this returns
      * non-null — this repository has no RegistrationRepository dependency, so it is
@@ -562,7 +562,7 @@ SQL;
     /**
      * The visibility toggle (public/private), only meaningful once the event is
      * Published. `is_private`/`access_code` remain the underlying storage (access_code
-     * already existed from an earlier ticket) and stay in sync with `visibility`.
+     * already existed earlier) and stay in sync with `visibility`.
      */
     public function setVisibility(string $id, string $visibility): ?array
     {
@@ -579,7 +579,7 @@ SQL;
     }
 
     /**
-     * is_test is only settable while Draft (E1.1) — it exists purely so an organizer can
+     * is_test is only settable while Draft — it exists purely so an organizer can
      * walk the registration form via a direct link before moderation. submit() clears it
      * irreversibly, so there is no corresponding "set false" escape hatch needed once an
      * event has moved on.
@@ -590,7 +590,7 @@ SQL;
         if (!$event || $event['publicationStatus'] !== 'draft') {
             return null;
         }
-        // Irreversible once the event has ever been submitted (E1.1) — a rejected event
+        // Irreversible once the event has ever been submitted — a rejected event
         // is Draft again but submitted_at survives the round trip specifically so this
         // check can tell "never submitted" apart from "back in Draft after rejection".
         if (!empty($event['submittedAt'])) {
@@ -601,7 +601,7 @@ SQL;
     }
 
     /**
-     * Published -> Finished for events whose last day has passed (E1.1). PP.18: the scheduler
+     * Published -> Finished for events whose last day has passed. the scheduler
      * (events.finish_past) is the primary driver; the read paths below still run it as a
      * harmless fallback (one indexed, idempotent UPDATE, no money, no mail) so a missed cron
      * tick never serves a stale "published" past event.
@@ -611,7 +611,7 @@ SQL;
         $this->finishPastEvents();
     }
 
-    /** PP.18: shared by the read-path fallback and the scheduler job. Returns the number of events finished. */
+    /** Shared by the read-path fallback and the scheduler job. Returns the number of events finished. */
     public function finishPastEvents(): int
     {
         return (int) $this->pdo->exec(
@@ -699,15 +699,15 @@ SQL;
         foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'isTest', 'isExternal', 'registrationUntilEventStart', 'enableMerchandiseInRegistration', 'bzIntegrationEnabled', 'embedEnabled'] as $bool) {
             $event[$bool] = (bool) ($event[$bool] ?? false);
         }
-        // R-02: self-service on by default; `selfServiceDeadline` is what the organizer stored (null =
+        // Self-service on by default; `selfServiceDeadline` is what the organizer stored (null =
         // default), `selfServiceEffectiveDeadline` the cut-off that actually applies (ATOM) - both for the UI.
         $event['selfServiceEnabled'] = (bool) ($event['selfServiceEnabled'] ?? true);
         $storedDeadline = SelfServicePolicy::normalizeDeadline($event['selfServiceDeadline'] ?? null);
         $event['selfServiceDeadline'] = $storedDeadline === null ? null : (new \DateTimeImmutable($storedDeadline))->format(DATE_ATOM);
         $event['selfServiceEffectiveDeadline'] = SelfServicePolicy::effectiveDeadline($event)?->format(DATE_ATOM);
-        // E8.11: embed_allowed_origins is nullable at the schema level (same as every
+        // Embed_allowed_origins is nullable at the schema level (same as every
         // other JSON config column here) - a brand-new event, or one created before
-        // this ticket, reads back as an empty allowlist rather than null, so callers
+        // this was introduced, reads back as an empty allowlist rather than null, so callers
         // (the public embed-status endpoint, the organizer settings UI) never have to
         // null-check it.
         $event['embedAllowedOrigins'] = is_array($event['embedAllowedOrigins'] ?? null) ? $event['embedAllowedOrigins'] : [];
@@ -730,15 +730,15 @@ SQL;
         $event['galleryAlbums'] = $this->children('event_gallery_albums', 'event_id', $event['id']);
         $event['resultDocuments'] = $this->children('event_result_documents', 'event_id', $event['id']);
         $event['documents'] = $this->children('event_documents', 'event_id', $event['id']);
-        // E1.2 krok 6 (NNW): katalog wariantów jest globalny (InsuranceRepository),
-        // organizator wybiera tu, które z nich oferuje na tym wydarzeniu.
+        // NNW insurance: the variant catalog is global (InsuranceRepository),
+        // the organizer picks here which of them to offer at this event.
         $event['insuranceVariants'] = $this->eventInsuranceVariants($event['id']);
 
         return $event;
     }
 
     /**
-     * E1.4: applies the two payment-window defaults on top of whatever the organizer
+     * Applies the two payment-window defaults on top of whatever the organizer
      * has already saved (or nothing at all) — always returns concrete, positive
      * ints so a caller (RegistrationRepository::create(), or the API response the
      * client's settings tab reads back) never has to special-case "not configured
@@ -756,8 +756,8 @@ SQL;
 
         return [
             'type' => 'admin_gateway',
-            // E1.7: which trasa-A gateway (RegistrationRepository::gatewayForProvider())
-            // this event's Zapisy pay through — 'tpay' (E1.6, the only provider that
+            // Which trasa-A gateway (RegistrationRepository::gatewayForProvider())
+            // this event's Zapisy pay through — 'tpay' (the only provider that
             // existed before this) is the default so every event configured before
             // PayNow existed keeps its exact prior behavior. Irrelevant when
             // `type` is 'organizer_bank' (trasa B has no gateway at all).
@@ -770,8 +770,8 @@ SQL;
 
     /**
      * Which NNW catalog variants (InsuranceRepository) this event offers — the
-     * organizer's selection from the admin-defined global catalog (E0.3 rozstrzygnięcie
-     * 9). Returns full variant objects (not just ids) so the client can render its
+     * organizer's selection from the admin-defined global catalog.
+     * Returns full variant objects (not just ids) so the client can render its
      * selection UI without a second round-trip; inactive catalog rows are dropped even
      * if still linked, same as the catalog's own `list()`.
      *
@@ -841,9 +841,9 @@ SQL;
             $registeredCount = $registered[$id] ?? 0;
             $distance['registeredCount'] = $registeredCount;
             $distance['paidCount'] = $paid[$id] ?? 0;
-            // E8.2 (spec 21 Answer §4): free-slots counter, computed alongside the
+            // Free-slots counter, computed alongside the
             // existing live registeredCount above (no new materialized state — the
-            // one exception, event_distances.registered_count, is E1.3's separate
+            // one exception, event_distances.registered_count, is the separate
             // transactional capacity counter and is not what this reads). `null`
             // limit means unlimited, so there is no "remaining" to compute.
             // Whether this ever reaches an anonymous reader is decided by
@@ -963,12 +963,12 @@ SQL;
                 $out[$column] = $input === 'publicationStatus' ? $this->normalizeStatus((string) $value) : $value;
             }
         }
-        // `status` is the pre-E1.1 input key (still used by older callers/fixtures);
+        // `status` is the legacy input key (still used by older callers/fixtures);
         // `publicationStatus` is the canonical one and wins if both are present.
         if (array_key_exists('status', $data) && !array_key_exists('publicationStatus', $data)) {
             $out['publication_status'] = $this->normalizeStatus((string) $data['status']);
         }
-        // visibility (E1.1) and the legacy is_private boolean describe the same axis —
+        // visibility and the legacy is_private boolean describe the same axis —
         // keep them in sync however the caller supplied it, so old and new consumers
         // both see a consistent value.
         if (array_key_exists('visibility', $data) && !array_key_exists('isPrivate', $data)) {
@@ -1050,7 +1050,7 @@ SQL;
 
     /**
      * Accepts both the new canonical values and every historical spelling this column
-     * has ever had (pre-E1.1 `active`/`past`/`archived`/`awaiting_approval`, and the even
+     * has ever had (legacy `active`/`past`/`archived`/`awaiting_approval`, and the even
      * older `published`/`completed`/`cancelled` aliases from 001_init.sql), so old
      * fixtures/payloads keep working without a data migration of every call site.
      *
@@ -1105,9 +1105,9 @@ SQL;
     }
 
     /**
-     * E5.6: atomic, affected-rows-guarded decrement of the "pakiet organizatora"
+     * Atomic, affected-rows-guarded decrement of the "pakiet organizatora"
      * credit — mirrors incrementRegisteredCount()'s pattern in
-     * RegistrationRepository (E1.3): one UPDATE whose WHERE clause is the check,
+     * RegistrationRepository: one UPDATE whose WHERE clause is the check,
      * so there is no separate read-then-write race window. Deliberately its own
      * counter (`users.organizer_package_credits`, migration 053) rather than the
      * pre-existing but unused organizer_event_credit_batches/usages tables above
@@ -1147,7 +1147,7 @@ SQL;
     }
 
     /**
-     * PP.59: validate and normalize every child collection present in the request, with no database
+     * Validate and normalize every child collection present in the request, with no database
      * access, so a bad value rejects the whole request before the first write. Column names come only
      * from EventChildSchema constants; client keys are only looked up there.
      *
@@ -1264,7 +1264,7 @@ SQL;
     }
 
     /**
-     * PP.59: diff-sync the prepared children inside the caller's transaction: rows whose id already
+     * Diff-sync the prepared children inside the caller's transaction: rows whose id already
      * belongs to THIS event are updated in place (counters and FK children survive), everything else
      * becomes a new row with a server-generated id, and rows missing from the request are deleted.
      *
@@ -1332,7 +1332,7 @@ SQL;
     }
 
     /**
-     * Wariant opłaty (E0.3): same diff sync as the other children, scoped by distance_id.
+     * Wariant opłaty: same diff sync as the other children, scoped by distance_id.
      *
      * @param list<array<string, mixed>> $variants
      */

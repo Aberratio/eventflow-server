@@ -8,7 +8,7 @@ use Monolog\Level;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * PP.20: lenient logging configuration. Never throws: invalid values fall back to the
+ * Lenient logging configuration. Never throws: invalid values fall back to the
  * default and add a warning (key names only, never values) that the factory logs once.
  */
 final class LogConfig

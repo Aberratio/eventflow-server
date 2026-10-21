@@ -10,7 +10,7 @@ use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxService;
 use ZmierzymyCzas\Scheduler\ScheduledJob;
 
 /**
- * PP.18: retries failed / stale-queued pushes to Biuro Zawodow. Skipped while BZ is not configured
+ * Retries failed / stale-queued pushes to Biuro Zawodow. Skipped while BZ is not configured
  * for this deployment (BZ_WEBHOOK_BASE_URL unset).
  */
 final class BzOutboxRetryJob implements ScheduledJob

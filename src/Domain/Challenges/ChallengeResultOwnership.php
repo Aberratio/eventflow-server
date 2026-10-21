@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Challenges;
 
 /**
- * R-06 (zakres P2): SQL fragments that attribute a `results` row to a Zawodnik,
+ * SQL fragments that attribute a `results` row to a Zawodnik,
  * the same rule ResultRepository uses for lifetime records:
  * `registrations.competitor_id` (via `results.registration_id`) is authoritative,
  * and the Zawodnik whose own Konto produced the result (`competitors.user_id =

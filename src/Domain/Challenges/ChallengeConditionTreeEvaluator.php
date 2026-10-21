@@ -7,27 +7,27 @@ namespace ZmierzymyCzas\Domain\Challenges;
 use PDO;
 
 /**
- * E6.3 (issue 15 §3, "Weryfikacja: automat liczy, ścieżka manualna dla
- * dowodu"): the full recursive evaluator over a Wyzwanie's condition tree
- * (E6.1's `challenge_condition_nodes`) for ONE competitor — "czy ten
- * zawodnik ukończył to Wyzwanie" (root satisfied) rather than E6.2's narrower
- * "score this one point_threshold node".
+ * Automatic verification (with a manual path for proof): the full recursive
+ * evaluator over a Wyzwanie's condition tree
+ * (`challenge_condition_nodes`) for ONE competitor — "has this
+ * competitor completed this Wyzwanie" (root satisfied) rather than the narrower
+ * point-threshold scorer's "score this one point_threshold node".
  *
- * Node types (E6.1 §1):
+ * Node types:
  * - `event_threshold`      >= requiredCount of the linked Events have a
  *                           `finished` result for this competitor (optional
  *                           windowStart/windowEnd filters by the Event's own
  *                           `date`).
  * - `point_threshold`      delegates entirely to ChallengePointThresholdScorer
- *                           (E6.2) — this class does not reimplement scoring.
- *                           E6.2 deliberately does not apply a time window to
+ * — this class does not reimplement scoring.
+ *                           The scorer deliberately does not apply a time window to
  *                           this node type (its own class doc comment scopes
  *                           it to points + "N best results" only), and this
- *                           ticket does not expand that scope either — a
+ *                           class does not expand that scope either — a
  *                           `windowStart`/`windowEnd` on a `point_threshold`
  *                           node is hydrated (schema-wise it CAN carry one,
  *                           see ChallengeRepository::hydrateNode()) but is
- *                           silently ignored by both E6.2's scorer and this
+ *                           silently ignored by both the scorer and this
  *                           evaluator. Flagged as a known gap, not fixed here.
  * - `sub_challenge_threshold` recursively evaluates whether the competitor
  *                           has completed >= requiredCount of the referenced
@@ -37,7 +37,7 @@ use PDO;
  *                           subChallengeCompletionTimestamp()'s doc comment.
  * - `group`                >= requiredCount of its children are satisfied
  *                           (AND is simply requiredCount === count(children),
- *                           per E6.1's own doc comment on the migration).
+ *                           per the migration's own doc comment).
  *
  * Memoization: a single top-level evaluation call threads one `$memo` array
  * (challengeId|userId -> bool) through every recursive call, so a tree that
@@ -46,9 +46,9 @@ use PDO;
  * exactly once. The memo is caller-owned (start a fresh `[]` per competitor
  * per evaluation) — nothing here caches across calls or competitors, which
  * would risk staleness after a result import; that's deliberately out of
- * scope per the ticket ("don't over-engineer a caching layer").
+ * scope: don't over-engineer a caching layer.
  *
- * Depth guard: `assertValidTree()` (ChallengeRepository, E6.1) already
+ * Depth guard: `assertValidTree()` (ChallengeRepository) already
  * rejects cycles at save time via a real graph walk, so this guard should
  * never trip in practice. It exists purely as defense-in-depth against a
  * future bug in that check causing infinite recursion — a RuntimeException
@@ -61,7 +61,7 @@ final class ChallengeConditionTreeEvaluator
     /**
      * Generous on purpose: a legitimate tree (group-of-groups nesting
      * sub_challenge_threshold references several levels deep, per the
-     * spec's "3 brązowe = 1 srebrna, 3 srebrne = 1 złota" example) is at
+     * "3 bronze = 1 silver, 3 silver = 1 gold" example) is at
      * most a handful of levels. 30 is far beyond any real tree while still
      * catching a runaway recursion quickly.
      */
@@ -107,20 +107,20 @@ final class ChallengeConditionTreeEvaluator
      * embedded `conditionTree`) can evaluate it without a redundant
      * getConditionTree() round-trip.
      *
-     * $challengeId (E6.4, issue 15 §3) scopes an `event_threshold` node's
+     * $challengeId scopes an `event_threshold` node's
      * manual-entry lookup to entries submitted/approved under THIS Wyzwanie —
      * `challenge_entries` is keyed on (challengeId, userId, eventId)
      * (ChallengeRepository::submitEntry()'s entryFor() lookup), i.e. two
      * different Wyzwania that both link the same Event each require their
      * own separate manual submission + Moderator approval. Left `null` for
-     * backward compatibility (pre-E6.4 callers, and every direct unit test of
+     * backward compatibility (older callers, and every direct unit test of
      * a bare node in isolation) — a `null` challengeId falls back to the
      * broader "approved manual entry for this Event by this user under ANY
      * challenge" match rather than refusing to match at all, since a caller
      * that truly doesn't know its own challenge context has no narrower
      * question to ask.
      *
-     * R-06: $competitorId, when given, makes the evaluation per Zawodnik (results attributed
+     * $competitorId, when given, makes the evaluation per Zawodnik (results attributed
      * by ChallengeResultOwnership, manual entries by `challenge_entries.competitor_id`);
      * `null` keeps the legacy per-Konto behaviour (`user_id`) for rows with no Zawodnik.
      *
@@ -152,13 +152,13 @@ final class ChallengeConditionTreeEvaluator
     }
 
     /**
-     * E6.4 (issue 15 §3): counts an Event as "completed for this competitor"
+     * Counts an Event as "completed for this competitor"
      * from EITHER a real `results` row (auto-synced, the pre-existing path)
      * OR an approved `challenge_entries` row with `source = 'manual'` (the
      * moderator-verified proof path) — whichever exists. This is the fix for
-     * a real gap E6.3 left open: a manually-approved entry for an external
-     * Event (issue 15 §3 — "obslugiwane przez Wydarzenie zewnetrzne, stan bez
-     * Dystansow i zapisow") has no timing infrastructure behind it at all, so
+     * a real gap in the original design: a manually-approved entry for an external
+     * Event (an external Wydarzenie is a state without
+     * Dystansy and Zapisy) has no timing infrastructure behind it at all, so
      * it can NEVER have a `results` row — without this UNION, an approved
      * manual proof would satisfy `submitEntry()`/`reviewEntry()`'s own bookkeeping
      * but never actually count toward the tree's `event_threshold` node, i.e.
@@ -264,12 +264,12 @@ final class ChallengeConditionTreeEvaluator
      * @param array<string, mixed> $node
      * @param array<string, bool> $memo
      *
-     * Time-window interpretation (issue 15 §1 leaves this to judgment —
-     * "prawdopodobnie zakończenie ... uczestnictwa, jeśli istnieje, albo
-     * wyprowadzone z leżących pod spodem zgłoszeń"): a sub-challenge's own
+     * Time-window interpretation (a judgment call — presumably the end of
+     * participation if one exists, otherwise derived from the underlying
+     * entries): a sub-challenge's own
      * "completion moment" for window purposes is, in priority order:
      *   1. its `challenge_participations.completion_notified_at` for this
-     *      competitor — the same materialized moment E1.10's mail #13 uses,
+     *      competitor — the same materialized moment the completion mail uses,
      *      the most authoritative "when they finished this Wyzwanie" the
      *      schema has;
      *   2. failing that (e.g. the competitor's tree-based completion was

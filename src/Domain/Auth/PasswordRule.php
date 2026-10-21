@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Auth;
 
 /**
- * The password rule shared by every flow that sets a new password (PP.45 change,
- * PP.7 reset). Codes and messages are API contract: the client maps them to fields.
+ * The password rule shared by every flow that sets a new password (change,
+ * reset). Codes and messages are API contract: the client maps them to fields.
  */
 final class PasswordRule
 {

@@ -10,7 +10,7 @@ use ZmierzymyCzas\Support\InputRules;
 
 final class InfoPageRepository extends Repository
 {
-    /** PP.76: request-body rules for POST/PATCH /info-pages (see InputRules). */
+    /** Request-body rules for POST/PATCH /info-pages (see InputRules). */
     private const INPUT_RULES = [
         'title' => [InputRules::TEXT_REQUIRED, 'Tytuł strony'],
         'slug' => [InputRules::TEXT_REQUIRED, 'Adres URL (slug) strony'],
@@ -121,7 +121,7 @@ final class InfoPageRepository extends Repository
     }
 
     /**
-     * B-08: text blocks carry `format`: "html" (CMS rich-text editor, sanitized on write with the same
+     * Text blocks carry `format`: "html" (CMS rich-text editor, sanitized on write with the same
      * HtmlSanitizer as event descriptions) or "text" (legacy plain text, the default for blocks without it).
      *
      * @return mixed same shape as the input; non-list content passes through

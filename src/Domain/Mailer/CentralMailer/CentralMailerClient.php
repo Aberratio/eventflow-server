@@ -8,14 +8,13 @@ use ZmierzymyCzas\Domain\Mailer\Http\HttpClientInterface;
 use ZmierzymyCzas\Domain\Mailer\Http\HttpResponse;
 
 /**
- * Real Central Mailer client-zone API client (kontrakt-central-mailer.md §1.2),
- * built against that document's reverse-engineered contract — every call here is
+ * Real Central Mailer client-zone API client,
+ * built against its reverse-engineered contract — every call here is
  * a genuine HTTP request to Central Mailer's `/emails*` endpoints; only the
  * credentials (CentralMailerConfig, from env) are placeholders in dev/test.
  *
- * E1.9 scope only: single-message enqueue plus the two read endpoints needed for
- * reconciliation. `/emails/batch` is deliberately not implemented (out of scope
- * per the ticket).
+ * Scope: single-message enqueue plus the two read endpoints needed for
+ * reconciliation. `/emails/batch` is deliberately not implemented (out of scope).
  */
 final class CentralMailerClient implements CentralMailerClientInterface
 {
@@ -45,7 +44,7 @@ final class CentralMailerClient implements CentralMailerClientInterface
             $payload['text'] = (string) $email['text'];
         }
 
-        // §1.2: category is forced to `transactional` server-side for
+        // Category is forced to `transactional` server-side for
         // priority=technical regardless of what is sent — made explicit here too
         // so the outbox records exactly what will actually apply.
         $category = $email['category'] ?? null;
@@ -65,7 +64,7 @@ final class CentralMailerClient implements CentralMailerClientInterface
         if (!empty($email['attachments'])) {
             $payload['attachments'] = $email['attachments'];
         }
-        // Per-message Reply-To (spec 17 §4); Central Mailer falls back to its global one when absent.
+        // Per-message Reply-To; Central Mailer falls back to its global one when absent.
         $replyToEmail = trim((string) ($email['replyTo']['email'] ?? ''));
         if ($replyToEmail !== '') {
             $payload['replyTo'] = ['email' => $replyToEmail];

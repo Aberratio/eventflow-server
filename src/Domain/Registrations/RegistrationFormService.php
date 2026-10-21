@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\FormFields\FormFieldType;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * B-07: the form half of `POST /registrations` (spec 10, model-formularza-zapisow).
+ * The form half of `POST /registrations`.
  *
  *  - `formFieldAnswers: [{fieldId, value}]` answer the Event's custom fields (they live on the Zapis,
  *    model F1). Validation is FormFieldType::validateAnswer() — the same one the PUT endpoint uses —
@@ -21,7 +21,7 @@ use ZmierzymyCzas\Domain\Repository;
  *    are written to `competitors`. A required system field is satisfied by the payload or by what the
  *    profile already holds. A value for a hidden field is dropped, not an error (the form never shows it).
  *  - priced variants of choice fields become `modifier` Rozliczenie items; the amount is read from the
- *    field's configuration here, never from the request (spec 07 step 4).
+ *    field's configuration here, never from the request.
  *
  * `prepare()` is read-only and `persist()` writes; RegistrationRepository::create() calls both inside
  * its transaction, so a rejected form leaves no Zapis behind.
@@ -54,7 +54,7 @@ final class RegistrationFormService extends Repository
         $fieldsRepo = new FormFieldRepository($this->pdo);
         $eventId = (string) $data['eventId'];
         $distanceId = (string) ($data['distanceId'] ?? '');
-        // R-04: the form of the chosen Dystans (event form + its overrides + its own fields).
+        // The form of the chosen Dystans (event form + its overrides + its own fields).
         $fields = $fieldsRepo->effectiveForDistance($eventId, $distanceId);
         $errors = [];
 

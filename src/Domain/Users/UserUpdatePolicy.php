@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Users;
 
 /**
- * PP.1: pure whitelist policy for `PATCH /users/{id}`. No DB access — the HTTP
+ * Pure whitelist policy for `PATCH /users/{id}`. No DB access — the HTTP
  * handler in routes.php owns loading the target user and deciding `$asManager`.
  *
  * Self-editing an Account is restricted to the fields the three client profile

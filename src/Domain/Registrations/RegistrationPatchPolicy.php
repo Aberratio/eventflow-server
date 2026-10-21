@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Registrations;
 
 /**
- * PP.2: pure whitelist policy for `PATCH /registrations/{id}`. No DB access —
+ * Pure whitelist policy for `PATCH /registrations/{id}`. No DB access —
  * the HTTP handler decides `$isManager` via `$authorizeRegistration()` first.
  *
  * `status`, `discountCode`, `removedAt`, `teamId`, `paymentDetails`, `merchandise`

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Scheduler;
 
-/** PP.18: one unit of work run by bin/scheduler.php. Must be idempotent (retried every tick, may overlap on lock loss). */
+/** One unit of work run by bin/scheduler.php. Must be idempotent (retried every tick, may overlap on lock loss). */
 interface ScheduledJob
 {
     /** Stable job name, e.g. 'registrations.expire_unpaid'. Listed in SchedulerJobs::NAMES. */

@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Domain\Registrations;
 use ZmierzymyCzas\Support\InputValidationException;
 
 /**
- * PP.79: the Kategoria wiekowa of a Zapis is derived on the server from the Zawodnik's birth year
+ * The Kategoria wiekowa of a Zapis is derived on the server from the Zawodnik's birth year
  * and gender and from the Dystans's configuration; the client never chooses it
  * (slownik-domenowy.md, "Kategoria wiekowa": wynika z płci i daty urodzenia Zawodnika).
  *

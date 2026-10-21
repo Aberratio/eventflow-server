@@ -9,12 +9,11 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class UserRepository extends Repository
 {
-    // organizerPackageCredits (E5.6, migration 053) is intentionally read-only here —
+    // organizerPackageCredits (migration 053) is intentionally read-only here —
     // update() below has no matching input key, since the only writers are
     // OrderRepository::create() (purchase) and EventRepository::submit()/reject()
-    // (consume/refund). Exposed on every read as a seam for E5.7 (purchase ->
-    // Organizer role) and for a future client "your credits" display, without this
-    // ticket building either.
+    // (consume/refund). Exposed on every read as a seam for the purchase ->
+    // Organizer role flow and for a future client "your credits" display, without building either here.
     private const PUBLIC_COLUMNS = 'id, name, email, (email_verified_at IS NOT NULL) AS emailVerified, role, avatar, phone, birth_year AS birthYear, birth_date AS birthDate, gender, club, company_name AS companyName, nip, website, description, address, sos_contacts AS sosContacts, status, event_limit AS eventLimit, organizer_package_credits AS organizerPackageCredits, last_login_at AS lastLoginAt';
 
     /**
@@ -74,7 +73,7 @@ final class UserRepository extends Repository
             $row['emailVerified'] = (bool) $row['emailVerified'];
         }
         if (array_key_exists('lastLoginAt', $row) && $row['lastLoginAt'] !== null) {
-            // G-07: DATETIME (server time zone, like date(DATE_ATOM) elsewhere) -> ISO 8601.
+            // DATETIME (server time zone, like date(DATE_ATOM) elsewhere) -> ISO 8601.
             $row['lastLoginAt'] = (new \DateTimeImmutable((string) $row['lastLoginAt']))->format(DATE_ATOM);
         }
         if (isset($row['address']) && is_string($row['address'])) {
@@ -86,7 +85,7 @@ final class UserRepository extends Repository
         return $row;
     }
 
-    /** G-07: persist the moment of a successful login (users.last_login_at). */
+    /** Persist the moment of a successful login (users.last_login_at). */
     public function recordLogin(string $id): void
     {
         $this->pdo->prepare('UPDATE users SET last_login_at = NOW() WHERE id = :id')->execute(['id' => $id]);
@@ -115,7 +114,7 @@ final class UserRepository extends Repository
         return is_string($hash) ? $hash : null;
     }
 
-    /** PP.7: the session version a JWT must carry; never part of any DTO. 0 for an unknown user. */
+    /** The session version a JWT must carry; never part of any DTO. 0 for an unknown user. */
     public function tokenVersion(string $id): int
     {
         $stmt = $this->pdo->prepare('SELECT token_version FROM users WHERE id = :id');
@@ -125,7 +124,7 @@ final class UserRepository extends Repository
         return $version === false ? 0 : (int) $version;
     }
 
-    /** PP.7: invalidates every session of the user that carries an older version. Returns the new version. */
+    /** Invalidates every session of the user that carries an older version. Returns the new version. */
     public function bumpTokenVersion(string $id): int
     {
         $this->pdo->prepare('UPDATE users SET token_version = token_version + 1 WHERE id = :id')->execute(['id' => $id]);
@@ -133,13 +132,13 @@ final class UserRepository extends Repository
         return $this->tokenVersion($id);
     }
 
-    /** PP.70: users.role ENUM (001_init.sql). */
+    /** Users.role ENUM (001_init.sql). */
     public const ROLES = ['participant', 'organizer', 'moderator', 'admin', 'superadmin'];
-    /** PP.70: users.status ENUM (001_init.sql). */
+    /** Users.status ENUM (001_init.sql). */
     public const STATUSES = ['active', 'blocked'];
 
     /**
-     * PP.70: sets the role and ends every session of the account in ONE statement (atomic).
+     * Sets the role and ends every session of the account in ONE statement (atomic).
      * False when the role is unchanged or the account does not exist.
      */
     public function changeRoleEndingSessions(string $id, string $role): bool
@@ -152,7 +151,7 @@ final class UserRepository extends Repository
         return $stmt->rowCount() === 1;
     }
 
-    /** PP.70: same for the status (block/unblock). False when unchanged or no such account. */
+    /** Same for the status (block/unblock). False when unchanged or no such account. */
     public function changeStatusEndingSessions(string $id, string $status): bool
     {
         $stmt = $this->pdo->prepare(
@@ -163,21 +162,21 @@ final class UserRepository extends Repository
         return $stmt->rowCount() === 1;
     }
 
-    /** PP.78: a staff e-mail edit; the new address is unverified and every session ends. */
+    /** A staff e-mail edit; the new address is unverified and every session ends. */
     public function unverifyEmailEndingSessions(string $id): void
     {
         $this->pdo->prepare('UPDATE users SET email_verified_at = NULL, token_version = token_version + 1 WHERE id = :id')
             ->execute(['id' => $id]);
     }
 
-    /** PP.7: marks the address verified; keeps the first verification time. */
+    /** Marks the address verified; keeps the first verification time. */
     public function markEmailVerified(string $id): void
     {
         $this->pdo->prepare('UPDATE users SET email_verified_at = COALESCE(email_verified_at, NOW()) WHERE id = :id')
             ->execute(['id' => $id]);
     }
 
-    /** PP.7: applies a confirmed self e-mail change; the new address counts as verified. PDOException 23000 = address taken. */
+    /** Applies a confirmed self e-mail change; the new address counts as verified. PDOException 23000 = address taken. */
     public function changeEmailVerified(string $id, string $email): void
     {
         $this->pdo->prepare('UPDATE users SET email = :email, email_verified_at = NOW() WHERE id = :id')
@@ -190,7 +189,7 @@ final class UserRepository extends Repository
     }
 
     /**
-     * PP.82: an account nobody can sign in to until the owner sets a password through a link.
+     * An account nobody can sign in to until the owner sets a password through a link.
      * A real bcrypt hash (same algorithm and cost as every other account) of 32 random bytes that
      * are discarded: password_verify() never matches, and it takes as long as for any other account,
      * so the login response time does not reveal accounts without a password.
@@ -231,8 +230,8 @@ final class UserRepository extends Repository
 
         $created = $this->find($id);
         if ($created !== null) {
-            // Każde Konto dostaje własny profil Zawodnika (E0.1) — Zawodnik jest bytem
-            // samodzielnym, ale Konto z rolą "participant" zwykle biega samo za siebie.
+            // Every Konto gets its own Zawodnik profile — a Zawodnik is a standalone
+            // entity, but a Konto with the "participant" role usually runs for themselves.
             (new CompetitorRepository($this->pdo))->ensureForUser($created);
         }
 

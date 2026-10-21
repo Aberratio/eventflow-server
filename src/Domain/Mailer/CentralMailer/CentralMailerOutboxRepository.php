@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Repository;
 
 /**
  * CRUD on `central_mailer_outbox` (see the migration's doc comment for why this
- * table exists — kontrakt-central-mailer.md §6.4). Pure persistence: every
+ * table exists). Pure persistence: every
  * decision about *when* to write which row lives in CentralMailerOutboxService,
  * not here.
  */
@@ -25,7 +25,7 @@ final class CentralMailerOutboxRepository extends Repository
     /**
      * Writes the outbox row — including its deterministic `idempotency_key` —
      * before any HTTP call to Central Mailer is made. This ordering is the whole
-     * point of the outbox (§6.4 point 2): if the process dies right after this
+     * point of the outbox: if the process dies right after this
      * call and before the `POST /emails` response comes back, the row is still
      * there with the same key for a retry to find via findByIdempotencyKey()
      * rather than minting a new one.
@@ -86,8 +86,8 @@ final class CentralMailerOutboxRepository extends Repository
 
     /**
      * The scope the enqueue path checks before ever calling Central Mailer:
-     * (sourceApp, Idempotency-Key) is the pair Central Mailer itself dedupes on
-     * (§6.1), and sourceApp here is implicitly "this whole table", since it only
+     * (sourceApp, Idempotency-Key) is the pair Central Mailer itself dedupes on,
+     * and sourceApp here is implicitly "this whole table", since it only
      * ever holds this platform's own outbound mail.
      */
     public function findByIdempotencyKey(string $idempotencyKey): ?array
@@ -111,7 +111,7 @@ final class CentralMailerOutboxRepository extends Repository
 
     /**
      * Due rows Central Mailer never accepted. The due filter and ordering run in SQL before
-     * LIMIT (PP.18 D3 lesson): a PHP-side filter after LIMIT would starve due rows behind
+     * LIMIT, because a PHP-side filter after LIMIT would starve due rows behind
      * not-yet-due ones. Technical-priority mail (auth links) goes first.
      *
      * @return array<int, array<string, mixed>>
@@ -200,12 +200,12 @@ final class CentralMailerOutboxRepository extends Repository
     }
 
     /**
-     * E1.10 §8 ("Przepustowość: komunikat, nie cisza") — the read this
+     * Mass-send progress ("throughput: a message, not silence") — the read this
      * platform's mass-send progress bar needs: how many outbox rows for one
      * mail type in one Wydarzenie (`contextId`) are still `queued`, how many
      * ended up `sent`, and how many `failed`, plus a catch-all `other` bucket
      * for every other status Central Mailer might report (`pending`,
-     * `processing`, `retry`, `unknown`, §6.3). No new outbox-wide feature here
+     * `processing`, `retry`, `unknown`). No new outbox-wide feature here
      * — just a GROUP BY on the same table CentralMailerOutboxService already
      * writes to.
      *
@@ -231,7 +231,7 @@ final class CentralMailerOutboxRepository extends Repository
     }
 
     /**
-     * B-03 mail log: a read-only, paginated, newest-first view of the outbox for admins (all rows)
+     * Mail log: a read-only, paginated, newest-first view of the outbox for admins (all rows)
      * or one Wydarzenie's organizer (`contextId` forced by the caller). Never selects `html`,
      * `attachments` or `idempotency_key`; the recipient is masked (MailRecipientMask) and
      * `last_error` is returned only when `$includeError` (admin).
@@ -305,7 +305,7 @@ final class CentralMailerOutboxRepository extends Repository
      * Rows accepted by Central Mailer (so they have a `central_mailer_email_id`
      * to poll) whose last known status is not terminal — the reconciliation
      * queue. `sent`/`failed` are terminal from this table's point of view; a
-     * message quarantined `unknown` on Central Mailer's side (§6.3) is
+     * message quarantined `unknown` on Central Mailer's side is
      * deliberately kept in this list, since a human resolving it via
      * `POST /admin/emails/{id}/requeue` will eventually flip it to something
      * terminal and this table should pick that up.

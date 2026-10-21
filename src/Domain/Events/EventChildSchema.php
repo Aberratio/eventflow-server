@@ -9,7 +9,7 @@ use ZmierzymyCzas\Support\InputRules;
 use ZmierzymyCzas\Support\InputValidationException;
 
 /**
- * PP.59: the single place where a client-sent event child row (distance, payment method,
+ * The single place where a client-sent event child row (distance, payment method,
  * merchandise, discount code, gallery album, document, pricing variant) is turned into column
  * values. No SQL identifier is ever derived from input: every column name below is a constant,
  * input keys are only looked up in the specs, and anything else is reported back as an unknown key
@@ -78,7 +78,7 @@ final class EventChildSchema
             'routeElevationProfile' => ['route_elevation_profile', 'text?', 'Profil wysokości', ['max' => 512]],
             'routeGpxUrl' => ['route_gpx_url', 'text?', 'Plik GPX', ['max' => 512]],
             'routeFiles' => ['route_files', 'json?', 'Pliki trasy', []],
-            // system column: the E1.3 capacity counter, only the trusted seeder may set it
+            // system column: the capacity counter, only the trusted seeder may set it
             'registeredCount' => ['registered_count', 'int!d', 'Liczba zapisów', ['default' => 0, 'system' => true]],
         ],
         'pricingVariants' => [

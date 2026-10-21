@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Retention\RetentionConfig;
 
 final class AdminRepository extends Repository
 {
-    /** Retention window (E0.8): entries older than this are neither returned nor kept. */
+    /** Retention window: entries older than this are neither returned nor kept. */
     private const RETENTION_MONTHS = 12;
 
     /** @param array<string, mixed> $filters @return array<int, array<string, mixed>> */
@@ -38,7 +38,7 @@ final class AdminRepository extends Repository
     }
 
     /**
-     * R-05 retention: entries older than RETENTION_MONTHS are deleted by the scheduler job
+     * Retention: entries older than RETENTION_MONTHS are deleted by the scheduler job
      * 'retention.purge' (reads only filter them out). There is deliberately no endpoint to
      * delete a single entry. Idempotent.
      */
@@ -99,8 +99,8 @@ final class AdminRepository extends Repository
 
     /** @param array<string, mixed> $data */
     /**
-     * `metadata` (E8.1): the sole exception to Z2 ("źródłem prawdy jest
-     * identyfikator, nie kopia") in this whole log — a nullable JSON blob for
+     * `metadata`: the sole exception, in this whole log, to the rule that the
+     * identifier (not a copy) is the source of truth — a nullable JSON blob for
      * event types where the source records themselves stop being editable
      * bytes after the action (today: only competitor merges), so the log
      * becomes the only place the pre-action state survives. Every other
@@ -132,7 +132,7 @@ final class AdminRepository extends Repository
     }
 
     /**
-     * G-05: sales dashboard for the admin overview. Revenue counts orders that
+     * Sales dashboard for the admin overview. Revenue counts orders that
      * were actually paid (paid / shipped / delivered); the last 12 calendar
      * months are always returned (zero-filled), oldest first. `fill` is the
      * chart colour of the status slice.
@@ -185,13 +185,13 @@ final class AdminRepository extends Repository
     }
 
     /**
-     * E8.3 (spec 21 Answer §6): the minimal, explicitly-closed platform-admin
-     * cross-section over Events/Organizers — "liczba Wydarzeń wg statusu
-     * publikacyjnego z ticketu 08 [E1.1], liczba Organizatorów, liczba
-     * aktywnych pakietów z ticketu 16 [E5.6]". Nothing beyond these three
+     * The minimal, explicitly-closed platform-admin
+     * cross-section over Events/Organizers: the number of Events by publication
+     * status, the number of Organizers and the number of active packages.
+     * Nothing beyond these three
      * numbers — the spec is explicit that no more is required.
      *
-     * eventsByStatus: GROUP BY over the E1.1 `publication_status` axis,
+     * eventsByStatus: GROUP BY over the `publication_status` axis,
      * excluding soft-deleted Events (`deleted_at IS NULL`) — same convention
      * as every other Event count in this repository (see byOrganizer() /
      * list()'s COUNT(*) above). Every enum value is always present, even at
@@ -199,18 +199,18 @@ final class AdminRepository extends Repository
      * for missing keys.
      *
      * organizerCount: `role = 'organizer'` exactly, not `staffRoles` — the
-     * spec's plain reading ("liczba Organizatorów") means the Organizer
+     * plain reading of "number of Organizers" means the Organizer
      * role, not staff who can *also* manage Events (moderator/admin/
      * superadmin already get their own visibility elsewhere in this panel).
      *
-     * activePackageCredits: `organizer_package_credits` (E5.6) is a
+     * activePackageCredits: `organizer_package_credits` is a
      * materialized "right to submit one Event" counter, not a row-per-
      * package table — "aktywne pakiety" (packages not yet consumed by a
-     * Draft -> Submitted transition, see 053_e5_6_organizer_package_credit.sql)
+     * Draft -> Submitted transition, see the organizer package credit migration)
      * is read here as the *sum* of that counter across all users: each unit
      * of credit is literally one still-unconsumed package, so the sum is the
      * total count of active packages outstanding in the system right now —
-     * a more literal reading of "liczba aktywnych pakietów" than "how many
+     * a more literal reading of "number of active packages" than "how many
      * distinct organizers happen to be holding at least one".
      *
      * @return array{eventsByStatus: array<int, array{status: string, count: int}>, organizerCount: int, activePackageCredits: int}

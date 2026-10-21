@@ -80,6 +80,7 @@ use ZmierzymyCzas\Domain\Shop\ShopRepository;
 use ZmierzymyCzas\Domain\Care\CareRepository;
 use ZmierzymyCzas\Domain\Competitors\CompetitorMergeService;
 use ZmierzymyCzas\Domain\Competitors\CompetitorDuplicatePresenter;
+use ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Users\NewAccountInput;
 use ZmierzymyCzas\Domain\Users\UserRepository;
@@ -91,6 +92,7 @@ use ZmierzymyCzas\Http\Access\EventAccess;
 use ZmierzymyCzas\Http\Access\RegistrationAccess;
 use ZmierzymyCzas\Http\Access\Roles;
 use ZmierzymyCzas\Http\Controller\BibNumberController;
+use ZmierzymyCzas\Http\Controller\CompetitorDuplicateController;
 use ZmierzymyCzas\Http\Controller\DiscountCodeBatchController;
 use ZmierzymyCzas\Http\Controller\EventTeamController;
 use ZmierzymyCzas\Http\Controller\RegistrationChangeController;
@@ -378,6 +380,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $registrationChangeController = new RegistrationChangeController($registrations, $events, $registrationAccess, $activityLogger);
     $bibNumberController = new BibNumberController($events, $registrations, $eventAccess);
     $discountCodeBatchController = new DiscountCodeBatchController($events, $discountBatches, $eventAccess, $activityLogger);
+    $competitorDuplicateController = new CompetitorDuplicateController($competitors, $care, new CompetitorDuplicateReportRepository($pdo));
 
     $publicUploadBase = '/' . trim((string) Env::get('APP_UPLOAD_PUBLIC_BASE', '/uploads'), '/');
     if (!str_starts_with($publicUploadBase, '/api/v1/')) {
@@ -397,7 +400,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
     // Convention: routes behind a plain `AuthMiddleware($jwt)` only require a valid session. Authorization that depends on
     // the resource (event Team, registration owner, ...) is decided per request inside the handler.
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync, $registrationChangeController, $discountCodeBatchController, $bibNumberController): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync, $registrationChangeController, $discountCodeBatchController, $bibNumberController, $competitorDuplicateController): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // A cheap round trip on the connection index.php already opened.
             try {
@@ -4485,56 +4488,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // Zawodnik: a start-data profile, a standalone entity - may exist without a Konto.
         // Opieka: an N:M relation Konto <-> Zawodnik, generalising the former Authorizations (Konto -> Konto).
 
-        // Check potential duplicates by first name + last name + date of birth (a warning, not a block).
-        $api->get('/competitors/duplicates', function (Request $request, Response $response) use ($competitors, $query): Response {
-            $filters = $query($request);
-            $firstName = trim((string) ($filters['firstName'] ?? ''));
-            $lastName = trim((string) ($filters['lastName'] ?? ''));
-            if ($firstName === '' || $lastName === '') {
-                return JsonResponder::ok($response, []);
-            }
-            $birthDate = ($filters['birthDate'] ?? '') !== '' ? (string) $filters['birthDate'] : null;
-            return JsonResponder::ok($response, CompetitorDuplicatePresenter::present($competitors->findDuplicates($firstName, $lastName, $birthDate)));
-        })->add(new AuthMiddleware($jwt));
+        $api->get('/competitors/duplicates', [$competitorDuplicateController, 'find'])->add(new AuthMiddleware($jwt));
 
-        // A caregiver (Opieka / own profile) or organizer/staff reports that profile
-        // {id} is a duplicate of another. The report itself merges nothing - a Moderator/Admin sees it
-        // in the GET /admin/competitors/duplicate-reports queue next to profile merging.
-        $api->post('/competitors/{id}/duplicate-reports', function (Request $request, Response $response, array $args) use ($pdo, $competitors, $care, $body, $staffRoles): Response {
-            $auth = (array) $request->getAttribute('auth');
-            $kontoId = (string) ($auth['sub'] ?? '');
-            $role = (string) ($auth['role'] ?? '');
-            $id = (string) ($args['id'] ?? '');
-
-            if ($competitors->find($id) === null) {
-                return JsonResponder::error($response, 'not_found', 'Zawodnik nie istnieje.', 404);
-            }
-            $reports = new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo);
-            // Caregiver - their own wards; organizer - only a Zawodnik with a Zapis on their event
-            // (canManageEvent is based on organizerId) or an active Co-manager of such an event
-            // (any global role); Moderator/Admin - anyone.
-            $allowed = in_array($role, $staffRoles, true)
-                || $care->canRegister($kontoId, $id)
-                || ($role === 'organizer' && $reports->competitorRegisteredOnOrganizersEvent($id, $kontoId))
-                || $reports->competitorRegisteredOnCoManagedEvent($id, $kontoId);
-            if (!$allowed) {
-                return JsonResponder::error($response, 'forbidden', 'Nie masz Opieki nad tym Zawodnikiem ani Zapisu na Twoim wydarzeniu.', 403);
-            }
-
-            $data = $body($request);
-            $duplicateOfId = trim((string) ($data['duplicateOfId'] ?? ''));
-            if ($duplicateOfId === '' || $duplicateOfId === $id) {
-                return JsonResponder::error($response, 'validation_error', 'Wskaż inny profil Zawodnika jako duplikat (duplicateOfId).', 422);
-            }
-            if ($competitors->find($duplicateOfId) === null) {
-                return JsonResponder::error($response, 'not_found', 'Wskazany profil Zawodnika nie istnieje.', 404);
-            }
-
-            $report = $reports
-                ->create($id, $duplicateOfId, $kontoId, $role, (string) ($data['note'] ?? ''));
-
-            return JsonResponder::ok($response, $report, 'Zgłoszenie duplikatu zostało przekazane do weryfikacji.', 201);
-        })->add(new AuthMiddleware($jwt));
+        $api->post('/competitors/{id}/duplicate-reports', [$competitorDuplicateController, 'report'])->add(new AuthMiddleware($jwt));
 
         // Fetch: Zawodnicy in my care (myCompetitors) + Konta that have care over me (caregivers).
         $api->get('/care', function (Request $request, Response $response) use ($competitors, $care): Response {
@@ -4717,35 +4673,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
         })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
 
-        // Queue of open duplicate reports - Moderator/Admin only, like merging.
-        $api->get('/admin/competitors/duplicate-reports', function (Request $request, Response $response) use ($pdo, $query): Response {
-            $status = (string) ($query($request)['status'] ?? 'open');
-            if (!in_array($status, ['open', 'rejected', 'merged', 'all'], true)) {
-                return JsonResponder::error($response, 'validation_error', 'status: open, rejected, merged lub all.', 422);
-            }
+        $api->get('/admin/competitors/duplicate-reports', [$competitorDuplicateController, 'queue'])->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
 
-            return JsonResponder::ok($response, (new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo))->list($status));
-        })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
-
-        // Dismissing a report (the merged status is set only by merging profiles).
-        $api->patch('/admin/competitors/duplicate-reports/{id}', function (Request $request, Response $response, array $args) use ($pdo, $body): Response {
-            $auth = (array) $request->getAttribute('auth');
-            $data = $body($request);
-            if ((string) ($data['status'] ?? '') !== 'rejected') {
-                return JsonResponder::error($response, 'validation_error', 'Dozwolona zmiana: status = rejected.', 422);
-            }
-            try {
-                $report = (new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo))
-                    ->reject((string) ($args['id'] ?? ''), (string) ($auth['sub'] ?? ''), (string) ($data['reason'] ?? ''));
-            } catch (\DomainException $e) {
-                return JsonResponder::error($response, 'report_already_resolved', 'Zgłoszenie zostało już rozstrzygnięte.', 409);
-            }
-            if ($report === null) {
-                return JsonResponder::error($response, 'not_found', 'Zgłoszenie nie istnieje.', 404);
-            }
-
-            return JsonResponder::ok($response, $report);
-        })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
+        $api->patch('/admin/competitors/duplicate-reports/{id}', [$competitorDuplicateController, 'dismiss'])->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
 
         // Performs the merge - or holds it if a field-by-field decision is missing
         // (`field_decisions_required`) or a Zapis conflict is unresolved

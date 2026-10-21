@@ -492,7 +492,7 @@ final class ResultRepositoryTest extends TestCase
         $entry = current(array_filter($rows, static fn (array $r): bool => $r['id'] === $created['id']));
 
         self::assertNotFalse($entry);
-        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel($competitorId), $entry['userName']);
         self::assertStringNotContainsString('Rekord', $entry['userName']);
     }
 
@@ -532,7 +532,7 @@ final class ResultRepositoryTest extends TestCase
         $entry = current(array_filter($rows, static fn (array $r): bool => $r['id'] === $created['id']));
 
         self::assertNotFalse($entry);
-        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel((string) $competitor['id']), $entry['userName']);
     }
 
     /**
@@ -555,7 +555,7 @@ final class ResultRepositoryTest extends TestCase
         $entry = current(array_filter($page['data'], static fn (array $r): bool => $r['id'] === $created['id']));
 
         self::assertNotFalse($entry);
-        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel($competitorId), $entry['userName']);
         self::assertStringNotContainsString('Lista', $entry['userName']);
     }
 
@@ -594,7 +594,7 @@ final class ResultRepositoryTest extends TestCase
         $entry = current(array_filter($page['data'], static fn (array $r): bool => $r['id'] === $created['id']));
 
         self::assertNotFalse($entry);
-        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel((string) $competitor['id']), $entry['userName']);
     }
 
     /**
@@ -616,7 +616,7 @@ final class ResultRepositoryTest extends TestCase
         $entry = current(array_filter($rows, static fn (array $r): bool => $r['id'] === $created['id']));
 
         self::assertNotFalse($entry);
-        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel($competitorId), $entry['userName']);
         self::assertStringNotContainsString('Uzytkownik', $entry['userName']);
     }
 
@@ -655,7 +655,7 @@ final class ResultRepositoryTest extends TestCase
         $entry = current(array_filter($rows, static fn (array $r): bool => $r['id'] === $created['id']));
 
         self::assertNotFalse($entry);
-        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel((string) $competitor['id']), $entry['userName']);
     }
 
     /**

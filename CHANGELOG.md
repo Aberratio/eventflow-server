@@ -54,4 +54,12 @@ as the first version.
   match. `APP_VERSION` only overrides the version now: clear the old
   `2026xxxx-x` placeholder from existing `.env` files.
 
+### Fixed
+
+- An unknown event slug returns a 404 error response (never 200 with empty data).
+- Error responses no longer leak exception messages or stack traces outside
+  local debug mode (`APP_DEBUG=true` with `APP_ENV=local`).
+- CORS preflight allows `PUT` (together with GET, POST, PATCH, DELETE and
+  OPTIONS).
+
 [Unreleased]: https://github.com/Aberratio/eventflow-server/commits/master

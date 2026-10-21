@@ -373,3 +373,7 @@ VITE_API_URL=http://localhost:8081/api/v1
 The React app uses the real HTTP adapter by default and falls back to
 `http://localhost:8081/api/v1` when `VITE_API_URL` is not set. Override
 `VITE_API_URL` only when the API is available at a different address.
+
+## License
+
+All rights reserved. The source is published for portfolio and review purposes only; see [LICENSE](LICENSE).

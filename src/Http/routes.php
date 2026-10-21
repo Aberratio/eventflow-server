@@ -41,7 +41,6 @@ use ZmierzymyCzas\Domain\Events\PublicEventPresenter;
 use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Payments\Http\CurlHttpClient;
-use ZmierzymyCzas\Domain\Payments\SettlementReport;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowConfig;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowGateway;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowNotification;
@@ -96,6 +95,7 @@ use ZmierzymyCzas\Http\Controller\CompetitorDuplicateController;
 use ZmierzymyCzas\Http\Controller\DiscountCodeBatchController;
 use ZmierzymyCzas\Http\Controller\EventTeamController;
 use ZmierzymyCzas\Http\Controller\RegistrationChangeController;
+use ZmierzymyCzas\Http\Controller\SettlementController;
 use ZmierzymyCzas\Http\DomainErrorCode;
 use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
@@ -381,6 +381,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $bibNumberController = new BibNumberController($events, $registrations, $eventAccess);
     $discountCodeBatchController = new DiscountCodeBatchController($events, $discountBatches, $eventAccess, $activityLogger);
     $competitorDuplicateController = new CompetitorDuplicateController($competitors, $care, new CompetitorDuplicateReportRepository($pdo));
+    $settlementController = new SettlementController($pdo, $activityLogger);
 
     $publicUploadBase = '/' . trim((string) Env::get('APP_UPLOAD_PUBLIC_BASE', '/uploads'), '/');
     if (!str_starts_with($publicUploadBase, '/api/v1/')) {
@@ -400,7 +401,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
     // Convention: routes behind a plain `AuthMiddleware($jwt)` only require a valid session. Authorization that depends on
     // the resource (event Team, registration owner, ...) is decided per request inside the handler.
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync, $registrationChangeController, $discountCodeBatchController, $bibNumberController, $competitorDuplicateController): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync, $registrationChangeController, $discountCodeBatchController, $bibNumberController, $competitorDuplicateController, $settlementController): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // A cheap round trip on the connection index.php already opened.
             try {
@@ -4061,80 +4062,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         $api->get('/admin/platform-stats', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->platformStats()))
             ->add(new AuthMiddleware($jwt, $adminRoles));
 
-        // Settlement report (gateway route): gateway payments minus refunds minus commission = amount
-        // to pay out manually to the organizer. Admin-only. Amounts in grosze. CSV/XLSX export uses the same
-        // machinery as the start-list export.
-        $parseSettlementQuery = static function (array $params): array {
-            $dateFrom = trim((string) ($params['dateFrom'] ?? ''));
-            $dateTo = trim((string) ($params['dateTo'] ?? ''));
-            foreach (['dateFrom' => $dateFrom, 'dateTo' => $dateTo] as $field => $value) {
-                $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d', $value);
-                if ($parsed === false || $parsed->format('Y-m-d') !== $value) {
-                    return ['error' => ['validation_error', 'Podaj okres rozliczenia w formacie RRRR-MM-DD (' . $field . ').']];
-                }
-            }
-            if ($dateFrom > $dateTo) {
-                return ['error' => ['validation_error', 'Data początkowa nie może być późniejsza niż końcowa.']];
-            }
-            $eventId = trim((string) ($params['eventId'] ?? ''));
-
-            return ['dateFrom' => $dateFrom, 'dateTo' => $dateTo, 'eventId' => $eventId !== '' ? $eventId : null];
-        };
-        $api->get('/admin/settlements', function (Request $request, Response $response) use ($pdo, $parseSettlementQuery) {
-            $settlementReport = new SettlementReport($pdo, max(0, (int) Env::get('SETTLEMENT_COMMISSION_BPS', 0)));
-            $parsed = $parseSettlementQuery($request->getQueryParams());
-            if (isset($parsed['error'])) {
-                return JsonResponder::error($response, $parsed['error'][0], $parsed['error'][1], 422);
-            }
-
-            return JsonResponder::ok($response, $settlementReport->report($parsed['dateFrom'], $parsed['dateTo'], $parsed['eventId']));
-        })->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->get('/admin/settlements/export', function (Request $request, Response $response) use ($pdo, $parseSettlementQuery, $logActivity) {
-            $settlementReport = new SettlementReport($pdo, max(0, (int) Env::get('SETTLEMENT_COMMISSION_BPS', 0)));
-            $params = $request->getQueryParams();
-            $format = strtolower((string) ($params['format'] ?? 'csv'));
-            if (!in_array($format, ['csv', 'xlsx'], true)) {
-                return JsonResponder::error($response, 'validation_error', 'Nieobsługiwany format eksportu. Dozwolone: csv, xlsx.', 422);
-            }
-            $parsed = $parseSettlementQuery($params);
-            if (isset($parsed['error'])) {
-                return JsonResponder::error($response, $parsed['error'][0], $parsed['error'][1], 422);
-            }
-
-            $report = $settlementReport->report($parsed['dateFrom'], $parsed['dateTo'], $parsed['eventId']);
-            $export = SettlementReport::exportRows($report['lines'], $report['summary']);
-            try {
-                $fileContent = $format === 'xlsx'
-                    ? StartListExportFormatter::toXlsx($export['columns'], $export['rows'])
-                    : StartListExportFormatter::toCsv($export['columns'], $export['rows']);
-            } catch (\RuntimeException $e) {
-                if ($e->getMessage() === 'xlsx_not_supported') {
-                    return JsonResponder::error($response, 'xlsx_not_supported', 'Serwer PHP nie obsluguje zapisu XLSX (brak rozszerzenia ZipArchive). Uzyj eksportu CSV.', 500);
-                }
-                throw $e;
-            }
-
-            $logActivity(
-                (array) $request->getAttribute('auth'),
-                'settlement_exported',
-                sprintf('Eksport raportu rozliczeniowego (%s) za okres %s - %s', strtoupper($format), $parsed['dateFrom'], $parsed['dateTo']),
-                'settlement',
-                $parsed['eventId'] ?? 'all',
-                ''
-            );
-
-            $filenameBase = 'rozliczenie-' . $parsed['dateFrom'] . '_' . $parsed['dateTo'];
-            $response->getBody()->write($fileContent);
-            if ($format === 'xlsx') {
-                return $response
-                    ->withHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-                    ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.xlsx"');
-            }
-
-            return $response
-                ->withHeader('Content-Type', 'text/csv; charset=windows-1250')
-                ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.csv"');
-        })->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->get('/admin/settlements', [$settlementController, 'report'])->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->get('/admin/settlements/export', [$settlementController, 'export'])->add(new AuthMiddleware($jwt, $adminRoles));
 
         // Bilet is a view of Zapis, not a stored entity — derived from registrations.
         // Self or staff — same as /users/{userId}/registrations.

@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Domain\Mailer\CriticalMails;
 use PDO;
 
 /**
- * Reply-To for event-scoped mails (17 §4): the organizer's contact e-mail of the Wydarzenie
+ * Reply-To for event-scoped mails: the organizer's contact e-mail of the Wydarzenie
  * (`events.organizer_contact` JSON, `email` key), else the e-mail of the organizer's account
  * (`users.email` via `events.organizer_id`). Null when neither is a valid address - the mail
  * then goes out without replyTo and Central Mailer applies its global one.

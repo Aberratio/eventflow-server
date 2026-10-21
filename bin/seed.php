@@ -194,7 +194,7 @@ echo "Seeded {$recorded} row(s), all tracked in `" . SeedManifest::TABLE . "` fo
 if ($env === 'local') {
     echo "Demo logins: jan@example.com / marek@timing.pl / admin@zmierzymyczas.pl (password: demo1234)\n";
 } else {
-    // PP.90: staging is reachable from the internet; the seeders' well-known password must not survive there.
+    // Staging is reachable from the internet; the seeders' well-known password must not survive there.
     // SEED_DEMO_PASSWORD (this server's .env only) gives the demo accounts a secret password instead.
     $demoPassword = (string) Env::get('SEED_DEMO_PASSWORD', '');
     if ($demoPassword === '') {

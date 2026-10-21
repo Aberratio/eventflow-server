@@ -153,7 +153,7 @@ final class FixtureFieldFiller
      * `$event` here is one of two shapes depending on the caller: raw pre-import JSON
      * fixture data (key `status`, old vocabulary — active/past/archived/awaiting_approval)
      * when called from fill(), or an already-hydrated EventRepository row (key
-     * `publicationStatus`, E1.1 vocabulary — published/finished/submitted) when called via
+     * `publicationStatus`, vocabulary — published/finished/submitted) when called via
      * resultsForRegistrations() from EventFixtureImporter::topUpFromDatabase(). Both are
      * accepted so this doesn't silently misclassify hydrated events as "upcoming".
      *

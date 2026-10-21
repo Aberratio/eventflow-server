@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * B-03 (spec 17, umowa §4.4.12/§5.19): template preview (POST …/mail-templates/{mailType}/preview, global and
+ * Template preview (POST …/mail-templates/{mailType}/preview, global and
  * per event) and the read-only mail log (GET /admin/mail-log, GET /events/{id}/mail-log) — response shapes
  * and RBAC, through the real routes.
  */

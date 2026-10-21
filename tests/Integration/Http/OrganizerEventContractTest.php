@@ -189,7 +189,7 @@ final class OrganizerEventContractTest extends HttpTestCase
         self::assertSame(200, $submitResp->getStatusCode());
         self::assertSame('submitted', $this->json($submitResp)['data']['publicationStatus']);
 
-        // Admin approves — E1.1: this lands directly on `published`, there is no
+        // Admin approves — this lands directly on `published`, there is no
         // separate publish step any more.
         $approveResp = $this->request(
             'POST',
@@ -337,7 +337,7 @@ final class OrganizerEventContractTest extends HttpTestCase
     }
 
     /**
-     * E3.2 (issue 12 §3): enabling "Biuro Zawodów" without pasting an organization
+     * Enabling "Biuro Zawodów" without pasting an organization
      * token is rejected — the platform never creates a BZ organization itself, so
      * there is nothing to fall back to.
      */
@@ -371,9 +371,9 @@ final class OrganizerEventContractTest extends HttpTestCase
     }
 
     /**
-     * E3.2: disabling never requires a token, and the token round-trips through the
+     * Disabling never requires a token, and the token round-trips through the
      * real HTTP PATCH route (not just the repository) — the exact "generic PATCH
-     * /events/{id}" wiring the ticket asks for.
+     * /events/{id}" wiring expected here.
      */
     public function testBzIntegrationTokenRoundTripsAndDisableNeedsNoToken(): void
     {
@@ -419,7 +419,7 @@ final class OrganizerEventContractTest extends HttpTestCase
     }
 
     /**
-     * E3.2: only the owning organizer (or admin) may write the BZ config — same
+     * Only the owning organizer (or admin) may write the BZ config — same
      * $canManageEvent gate as every other Event-scoped organizer mutation.
      */
     public function testOtherOrganizerCannotWriteBzIntegrationConfig(): void
@@ -443,7 +443,7 @@ final class OrganizerEventContractTest extends HttpTestCase
     }
 
     /**
-     * E5.6 (issue 16 §2): submitting with an available "pakiet organizatora"
+     * Submitting with an available "pakiet organizatora"
      * credit succeeds and spends exactly one credit — never at Draft creation,
      * only at the Szkic -> Zgloszone transition itself.
      */
@@ -474,7 +474,7 @@ final class OrganizerEventContractTest extends HttpTestCase
     }
 
     /**
-     * E5.6: with zero available credit, the submit is rejected with a clear 4xx
+     * With zero available credit, the submit is rejected with a clear 4xx
      * business error, the event stays in Draft, and the (already-zero) credit
      * counter is left untouched — no partial/desynced state.
      */
@@ -510,7 +510,7 @@ final class OrganizerEventContractTest extends HttpTestCase
     }
 
     /**
-     * E5.6: rejection by a moderator refunds exactly one credit back to the
+     * Rejection by a moderator refunds exactly one credit back to the
      * organizer — the platform decided the event isn't good enough, so the
      * organizer shouldn't be out a credit for trying.
      */
@@ -542,7 +542,7 @@ final class OrganizerEventContractTest extends HttpTestCase
     }
 
     /**
-     * E5.6: approval is a one-shot consumption model — the credit was already
+     * Approval is a one-shot consumption model — the credit was already
      * spent at submit(), and approve() (Submitted -> Published) must not touch
      * it again in either direction.
      */
@@ -636,7 +636,7 @@ final class OrganizerEventContractTest extends HttpTestCase
     }
 
     /**
-     * E1.1 permission matrix: a soft-deleted event (`deletedAt` set) becomes
+     * Permission matrix: a soft-deleted event (`deletedAt` set) becomes
      * invisible to everyone except superadmin — even its own owning organizer
      * and a plain admin lose read access (`canViewEvent`/`canManageEvent` in
      * routes.php both special-case `deletedAt !== null`). Nothing in the test
@@ -712,7 +712,7 @@ final class OrganizerEventContractTest extends HttpTestCase
     }
 
     /**
-     * E1.1 dropped the free-text `status` column entirely (see
+     * The free-text `status` column was dropped entirely (see
      * 031_e11_event_lifecycle.sql), so there is no ENUM to patch in place any more — the
      * schema this test needs only exists once every migration has actually run. Calling
      * the real Migrator (idempotent, no ledger — see its docblock) is the only thing that
@@ -724,7 +724,7 @@ final class OrganizerEventContractTest extends HttpTestCase
     }
 
     /**
-     * E5.6: there is no public write API for organizer_package_credits other
+     * There is no public write API for organizer_package_credits other
      * than a real shop purchase (OrderRepository::create(), covered separately
      * in ShopOrderContractTest) — tests here that need a starting credit balance
      * set it directly, the same way this suite already sets `eventLimit` via
@@ -753,7 +753,7 @@ final class OrganizerEventContractTest extends HttpTestCase
             'discipline' => 'running',
             // Relative to "today": a hard-coded past date silently flips the
             // event to 'finished' via EventRepository::lazilyFinishPastEvents()
-            // (E1.1) on every read, which used to break every test in this
+            // on every read, which used to break every test in this
             // file once the fixed date it was written against passed.
             'date' => (new \DateTimeImmutable('+90 days'))->format('Y-m-d'),
             'location' => 'Stadion Testowy',

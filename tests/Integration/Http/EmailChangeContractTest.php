@@ -12,7 +12,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.7 (7c): verified self e-mail change. Central Mailer is "configured" with an unusable URL scheme
+ * Verified self e-mail change. Central Mailer is "configured" with an unusable URL scheme
  * (see PasswordResetContractTest): the outbox row is written, the HTTP call fails at once and the
  * route swallows it.
  */

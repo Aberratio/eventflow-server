@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Domain\Auth;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E3.1: "Klucz API per aplikacja" (wzorzec Central Mailera) — static API keys for
+ * Per-application API keys (modelled on Central Mailer) — static API keys for
  * external applications calling INTO this platform (Biuro Zawodów first, more
  * later), read once from the environment (`.env` / real env vars — see
  * `.env.example`). Deliberately generic: adding a second calling application

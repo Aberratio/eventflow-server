@@ -9,7 +9,7 @@ use Psr\Log\NullLogger;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * R-05: retention periods of the 'retention.purge' job, read from the environment.
+ * Retention periods of the 'retention.purge' job, read from the environment.
  * A value that is not a positive integer falls back to the default and logs a warning.
  */
 final class RetentionConfig

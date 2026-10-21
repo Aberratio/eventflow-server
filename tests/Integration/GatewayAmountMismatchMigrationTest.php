@@ -11,7 +11,7 @@ use ZmierzymyCzas\Database\Migrator;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * PP.6: migration 063 adds the `amount_mismatch` status to
+ * Migration 063 adds the `amount_mismatch` status to
  * registration_gateway_transactions.status — MODIFY only, portable and idempotent.
  */
 final class GatewayAmountMismatchMigrationTest extends TestCase

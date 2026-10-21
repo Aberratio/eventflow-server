@@ -8,7 +8,7 @@ use ZmierzymyCzas\Support\HtmlSanitizer;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * B-06: the storefront footer links /info/regulamin, /info/polityka-prywatnosci and /info/rodo;
+ * The storefront footer links /info/regulamin, /info/polityka-prywatnosci and /info/rodo;
  * migration 080 seeds those three CMS pages (published, not duplicated in the footer list) so the
  * links resolve. Their rich-text body must already be what HtmlSanitizer would store, so the first
  * admin edit does not silently rewrite it.

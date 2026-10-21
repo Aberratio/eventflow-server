@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Domain\Mailer\CriticalMails;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * CRUD on `mail_templates` plus the resolution rule from 17-katalog-maili §5:
+ * CRUD on `mail_templates` plus the resolution rule:
  * an organizer's per-Wydarzenie override wins when one exists, otherwise the
  * platform falls back to the Admin's global default, silently and
  * automatically — never a blocked send. `event_id = ''` is this table's
@@ -74,7 +74,7 @@ final class MailTemplateRepository extends Repository
     }
 
     /**
-     * B-03 preview: renders a template with the SAME MailRenderer the send path uses
+     * Preview: renders a template with the SAME MailRenderer the send path uses
      * (CriticalMailer::send()), over example variables of the mail type. Nothing is written.
      * `$subject`/`$bodyHtml` are the unsaved draft; a null part falls back to the effective
      * saved template (event override > global > catalog default). A placeholder outside the
@@ -126,7 +126,7 @@ final class MailTemplateRepository extends Repository
     }
 
     /**
-     * Admin-only global default (17 §5: pozycje 1-3, 12 are edited exclusively
+     * Admin-only global default (items 1-3, 12 are edited exclusively
      * this way; 4-11/13-14 also have a global row as the organizer's fallback).
      *
      * @return array<string, mixed>
@@ -138,7 +138,7 @@ final class MailTemplateRepository extends Repository
 
     /**
      * Organizer override for one Wydarzenie. Rejected outright for a systemic
-     * mail type (1-3, 12) — those are "nietykalne dla organizatora" per §5,
+     * mail type (1-3, 12) — those are untouchable for the organizer,
      * not just hidden in a UI that a direct API call could still bypass.
      *
      * @return array<string, mixed>
@@ -167,7 +167,7 @@ final class MailTemplateRepository extends Repository
      * whichever row applies (override or fallback) plus a flag telling the
      * caller whether it is actually overridden — the minimal read an
      * organizer-facing template editor screen needs, without a frontend build
-     * in this ticket (server-only, like E1.6-E1.9 before it).
+     * (server-only).
      *
      * @return array<int, array{mailType: string, subject: string, bodyHtml: string, version: int, source: string, overridable: bool}>
      */

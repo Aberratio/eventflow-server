@@ -18,7 +18,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E6.3 (issue 15 §3): the full recursive condition-tree evaluator, plus its
+ * The full recursive condition-tree evaluator, plus its
  * wiring into ChallengeRepository::checkCompletion()/hydrateParticipation()
  * (isCompleted now real tree evaluation, not the legacy flat
  * `rule.minCompleted` count — see ChallengeRepository::isChallengeCompletedForUser()).
@@ -232,7 +232,7 @@ final class ChallengeConditionTreeEvaluatorTest extends TestCase
     }
 
     /**
-     * E6.4 (issue 15 §3, gap fixed here): the "ścieżka manualna dla dowodu" -
+     * The "ścieżka manualna dla dowodu" -
      * a Moderator-approved `challenge_entries` row with `source = 'manual'`
      * for an EXTERNAL Event (no Dystans, never had any registrations, so it
      * can never have a `results` row) must still satisfy an `event_threshold`
@@ -354,7 +354,7 @@ final class ChallengeConditionTreeEvaluatorTest extends TestCase
         self::assertFalse($this->evaluator->evaluateNode($node, $competitor['id'], $memo), 'One Event backed by both a result and a manual entry must still count once.');
     }
 
-    // --- point_threshold (delegates to E6.2's scorer) -----------------------
+    // --- point_threshold (delegates to the points scorer) -----------------------
 
     public function testPointThresholdDelegatesToScorer(): void
     {
@@ -659,8 +659,8 @@ final class ChallengeConditionTreeEvaluatorTest extends TestCase
     /**
      * A tree that is still shaped like the plain default (event_threshold,
      * no window) but has drifted from the flat `events` list
-     * (conditionTreeMatchesEvents = false, per E6.2) must still be evaluated
-     * automatically - E6.3 deliberately does not block completion on this
+     * (conditionTreeMatchesEvents = false) must still be evaluated
+     * automatically - the evaluator deliberately does not block completion on this
      * flag, it only logs a warning (see isChallengeCompletedForUser()'s doc
      * comment). This test proves completion still computes correctly against
      * the (possibly stale) tree rather than refusing to run.

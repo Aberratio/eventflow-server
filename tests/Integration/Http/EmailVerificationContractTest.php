@@ -13,7 +13,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.7 (7c): e-mail verification. Central Mailer is "configured" with an unusable URL scheme so the
+ * E-mail verification. Central Mailer is "configured" with an unusable URL scheme so the
  * outbox row (idempotency key, html with the link) is written and the HTTP call then fails at once;
  * the routes must swallow that failure (see PasswordResetContractTest).
  */

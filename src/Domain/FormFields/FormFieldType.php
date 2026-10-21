@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\FormFields;
 
 /**
- * Zamknięty katalog siedmiu typów pola własnego (model-formularza-zapisow.md
- * §4). Walidacja wynika wyłącznie z typu — nie ma własnych wyrażeń
- * regularnych ani formatów (§4: "Klient sam napisał 'bez walidacji'").
+ * Closed catalog of the seven custom-field types. Validation follows
+ * from the type alone — there are no custom regular
+ * expressions or formats (the client themselves wrote "no validation").
  *
- * Świadomie brak typu "plik" (§4) — pominięte na stałe, nie kwestia
- * konfiguracji.
+ * There is deliberately no "file" type — permanently left out, not a matter of
+ * configuration.
  */
 final class FormFieldType
 {
@@ -42,10 +42,10 @@ final class FormFieldType
     }
 
     /**
-     * Waliduje jedną odpowiedź na pole własne. Rzuca InvalidArgumentException
-     * z komunikatem po polsku przy błędzie, żeby routes.php mogło go bez zmian
-     * przekazać jako 422 (mirror FormFieldRepository/MailTemplateRepository
-     * stylu walidacji w tym repo).
+     * Validates one answer to a custom field. Throws InvalidArgumentException
+     * with a Polish message on error, so that routes.php can pass it on
+     * unchanged as a 422 (mirrors the validation style of FormFieldRepository/MailTemplateRepository
+     * in this repo).
      *
      * @param array{maxLength?: int, min?: int|float, max?: int|float} $validationConfig
      * @param array<int, array{key: string, label: string, price: float}> $options

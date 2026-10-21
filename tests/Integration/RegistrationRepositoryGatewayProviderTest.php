@@ -13,7 +13,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E1.7: RegistrationRepository now takes two independent gateways (Tpay and
+ * RegistrationRepository now takes two independent gateways (Tpay and
  * PayNow, both just PaymentGatewayInterface) and picks between them per
  * Wydarzenie via `payment_config.provider` — this is the selection logic
  * itself (business-logic-agnostic to which concrete gateway either fake
@@ -114,7 +114,7 @@ final class RegistrationRepositoryGatewayProviderTest extends TestCase
     }
 
     /**
-     * The crux of the ticket's design: a refund must call the gateway that
+     * The crux of the design: a refund must call the gateway that
      * actually took the payment — read off the frozen transaction row — even
      * if the organizer reconfigures the Wydarzenie to the other provider in
      * between (a hypothetical, but the transaction row is what must decide,

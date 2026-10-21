@@ -7,15 +7,15 @@ namespace ZmierzymyCzas\Domain\Mailer\CentralMailer;
 use Psr\Log\LoggerInterface;
 
 /**
- * The single entry point E1.10 (and anything else that needs to send mail
+ * The single entry point the mail layer (and anything else that needs to send mail
  * through Central Mailer) should call — ties CentralMailerOutboxRepository and
  * CentralMailerClientInterface together into the outbox pattern recommended by
- * kontrakt-central-mailer.md §6.4: write the outbox row (with its deterministic
+ * the recommended pattern: write the outbox row (with its deterministic
  * idempotency key) before the HTTP call, never after.
  *
  * What this class deliberately does NOT do: decide what a message says. Every
  * argument to enqueue() — subject, rendered HTML, idempotency key, priority — is
- * the caller's responsibility (E1.10's job); this class only guarantees the
+ * the caller's responsibility (the mail layer's job); this class only guarantees the
  * outbox/HTTP-call ordering and records what happened.
  */
 final class CentralMailerOutboxService
@@ -279,11 +279,10 @@ final class CentralMailerOutboxService
     }
 
     /**
-     * E1.10 §8 mass-send progress: queued/sent/failed counts for one mail type
+     * Mass-send progress: queued/sent/failed counts for one mail type
      * within one Wydarzenie (its `contextId`), so an organizer sending tickets
      * to 500+ recipients sees a progress readout instead of silence during the
-     * ~75-90 minutes the shared 100/15min budget takes (kontrakt-central-mailer.md
-     * §7). Read-only; the scheduler's
+     * ~75-90 minutes the shared 100/15min budget takes. Read-only; the scheduler's
      * mail.outbox_retry job does the dispatching.
      *
      * @return array{total: int, queued: int, sent: int, failed: int, other: int}
@@ -294,7 +293,7 @@ final class CentralMailerOutboxService
     }
 
     /**
-     * B-03 mail log (read-only): see CentralMailerOutboxRepository::listForLog().
+     * Mail log (read-only): see CentralMailerOutboxRepository::listForLog().
      *
      * @param array<string, mixed> $filters
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, pageSize: int}
@@ -306,8 +305,8 @@ final class CentralMailerOutboxService
 
     /**
      * Polls Central Mailer for every outbox row still awaiting a terminal
-     * status and writes back whatever it reports (§6.4 point 3 — Central Mailer
-     * has no webhooks, only polling). PP.18: the scheduler's
+     * status and writes back whatever it reports (Central Mailer
+     * has no webhooks, only polling). the scheduler's
      * mail.outbox_reconcile job calls this every tick; it can also be called from
      * an admin/status endpoint.
      *

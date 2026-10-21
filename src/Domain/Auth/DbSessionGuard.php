@@ -7,11 +7,11 @@ namespace ZmierzymyCzas\Domain\Auth;
 use PDO;
 
 /**
- * PP.70: the same row also says whether the account is still `active`, so a
+ * The same row also says whether the account is still `active`, so a
  * blocked account has no valid session even if its status was changed outside
  * the staff routes (which also bump the token version).
  *
- * PP.7: one primary-key lookup per authenticated request. A PDOException is
+ * One primary-key lookup per authenticated request. A PDOException is
  * deliberately not caught: the guard fails closed (500), never open.
  *
  * A token without `tv` counts as version 0 and one without `jti` cannot match a

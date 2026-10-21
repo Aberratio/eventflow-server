@@ -22,7 +22,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
-/** PP.19: fan-out of "Publikacja wyników" to deferred outbox rows (one per distinct confirmed e-mail per event). */
+/** Fan-out of "Publikacja wyników" to deferred outbox rows (one per distinct confirmed e-mail per event). */
 final class ResultsPublicationNotifierTest extends TestCase
 {
     private PDO $pdo;

@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Scheduler\Jobs;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Scheduler\ScheduledJob;
 
-/** PP.18: Published -> Finished for events whose last day has passed (was lazy-on-read only). */
+/** Published -> Finished for events whose last day has passed (was lazy-on-read only). */
 final class FinishPastEventsJob implements ScheduledJob
 {
     public function __construct(private readonly EventRepository $events)

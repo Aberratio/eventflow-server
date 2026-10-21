@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Domain\Events;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * R-01 (spec 09 pkt 2-3): the Co-managers of an Event. The Owner is NOT stored here - it stays
+ * The Co-managers of an Event. The Owner is NOT stored here - it stays
  * `events.organizer_id`. A member can be any Account, whatever its global role; only `active`
  * rows grant anything (an `invited` or `revoked` row gives no access at all).
  */
@@ -116,7 +116,7 @@ final class EventTeamRepository extends Repository
     }
 
     /**
-     * R-01 S2: issues (or re-issues) an invitation for an e-mail address. The raw token is returned once, for
+     * Issues (or re-issues) an invitation for an e-mail address. The raw token is returned once, for
      * the mail; only its SHA-256 is stored. A revoked or still-pending row of the same address is reused (a
      * resend), an active member of the same address is a conflict.
      *

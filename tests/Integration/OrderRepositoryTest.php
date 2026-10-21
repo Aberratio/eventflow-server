@@ -55,9 +55,9 @@ final class OrderRepositoryTest extends TestCase
     }
 
     /**
-     * E5.2: mirrors
+     * Mirrors
      * RegistrationRepositoryTest::testConcurrentCreatesForSameDistanceSerializeOnTheRowLock()
-     * (E1.3) exactly, with a shop product's stock_count standing in for a
+     * exactly, with a shop product's stock_count standing in for a
      * Dystans's registered_count — proves two simultaneous orders against the
      * same limited-stock product can't jointly oversell because the second
      * connection blocks on the first's row lock (SELECT ... FOR UPDATE) rather
@@ -99,7 +99,7 @@ final class OrderRepositoryTest extends TestCase
     }
 
     /**
-     * PP.105: the grant lives in changeStatus('paid') now - status, credits, role and
+     * The grant lives in changeStatus('paid') now - status, credits, role and
      * event_limit change in ONE transaction, so a failure inside it (here: the event_limit
      * increment overflows the INT column under the strict session mode) leaves nothing behind.
      */

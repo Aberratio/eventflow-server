@@ -9,7 +9,7 @@ use PDO;
 /**
  * A deterministic, engine-agnostic-in-shape text dump of the current database's
  * schema, used to compare "was this DB built by a fresh apply?" against "was it
- * built by migrating an existing/upgraded DB?" (PP.13 upgrade scenarios). Only
+ * built by migrating an existing/upgraded DB?" (upgrade scenarios). Only
  * meaningful comparing two fingerprints taken on the SAME engine — MySQL and MariaDB
  * render some types/defaults differently even for identical DDL.
  */

@@ -189,9 +189,9 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E1.11: every Zapis gets a `pqr_`-prefixed, 48-hex-char start code automatically —
+     * Every Zapis gets a `pqr_`-prefixed, 48-hex-char start code automatically —
      * no separate "generate codes" step, no null. Persisted (not just computed at read
-     * time, unlike E1.8's transferTitle) — find() must return the same code create() did.
+     * time, unlike transferTitle) — find() must return the same code create() did.
      */
     public function testCreateGeneratesPersistedStartCode(): void
     {
@@ -215,10 +215,10 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E1.11: distance change (E1.8/E1.2 territory — same Zapis, just a different Dystans)
+     * Distance change (same Zapis, just a different Dystans)
      * must NOT rotate the start code — only a reassignment of the Zapis to a different
      * person would (no such mechanism exists in this codebase yet, so nothing to test for
-     * rotation here — see the ticket's own note). `update()` doesn't expose a distance
+     * rotation here — see the note on the feature). `update()` doesn't expose a distance
      * change today, so this asserts the weaker but still meaningful guarantee: an
      * unrelated status update on the same Zapis leaves the start code untouched.
      */
@@ -283,7 +283,7 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E0.3: a Próg (price tier) carries at most two independent, optional
+     * A Próg (price tier) carries at most two independent, optional
      * limits — endDate and participantLimit — and expires on whichever is
      * hit first ("co nastąpi wcześniej"), with no XOR mode flag choosing
      * between them. These cover RegistrationRepository::currentDistancePrice
@@ -437,7 +437,7 @@ final class RegistrationRepositoryTest extends TestCase
             'distances' => [
                 [
                     'price' => 80,
-                    // E1.3: this fixture's registeredCount (999) is deliberately far
+                    // This fixture's registeredCount (999) is deliberately far
                     // above payload()'s default distance limit (100) to prove the
                     // *tier* has no limit — that would now collide with the new
                     // capacity check (a real distance limit of 100) if left in
@@ -458,7 +458,7 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E1.3: the materialized `event_distances.registered_count` column advances
+     * The materialized `event_distances.registered_count` column advances
      * transactionally on create() — this is the write side of the same counter
      * the price-tier tests above already exercise on the read side (a seeded
      * starting value). Two Zapisy on the same Dystans must leave the counter at
@@ -483,14 +483,14 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E1.3: `registered_count` feeds price-tier resolution (rozstrzygnięcie 4 in
-     * 07-model-cenowy-zapisu.md — the tier's participantLimit counts the same
+     * `registered_count` feeds price-tier resolution (the pricing model, decision 4:
+     * the tier's participantLimit counts the same
      * population as the seat limit) directly from actual create() calls, not a
      * value manually seeded into the fixture the way the tier tests above do.
      * With `participantLimit: 1` on the tier, the first Zapis must still get the
      * discounted tier price (0 prior registrations < 1) and the second must fall
      * back to the base price (1 prior registration >= 1) — proving the counter
-     * this ticket maintains, not a live COUNT query, is what tier resolution
+     * the repository maintains, not a live COUNT query, is what tier resolution
      * actually reads (RegistrationRepository::pricingForRegistration reads the
      * locked row's column, never re-counts).
      */
@@ -519,7 +519,7 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E1.3: the seat-capacity limit (rozstrzygnięcie: 07-model-cenowy-zapisu.md,
+     * The seat-capacity limit (pricing model decision,
      * "limit miejsc na Dystansie") is enforced transactionally on create() — once
      * `registered_count` reaches `participant_limit`, the next Zapis must be
      * rejected with `registration_capacity_exceeded` rather than oversold, and
@@ -552,7 +552,7 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E1.3's core concern (rozstrzygnięcie: issue 21, "opóźnienie przy równoczesnych
+     * The core concern ("opóźnienie przy równoczesnych
      * zapisach realnie sprzedaje więcej miejsc niż istnieje"): two overlapping
      * transactions for the same Dystans must not both read the pre-increment
      * count and both succeed. Simulated here with a second, independent PDO
@@ -621,8 +621,8 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E1.4: a brand-new pending Zapis freezes its payment-window deadline at
-     * creation, from the event's configured gateway window (docs/20 pkt 1 default
+     * A brand-new pending Zapis freezes its payment-window deadline at
+     * creation, from the event's configured gateway window (default
      * 30-60 min — this repo's pragmatic default is 45, from EventRepository).
      * Asserted with a tolerance window rather than an exact timestamp since both
      * "now" calls (test and repository) can't literally coincide.
@@ -662,7 +662,7 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * TD.7: a Zapis on a trasa B (`organizer_bank`) event freezes its deadline from
+     * A Zapis on a trasa B (`organizer_bank`) event freezes its deadline from
      * the event's configured *transfer* window (days), not the gateway window
      * (minutes) — before this fix, paymentExpiryDeadline() ignored
      * `transferWindowDays` entirely and always used the ~45-minute gateway
@@ -685,7 +685,7 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * TD.7: an organizer-configured `transferWindowDays` on a trasa B event is
+     * An organizer-configured `transferWindowDays` on a trasa B event is
      * honored, not just the hardcoded 3-day default.
      */
     public function testCreateFreezesPaymentExpiryUsingOrganizerConfiguredTransferWindow(): void
@@ -703,7 +703,7 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * TD.7: retryPayment() re-freezes the deadline through the same
+     * retryPayment() re-freezes the deadline through the same
      * paymentExpiryDeadline() path — an expired trasa B Zapis that gets retried
      * must get a fresh *transfer*-window deadline, not a gateway one.
      */
@@ -716,7 +716,7 @@ final class RegistrationRepositoryTest extends TestCase
 
         $registration = $this->registrations->create($this->registrationPayload($event, ''));
         $this->backdatePaymentExpiry($registration['id'], (new \DateTimeImmutable('-1 minute'))->format(DATE_ATOM));
-        // PP.18: the scheduler's expiry job turns it 'expired' so retryPayment() can reopen it.
+        // The scheduler's expiry job turns it 'expired' so retryPayment() can reopen it.
         $this->registrations->expireOverdueRegistrations(new \DateTimeImmutable());
         self::assertSame('expired', $this->registrations->find($registration['id'])['status']);
 
@@ -731,7 +731,7 @@ final class RegistrationRepositoryTest extends TestCase
 
     /**
      * A Zapis created already paid (startFeePaid true, born 'confirmed' — the
-     * existing create() behavior from before this ticket) has nothing to expire:
+     * existing create() behavior from before the payment window existed) has nothing to expire:
      * it never gets a payment-window deadline at all, so the lazy check can never
      * touch it.
      */
@@ -750,10 +750,10 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * The core of E1.4: once a pending Zapis's frozen deadline has passed, the
-     * scheduler's expiry job (PP.18; it used to be the next read) flips it to
+     * The core behaviour: once a pending Zapis's frozen deadline has passed, the
+     * scheduler's expiry job (it used to be the next read) flips it to
      * `expired` and releases the Dystans slot the same way a manual cancel does
-     * (E1.3) — the ticket's "wygaśnięcie natychmiast odblokowuje miejsce" guarantee.
+     * — the "wygaśnięcie natychmiast odblokowuje miejsce" guarantee.
      */
     public function testExpiryJobExpiresPastDeadlineRegistrationAndReleasesSlot(): void
     {
@@ -770,7 +770,7 @@ final class RegistrationRepositoryTest extends TestCase
 
         $this->backdatePaymentExpiry($registration['id'], (new \DateTimeImmutable('-1 minute'))->format(DATE_ATOM));
 
-        // A plain read no longer expires anything (PP.18); the job does.
+        // A plain read no longer expires anything; the job does.
         self::assertSame('pending', $this->registrations->find($registration['id'])['status']);
 
         $this->registrations->expireOverdueRegistrations(new \DateTimeImmutable());
@@ -842,10 +842,10 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E1.2: Wariant opłaty carries its own base price and its own Próg — separate
+     * Wariant opłaty carries its own base price and its own Próg — separate
      * from the legacy Dystans price/tiers path exercised by the tests above. The
      * pricing variant's tier is displayed as a line relative to its own base
-     * (rozstrzygnięcie: spec worked example), not merged into a single number.
+     * (per the worked example), not merged into a single number.
      */
     public function testPricingVariantWithOwnTierAndDiscountCodeComputesOplataStartowa(): void
     {
@@ -925,9 +925,9 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E1.2 krok 5: cena × ilość liczy się zawsze z katalogu (`event_merchandise`),
-     * niezależnie od tego, co (jeśli cokolwiek) klient wyśle w polu 'price' —
-     * "klient nigdy nie przysyła kwot".
+     * Price x quantity is always computed from the catalog (`event_merchandise`),
+     * regardless of what (if anything) the client sends in the 'price' field --
+     * "the client never sends amounts".
      */
     public function testMerchandiseSettlementPriceComesFromCatalogNotClient(): void
     {
@@ -971,9 +971,9 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E1.2 krok 6: NNW liczone z katalogu (insurance_settings) tylko dla wariantów,
-     * które organizator faktycznie oferuje na tym wydarzeniu (event_insurance_variants),
-     * z wiekiem liczonym na dzień wydarzenia (nie dziś, nie dzień zapisu).
+     * NNW is computed from the catalog (insurance_settings) only for variants
+     * the organizer actually offers on this event (event_insurance_variants),
+     * with age computed on the event date (not today, not the registration date).
      */
     public function testInsuranceAmountUsesAgeAsOfEventDateFromCatalogFormula(): void
     {
@@ -990,8 +990,8 @@ final class RegistrationRepositoryTest extends TestCase
         $registration = $this->registrations->create([
             ...$this->registrationPayload($event, ''),
             'insuranceVariantId' => $insuranceId,
-            // Zawodnik urodzony 1984-12-01: na dzień wydarzenia (2026-06-15) ma 41 lat
-            // (urodziny w grudniu jeszcze nie minęły w tym roku kalendarzowym).
+            // Zawodnik born 1984-12-01: on the event date (2026-06-15) is 41 years old
+            // (the December birthday has not happened yet this calendar year).
             'birthDate' => '1984-12-01',
         ]);
 
@@ -1023,10 +1023,10 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * Reproduces the spec's worked numeric example end to end (07-model-cenowy-zapisu.md):
+     * Reproduces the spec's worked numeric example end to end:
      * Wariant 110,00 → próg Early bird 50,00 (−60,00) → kod SZUTRY25 14% (−7,00) =
-     * opłata startowa 43,00; + Modyfikator "Udział w losowaniu" −5,00 (step 4 has no
-     * source yet — ticket 10/E1.13 — so this line is inserted directly to prove the
+     * opłata startowa 43,00; + Modyfikator "Udział w losowaniu" −5,00 (the modifier stage has no
+     * source yet, so this line is inserted directly to prove the
      * stage's numbers flow through hydrate() once it exists); + Gadżety Koszulka M
      * 65,00; + NNW Podstawowe wiek 41 → 19,60. Do zapłaty: 122,60.
      */
@@ -1082,13 +1082,13 @@ final class RegistrationRepositoryTest extends TestCase
         self::assertEquals(43.00, (float) $registration['pricePaid']);
         self::assertEquals(7.00, (float) $registration['discountAmount']);
         self::assertEquals(19.60, (float) $registration['insurancePaid']);
-        // Bez Modyfikatorów (krok 4 zawsze pusty do ticket 10): 43,00 + 65,00 + 19,60 = 127,60
+        // Without Modyfikatory (the modifier stage is always empty here): 43,00 + 65,00 + 19,60 = 127,60
         self::assertEquals(127.60, (float) $registration['totalAmount']);
 
-        // Krok 4 (Modyfikatory) nie ma dziś źródła danych (ticket 10 / E1.13), ale
-        // jest realnym, zawsze-liczonym etapem: wstrzykujemy tu ręcznie dokładnie
-        // taką pozycję, jaką ten krok kiedyś wyprodukuje, żeby dowieść, że
-        // hydrate()'s DO ZAPŁATY policzy ją tak samo jak każdą inną pozycję Rozliczenia.
+        // The modifier stage has no data source today, but
+        // it is a real, always-computed stage: we inject by hand exactly
+        // the line this stage will produce one day, to prove that
+        // hydrate()'s DO ZAPŁATY (amount due) counts it like any other Rozliczenie line.
         $this->pdo->prepare(
             'INSERT INTO registration_settlement_items (id, registration_id, name, basis, amount, frozen_at, sort_order)
              VALUES (:id, :registrationId, :name, :basis, :amount, :frozenAt, :sortOrder)'
@@ -1108,8 +1108,8 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * E1.5: żądanie zwrotu jest tylko dozwolone na opłaconym (`confirmed`) Zapisie
-     * — próba na `pending` musi zostać odrzucona, nie cichy no-op.
+     * A refund request is only allowed on a paid (`confirmed`) Zapis
+     * — an attempt on `pending` must be rejected, not a silent no-op.
      */
     public function testRequestRefundRejectsUnpaidRegistration(): void
     {
@@ -1127,7 +1127,7 @@ final class RegistrationRepositoryTest extends TestCase
      * Happy path: opłacona -> żądanie zwrotu -> zatwierdzenie ("do zwrotu") ->
      * wykonanie (trasa B, ręcznie) -> zwrócona. A full refund (amount == frozen
      * totalAmount) also moves the Zapis itself to `cancelled` and releases its
-     * Dystans slot — rozstrzygnięcie 7 (registrations.status must stay consistent
+     * Dystans slot (registrations.status must stay consistent
      * with the refund state machine).
      */
     public function testFullRefundLifecycleCancelsRegistrationAndReleasesSlot(): void
@@ -1164,7 +1164,7 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * Idempotencja (rozstrzygnięcie 6): a second requestRefund()/approveRefund()/
+     * Idempotency: a second requestRefund()/approveRefund()/
      * markRefunded() call for a cycle already at (or past) that stage must not
      * error and must not double-transition anything.
      */
@@ -1193,7 +1193,7 @@ final class RegistrationRepositoryTest extends TestCase
 
     /**
      * approveRefund() clamps a caller-supplied amount at the frozen Rozliczenie
-     * total (rozstrzygnięcie 3: saldo dodatnie z Rozliczenia is the ceiling, even
+     * total (the positive balance of the Rozliczenie is the ceiling, even
      * for a deliberately partial refund) — and a partial refund must leave the
      * Zapis itself `confirmed` (the registrant is still attending), not cancel it.
      */
@@ -1218,7 +1218,7 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * Zawodnik never triggers a refund directly (rozstrzygnięcie 1) — this is
+     * Zawodnik never triggers a refund directly — this is
      * enforced at the HTTP layer (RegistrationContractTest), but the repository
      * method itself has no such gate; approveRefund()/markRefunded() require an
      * existing `requested`/`approved` cycle, so calling markRefunded() with nothing
@@ -1237,7 +1237,7 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * Odwołanie Wydarzenia (rozstrzygnięcie 2): a bulk operation, not N individual
+     * Cancelling a Wydarzenie: a bulk operation, not N individual
      * requests — every `confirmed` Zapis of the Wydarzenie moves straight to
      * `approved` ("do zwrotu") in one call, `pending` ones are left untouched (they
      * never paid anything to refund), and calling it twice does not double-process
@@ -1280,7 +1280,7 @@ final class RegistrationRepositoryTest extends TestCase
     }
 
     /**
-     * "Ponowienie" (spec: jednoklikowe ponowienie płatności): a `wygasła` Zapis
+     * Retry ("Ponowienie", one-click payment retry): a `wygasła` Zapis
      * reopens as a fresh `pending` with a brand-new payment-window deadline, and
      * re-occupies the Dystans slot it had released on expiry.
      */
@@ -1312,7 +1312,7 @@ final class RegistrationRepositoryTest extends TestCase
         self::assertEqualsWithDelta($expectedAt->getTimestamp(), $newExpiresAt->getTimestamp(), 30);
     }
 
-    /** B-05: only expired and still-pending (gateway) Zapisy can be retried; a confirmed one is rejected. */
+    /** Only expired and still-pending (gateway) Zapisy can be retried; a confirmed one is rejected. */
     public function testRetryPaymentRejectsNonExpiredRegistration(): void
     {
         $event = $this->events->create($this->payload(['slug' => $this->slugPrefix . '-retry-confirmed']));

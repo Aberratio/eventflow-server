@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E2.5: GET /events/{id}/form-field-aggregates is gated the same way as the
+ * GET /events/{id}/form-field-aggregates is gated the same way as the
  * rest of the form-fields group ($canManageEvent — organizer of their own
  * event, or admin/moderator) — mirrors ActivityLogContractTest's
  * owner-vs-stranger auth shape for an organizer-scoped GET endpoint.

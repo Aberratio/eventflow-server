@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\FormFields;
 
 /**
- * Zmiana definicji pola (typ / warianty) kolidująca z odpowiedziami już
- * zapisanymi w Zapisach. Kod maszynowy trafia do odpowiedzi 409.
+ * A change to a field definition (type / options) that collides with answers already
+ * stored on Zapisy. The machine-readable code goes into the 409 response.
  */
 final class FormFieldConflictException extends \RuntimeException
 {

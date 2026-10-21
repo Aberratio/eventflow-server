@@ -10,7 +10,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * G-03 (spec 14 pkt 6): a correction of a result (also after official publication) leaves a
+ * A correction of a result (also after official publication) leaves a
  * durable trail - who, when, previous and new value of gross/net time, status and place, optional
  * reason - readable via GET /results/{id}/corrections with the same RBAC as editing the result.
  */

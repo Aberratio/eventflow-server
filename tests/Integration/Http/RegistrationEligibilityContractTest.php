@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.65 / PP.79 / PP.80: POST /registrations decides who may pick which Wariant opłaty, derives
+ * POST /registrations decides who may pick which Wariant opłaty, derives
  * the Kategoria wiekowa from the Zawodnik's data and answers 422 (never 500) when NNW cannot be
  * priced. Every rejected request must leave nothing behind.
  */
@@ -177,7 +177,7 @@ final class RegistrationEligibilityContractTest extends HttpTestCase
         $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')->execute(['email' => $this->prefix . '-%@example.test']);
     }
 
-    // ── PP.65 ────────────────────────────────────────────────────────────
+    // ── Eligibility checks ────────────────────────────────────────────────────────────
 
     public function testAc1ParticipantCannotPickOfficeOnlyVariant(): void
     {
@@ -319,7 +319,7 @@ final class RegistrationEligibilityContractTest extends HttpTestCase
         self::assertSame(0.0, $this->distancePriceLine($this->json($join)['data']['id'], true));
     }
 
-    // ── PP.79 ────────────────────────────────────────────────────────────
+    // ── Server-side category validation ────────────────────────────────────────────────────────────
 
     public function testAc11ServerComputesCategoryIgnoringClient(): void
     {
@@ -496,7 +496,7 @@ final class RegistrationEligibilityContractTest extends HttpTestCase
         self::assertSame('Stara', $this->storedCategory($id), 'PATCH ' . $patch->getStatusCode());
     }
 
-    // ── PP.80 ────────────────────────────────────────────────────────────
+    // ── Eligibility edge cases ────────────────────────────────────────────────────────────
 
     public function testAc25NnwWithoutBirthDateIsRejected(): void
     {

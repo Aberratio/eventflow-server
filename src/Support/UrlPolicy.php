@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Support;
 
 /**
- * PP.50: write-side validation of user-supplied URL fields. Mirrors client src/lib/safeUrl.ts
+ * Write-side validation of user-supplied URL fields. Mirrors client src/lib/safeUrl.ts
  * (same LINK_SCHEMES, HOST_LIKE and shared test corpus). HtmlSanitizer takes its allowed
  * schemes from LINK_SCHEMES, so rich text and plain URL fields share one allowlist.
  *

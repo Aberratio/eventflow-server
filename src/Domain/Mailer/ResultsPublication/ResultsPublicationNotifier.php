@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailCatalog;
 
 /**
- * PP.19: fan-out of mail #10 ("Publikacja wyników"). For every pending publication request it writes one
+ * Fan-out of mail #10 ("Publikacja wyników"). For every pending publication request it writes one
  * DEFERRED outbox row per distinct confirmed e-mail address of the event and distance (no HTTP call;
  * mail.outbox_retry paces the sending). One mail per address per event: the dedup key is the e-mail
  * hash and does not depend on the template version, the distance or how often results are re-published.

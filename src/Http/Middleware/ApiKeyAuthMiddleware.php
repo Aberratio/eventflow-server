@@ -13,9 +13,9 @@ use ZmierzymyCzas\Domain\Auth\ApplicationApiKeyConfig;
 use ZmierzymyCzas\Support\JsonResponder;
 
 /**
- * E3.1: gates INCOMING application-to-application traffic (Biuro Zawodów and
+ * Gates INCOMING application-to-application traffic (Biuro Zawodów and
  * future callers) behind a static `X-API-Key` header — the same header Central
- * Mailer itself expects from ITS callers (kontrakt-central-mailer.md §1.1/1.2),
+ * Mailer itself expects from ITS callers,
  * kept consistent for anyone integrating with either service. This is a
  * separate, parallel mechanism to AuthMiddleware's user JWT: no user identity
  * is involved, only "which application is calling", exposed to route handlers

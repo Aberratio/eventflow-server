@@ -9,11 +9,11 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E8.11 ("Zewnetrzny formularz w iframe", contract §5.3): per-event iframe-embed
+ * Per-event iframe-embed
  * config — an organizer/admin-settable enable toggle + origin allowlist, written
  * through the existing generic PATCH /events/{id} path (same canManageEvent gate
  * as every other organizer-owns-event-or-admin setting; admin: once the event
- * has cleared moderation - Draft stays Event-Team-only, issue 08), and read back through a
+ * has cleared moderation - Draft stays Event-Team-only), and read back through a
  * dedicated unauthenticated endpoint for the client's embed page.
  */
 final class EventEmbedContractTest extends HttpTestCase
@@ -131,7 +131,7 @@ final class EventEmbedContractTest extends HttpTestCase
     }
 
     /**
-     * Issue 08, "Co widzi każda rola": a Draft gives Admin a full preview but no edit
+     * "What each role sees": a Draft gives Admin a full preview but no edit
      * (only the Event Team edits it); see $canManageEvent in routes.php. Pins that
      * decision so nobody "fixes" the code instead of the fixture later.
      */

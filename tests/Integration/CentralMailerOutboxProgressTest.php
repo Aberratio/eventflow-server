@@ -17,7 +17,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
 /**
- * E1.10 §8 mass-send progress: CentralMailerOutboxService::progressForContext()
+ * Mass-send progress: CentralMailerOutboxService::progressForContext()
  * (backed by CentralMailerOutboxRepository::countByContext()) gives an
  * organizer sending tickets to a full start list queued/sent/failed counts
  * instead of silence during Central Mailer's shared 100/15min budget.

@@ -7,10 +7,10 @@ namespace ZmierzymyCzas\Domain\Challenges;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * E6.2 (issue 15 §2): the global, admin-configurable "points per place"
+ * The global, admin-configurable "points per place"
  * table a Wyzwanie's `point_threshold` node converts an Event placement into
- * points with — "system punktowy malejacy, konfigurowalny globalnie ... nie
- * czesc modelu" (explicitly NOT hardcoded logic, see migration 055's own
+ * points with — a descending point system, configurable globally and not
+ * part of the model (explicitly NOT hardcoded logic, see migration 055's own
  * comment for why this is a single JSON-blob row rather than a per-place
  * catalog table, mirroring `payment_config`/original `insurance_settings`).
  *

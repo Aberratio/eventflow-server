@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * R-13 (contract 5.1): bib number ranges per distance, bulk assignment inside the range,
+ * Bib number ranges per distance, bulk assignment inside the range,
  * manual override with uniqueness (409) and range check (422).
  */
 final class BibNumberRangesContractTest extends HttpTestCase

@@ -1,12 +1,12 @@
 name: BZ End-to-End Contract
 
-# PP.43: runs the real ZC server and the real Biuro Zawodow API against each other
+# Runs the real ZC server and the real Biuro Zawodow API against each other
 # (tests/e2e/bz/run.php). The BZ repo is private, so reading it needs a read-only deploy
 # key stored as the repository secret BZ_API_REPO_SSH_KEY. Without that secret the job
 # cannot run the test: it then says so loudly (warning annotation + job summary) instead
 # of passing silently. Setup steps: TESTING.md, "ZC <-> BZ end-to-end contract test".
 
-# After merge, manually and weekly – not on every pull request push.
+# After merge, on demand and weekly – not on every pull request push.
 on:
   push:
     branches:

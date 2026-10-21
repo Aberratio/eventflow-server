@@ -390,7 +390,7 @@ final class ShopOrderContractTest extends HttpTestCase
         $product = $this->createProduct(['price' => 40, 'stockCount' => 10]);
 
         $payload = $this->orderPayload($product, 1);
-        // no invoiceData at all — the pre-E5.5 default (plain receipt).
+        // no invoiceData at all — the legacy default (plain receipt).
 
         $response = $this->request(
             'POST',
@@ -539,7 +539,7 @@ final class ShopOrderContractTest extends HttpTestCase
     }
 
     /**
-     * E5.6 (issue 16 §2): the organizer package is a `shop_products` row
+     * The organizer package is a `shop_products` row
      * flagged `serviceKind = 'organizer_package'` — a digital, no-delivery
      * product. Buying one grants exactly `quantity` credits on the buyer's
      * `organizer_package_credits` counter; the order needs no delivery method
@@ -564,7 +564,7 @@ final class ShopOrderContractTest extends HttpTestCase
             $this->bearer($this->buyer['id'], 'participant', $this->buyer['email'])
         );
 
-        // PP.105: the order is only `pending` - nothing is granted before payment.
+        // The order is only `pending` - nothing is granted before payment.
         self::assertSame(201, $response->getStatusCode());
         self::assertSame('pending', $this->json($response)['data']['status']);
         self::assertSame(0, $this->organizerPackageCredits($this->buyer['id']));
@@ -598,7 +598,7 @@ final class ShopOrderContractTest extends HttpTestCase
     }
 
     /**
-     * E5.6/issue 16 §5: a digital-only order never goes through a delivery
+     * A digital-only order never goes through a delivery
      * method — omitting it entirely still succeeds (unlike every physical
      * product in this file, where a missing/invalid delivery method is
      * `order_invalid_delivery_method`).
@@ -625,9 +625,9 @@ final class ShopOrderContractTest extends HttpTestCase
     }
 
     /**
-     * E5.7 (issue 16 §2 "Samoobsluga"): the point of the ticket — a
+     * The point of the feature — a
      * self-service organizer-package purchase by a plain 'participant'
-     * grants both the credit (E5.6, unconditional) AND the Organizator role,
+     * grants both the credit (unconditional) AND the Organizator role,
      * not just the credit.
      */
     public function testMarkingOrganizerPackagePaidAsParticipantGrantsCreditAndOrganizerRole(): void
@@ -657,7 +657,7 @@ final class ShopOrderContractTest extends HttpTestCase
 
     /**
      * A second organizer-package purchase by an account that's already
-     * 'organizer' (e.g. from a first purchase, or from the §4.4.4 manual
+     * 'organizer' (e.g. from a first purchase, or from the manual
      * admin promotion path) must stay idempotent: more credit, same role,
      * no error, no duplicate role assignment (there's nothing to duplicate —
      * `role` is a single column — but this locks in that the UPDATE is a
@@ -723,7 +723,7 @@ final class ShopOrderContractTest extends HttpTestCase
         self::assertSame('admin', $this->roleOf($this->buyer['id']));
     }
 
-    /** PP.105: staff confirmation of payment - the only door into `paid`. */
+    /** Staff confirmation of payment - the only door into `paid`. */
     private function markPaid(string $orderId): void
     {
         $staff = $this->users->create([
@@ -807,7 +807,7 @@ final class ShopOrderContractTest extends HttpTestCase
             ],
             'deliveryMethod' => ['id' => 'courier', 'name' => 'Kurier', 'price' => 999999],
             'paymentMethod' => ['id' => 'bank', 'name' => 'Przelew bankowy'],
-            // E5.3: courier requires a shipping address — pre-existing tests
+            // Courier requires a shipping address — pre-existing tests
             // in this file that only care about pricing/stock/product
             // validation get a valid one by default so they don't have to
             // know about it; the address-specific tests below override or

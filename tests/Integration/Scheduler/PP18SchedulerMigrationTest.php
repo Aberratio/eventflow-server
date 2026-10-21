@@ -12,7 +12,7 @@ use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\Env;
 
-/** PP.18: migration 065 (portable, idempotent, backfill only where the old mechanism already sent a reminder). */
+/** Migration 065 (portable, idempotent, backfill only where the old mechanism already sent a reminder). */
 final class PP18SchedulerMigrationTest extends TestCase
 {
     private const FILE = '065_pp18_scheduler.sql';

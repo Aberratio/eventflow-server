@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Domain\Competitors\CompetitorNamePresenter;
 
 /**
- * E6.6 (issue 15 §6): the single shared masking decision every public read
+ * The single shared masking decision every public read
  * that respects `competitors.is_anonymized` goes through.
  */
 final class CompetitorNamePresenterTest extends TestCase

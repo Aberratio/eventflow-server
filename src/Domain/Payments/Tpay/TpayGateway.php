@@ -87,7 +87,7 @@ final class TpayGateway implements PaymentGatewayInterface
     /**
      * POST {base}/transactions/{transactionId}/refunds — the real gateway-side
      * refund call that RegistrationRepository::initiateGatewayRefund() was left as
-     * an empty seam for (E1.5). Tpay confirms the refund asynchronously via the
+     * an empty seam for. Tpay confirms the refund asynchronously via the
      * same notification webhook as a payment (a `chargeback`/refund status), which
      * is out of this method's job — it only starts the refund, it does not wait
      * for or apply its outcome.

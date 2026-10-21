@@ -20,7 +20,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FaultInjectingRefundPdo;
 
 /**
- * E8.1 (issue 22): full rigor per the ticket brief — no-conflict repointing,
+ * Full coverage — no-conflict repointing,
  * the mandatory-field-decision guard, the registration-conflict pause and its
  * refund/cancel resolution, the identity-code alias, and the activity-log
  * snapshot actually carrying pre-merge field values (not just ids).
@@ -213,7 +213,7 @@ final class CompetitorMergeServiceTest extends TestCase
 
         self::assertSame('merged', $resolved['status']);
 
-        // Winner keeps its confirmed status; loser went through E1.5's refund cycle
+        // Winner keeps its confirmed status; loser went through the refund cycle
         // (requestRefund -> approveRefund), never silently disappeared.
         self::assertSame('confirmed', $this->registrations->find($survivorReg['id'])['status']);
         $refund = $this->rawRefund($absorbedReg['id']);
@@ -243,7 +243,7 @@ final class CompetitorMergeServiceTest extends TestCase
         self::assertSame($this->moderatorId, $log['userId']);
         self::assertSame('competitor_merged', $log['action']);
 
-        // The whole point of the snapshot (spec Answer §5): full field values
+        // The whole point of the snapshot: full field values
         // of BOTH profiles survive, not just their now-meaningless ids.
         self::assertSame('Ela', $log['metadata']['survivorBefore']['firstName']);
         self::assertSame('Ella', $log['metadata']['absorbedBefore']['firstName']);
@@ -252,7 +252,7 @@ final class CompetitorMergeServiceTest extends TestCase
     }
 
     /**
-     * E8.1 fix-loop, gap 1: a refund/cancel failure on the rejected side of a
+     * A refund/cancel failure on the rejected side of a
      * conflict must never look like "the merge failed" — the merge has
      * already committed by the time that loop runs. Proves both halves of
      * the fix: (a) the activity-log snapshot exists with full pre-merge data
@@ -330,7 +330,7 @@ final class CompetitorMergeServiceTest extends TestCase
     }
 
     /**
-     * E8.1 fix-loop, gap 2: the one real, existing place in this codebase
+     * The one real, existing place in this codebase
      * where a moderator pastes a raw kod tożsamości (`zqr_...`) to find a
      * Zawodnik (CompetitorMergeTab's search box, `searchForMerge()`) must
      * resolve an OLD, now-aliased code from an already-merged profile to its
@@ -343,7 +343,7 @@ final class CompetitorMergeServiceTest extends TestCase
         $absorbed = $this->competitors->create(['firstName' => 'Gita', 'lastName' => $this->prefix]);
         $oldIdentityCode = (string) $absorbed['identityCode'];
 
-        // The profiles differ in firstName; issue 22 section 2 step 4 requires an explicit decision.
+        // The profiles differ in firstName; merging requires an explicit decision.
         $result = $this->merge->merge(
             ['sub' => $this->moderatorId],
             (string) $survivor['id'],

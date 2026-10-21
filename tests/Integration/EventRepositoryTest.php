@@ -42,7 +42,7 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
-     * E1.1 dropped the free-text `status` column entirely (see
+     * The free-text `status` column was dropped entirely (see
      * 031_e11_event_lifecycle.sql), so there is no ENUM to patch in place any more — the
      * schema this test needs only exists once every migration has actually run. Calling
      * the real Migrator (idempotent, no ledger — see its docblock) is the only thing that
@@ -54,7 +54,7 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
-     * E5.6: this file's default event payload() uses the literal organizerId
+     * This file's default event payload() uses the literal organizerId
      * 'phpunit-organizer' (shared with several other integration test files as
      * a placeholder — never a real `users` row anywhere else). submit() now
      * needs a real users row with available organizer_package_credits to
@@ -90,12 +90,12 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
-     * E6.4 (issue 15 §3): "Wydarzenie zewnętrzne" — the barebones reference
+     * "Wydarzenie zewnętrzne" — the barebones reference
      * Event a Moderator/Admin creates for a Zawodnik's manual challenge-entry
      * proof. Pins the minimal shape the spec asks for: `isExternal = true`,
      * created `published` (visible/selectable immediately, no moderation
      * workflow to run it through; like every Published event it reads back
-     * `finished` once its date has passed, issue 08), `registrationStatus = 'none'`,
+     * `finished`once its date has passed), `registrationStatus = 'none'`,
      * and — the "no Dystansow" half of "stan bez Dystansow i zapisow" —
      * zero `distances` rows, since createExternal() never accepts a
      * `distances` payload at all.
@@ -253,7 +253,7 @@ final class EventRepositoryTest extends TestCase
 
         $distances = $this->rawDistances((string) $created['id']);
         self::assertCount(1, $distances);
-        // PP.59: a client-chosen id of an unknown child is never stored; the server assigns a UUID.
+        // A client-chosen id of an unknown child is never stored; the server assigns a UUID.
         self::assertNotSame('phpunit-updated-half', $distances[0]['id']);
         self::assertMatchesRegularExpression('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', (string) $distances[0]['id']);
         self::assertSame($updated['distances'][0]['id'], $distances[0]['id']);
@@ -353,7 +353,7 @@ final class EventRepositoryTest extends TestCase
         $publicBeforeApproval = $this->events->list(['search' => 'PHPUnit Moderation Workflow']);
         self::assertSame([], array_column($publicBeforeApproval['data'], 'name'));
 
-        // E1.1: approve() lands directly on `published` — there is no separate
+        // approve() lands directly on `published` — there is no separate
         // "approved, not yet published" resting state to publish from afterwards.
         $approved = $this->events->approve((string) $created['id'], 'phpunit-admin');
         self::assertNotNull($approved);
@@ -385,7 +385,7 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
-     * E5.6 (issue 16 §2): submit() spends exactly one "pakiet organizatora"
+     * submit() spends exactly one "pakiet organizatora"
      * credit, atomically with the Draft -> Submitted transition.
      */
     public function testSubmitConsumesExactlyOneOrganizerPackageCredit(): void
@@ -406,7 +406,7 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
-     * E5.6: no available credit -> submit() throws a specific business
+     * No available credit -> submit() throws a specific business
      * exception, the event is left untouched in Draft (no partial status
      * change), and the (already zero) credit counter isn't perturbed.
      */
@@ -433,7 +433,7 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
-     * E5.6: reject() refunds exactly one credit, atomically with the
+     * reject() refunds exactly one credit, atomically with the
      * Submitted -> Draft transition; approve() must never touch the credit in
      * either direction (already spent at submit(), one-shot consumption).
      */
@@ -469,8 +469,8 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
-     * E5.6: mirrors OrderRepositoryTest::testConcurrentCreatesForSameProductSerializeOnTheRowLock()
-     * (E5.2) and RegistrationRepositoryTest's E1.3 row-lock concurrency test —
+     * Mirrors OrderRepositoryTest::testConcurrentCreatesForSameProductSerializeOnTheRowLock()
+     * and RegistrationRepositoryTest's row-lock concurrency test —
      * with a single available credit, two simultaneous submit() calls for two
      * different Draft events owned by the same organizer must not both
      * succeed. The affected-rows-guarded UPDATE in
@@ -659,7 +659,7 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
-     * E1.4: an event created without ever touching paymentConfig's window fields
+     * An event created without ever touching paymentConfig's window fields
      * still gets the two documented defaults back on read — "bramka: domyślnie
      * 30-60 minut" (45), "przelew: domyślnie 3-5 dni roboczych" (3) — so a caller
      * (RegistrationRepository::create(), or the organizer's settings tab) never has
@@ -677,7 +677,7 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
-     * E1.4: "Organizator może zmienić obie wartości domyślne per Wydarzenie" — both
+     * "Organizator może zmienić obie wartości domyślne per Wydarzenie" — both
      * windows are real, independently organizer-editable fields, not fixed
      * constants merely displayed to the organizer.
      */
@@ -723,7 +723,7 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
-     * E3.2: the pasted BZ organization token round-trips through create+update+read
+     * The pasted BZ organization token round-trips through create+update+read
      * exactly like the other flat per-Event columns (visibility/is_test) — no JSON
      * encode/decode step to lose or reshape it. Defaults to disabled/no-token for an
      * event that never touched this feature.
@@ -749,7 +749,7 @@ final class EventRepositoryTest extends TestCase
     }
 
     /**
-     * E3.2: disabling never wipes the stored token at the repository level either —
+     * Disabling never wipes the stored token at the repository level either —
      * the "preserve on disable" contract lives in the partial-update semantics of
      * eventData() (only columns present in the update payload are written), which
      * this exercises directly against the repository, not just through the HTTP
@@ -790,7 +790,7 @@ final class EventRepositoryTest extends TestCase
             'slug' => $slug,
             'discipline' => 'running',
             // Must stay in the future relative to "today" for any environment this runs
-            // in — EventRepository::lazilyFinishPastEvents() (E1.1) auto-flips a published
+            // in — EventRepository::lazilyFinishPastEvents() auto-flips a published
             // event whose date has passed to `finished` on every read, and a stale date
             // here would silently break every test that expects `published` to stick.
             'date' => date('Y-m-d', strtotime('+18 months')),

@@ -8,9 +8,9 @@ use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailCatalog;
 
 /**
- * Pure data assertions on the 17-katalog-maili §1/§2/§5 catalog: all 15 mail
+ * Pure data assertions on the mail catalog: all 15 mail
  * types are present, the `technical` queue is scoped to authentication only,
- * and the overridable/systemic split matches §5 exactly (1-3 and 12 systemic;
+ * and the overridable/systemic split matches the spec exactly (1-3 and 12 systemic;
  * everything else overridable).
  */
 final class MailCatalogTest extends TestCase
@@ -54,7 +54,7 @@ final class MailCatalogTest extends TestCase
             self::assertSame(
                 !in_array($mailType, $systemic, true),
                 $definition['overridable'],
-                $mailType . ' overridable flag should match 17 §5'
+                $mailType . ' overridable flag should match the mail catalog'
             );
         }
     }

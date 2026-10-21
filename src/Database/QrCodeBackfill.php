@@ -9,7 +9,7 @@ use ZmierzymyCzas\Support\QrCode;
 
 /**
  * PHP-side replacement for the `RANDOM_BYTES(24)` backfills that migrations 039
- * (E1.11, `registrations.qr_code`) and 040 (E1.12, `competitors.identity_code`)
+ * (`registrations.qr_code`) and 040 (`competitors.identity_code`)
  * originally did in plain SQL.
  *
  * `RANDOM_BYTES()` is a MySQL 8.0 function; MariaDB only got it in 11.3. Both
@@ -39,13 +39,13 @@ use ZmierzymyCzas\Support\QrCode;
  */
 final class QrCodeBackfill
 {
-    /** E1.11: kod startowy (`pqr_`) — należy do Zapisu. */
+    /** Start code (`pqr_`) — belongs to the Zapis. */
     public static function registrations(PDO $pdo): void
     {
         self::fill($pdo, 'registrations', 'qr_code', QrCode::startCode(...));
     }
 
-    /** E1.12: kod tożsamości (`zqr_`) — należy do Zawodnika. */
+    /** Identity code (`zqr_`) — belongs to the Zawodnik. */
     public static function competitors(PDO $pdo): void
     {
         self::fill($pdo, 'competitors', 'identity_code', QrCode::identityCode(...));

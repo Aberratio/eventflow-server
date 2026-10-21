@@ -12,7 +12,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.7 (7b): password reset with hashed one-time DB tokens.
+ * Password reset with hashed one-time DB tokens.
  *
  * Central Mailer is "configured" here with an unusable URL scheme: CriticalMailer writes the outbox
  * row (idempotency key, rendered html with the link) and the HTTP call then fails at once. That is
@@ -316,7 +316,7 @@ final class PasswordResetContractTest extends HttpTestCase
         }
 
         $log = (string) file_get_contents($this->errorLogFile);
-        // PP.19: a mailer failure no longer throws; the durable outbox row waits for mail.outbox_retry.
+        // A mailer failure no longer throws; the durable outbox row waits for mail.outbox_retry.
         $statuses = array_column($this->outboxRows(), 'status');
         self::assertNotSame([], $statuses);
         self::assertSame(['failed'], array_values(array_unique($statuses)), 'The undelivered mail stays in the outbox for the retry job.');

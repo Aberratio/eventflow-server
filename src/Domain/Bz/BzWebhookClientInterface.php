@@ -6,21 +6,21 @@ namespace ZmierzymyCzas\Domain\Bz;
 
 /**
  * Client-zone contract for Biuro Zawodów's critical-change webhook receiver
- * (issue 12 §1: "Platforma dodatkowo wypycha webhookiem zmiany krytyczne").
+ * (the platform additionally pushes critical changes via webhook).
  *
  * The BZ-side receiver is `POST /webhooks/critical-changes` in biuro_zawodow-api.
  * This client is a real, working HTTP client (not a stub) built against the
- * contract issue 12 specifies, the same way E1.6/E1.7's
- * gateway clients were built against Tpay/PayNow's real APIs before this
+ * documented contract, the same way the
+ * payment gateway clients were built against Tpay/PayNow's real APIs before this
  * platform had production credentials for either.
  */
 interface BzWebhookClientInterface
 {
     /**
      * POST to BZ's critical-change webhook. `$organizationToken` is the
-     * calling Event's own `bz_organization_token` (E3.2), sent as
+     * calling Event's own `bz_organization_token`, sent as
      * `X-BZ-Organization-Token` — the same credential BZ presents back to this
-     * platform on its own pull (E3.3), reused symmetrically as this side's
+     * platform on its own pull, reused symmetrically as this side's
      * proof of identity. `$idempotencyKey` is sent as `Idempotency-Key`;
      * constructing a *deterministic* key is the caller's responsibility (this
      * client never invents one — same discipline as

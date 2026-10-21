@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E1.10 fix-loop round 2: round 1's testJoinAutoApprovalCrossesThresholdAndCompletionDetectedOnce()
+ * Round 1's testJoinAutoApprovalCrossesThresholdAndCompletionDetectedOnce()
  * (tests/Integration/ChallengeCompletionTest.php) calls
  * ChallengeRepository::join() and checkCompletion() directly — it never goes
  * through src/Http/routes.php at all, so it would pass identically even if

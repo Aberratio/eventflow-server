@@ -6,7 +6,7 @@ namespace ZmierzymyCzas\Domain\Calendar;
 
 use ZmierzymyCzas\Domain\Repository;
 
-/** R-17: the single `google_calendar_settings` row. Holds no secrets. */
+/** The single `google_calendar_settings` row. Holds no secrets. */
 final class GoogleCalendarSettingsRepository extends Repository
 {
     private const ID = '00000000-0000-0000-0000-000000000001';

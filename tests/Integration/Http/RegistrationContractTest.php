@@ -64,7 +64,7 @@ final class RegistrationContractTest extends HttpTestCase
         }
 
         $this->deleteRegistrationsForEvent((string) $this->activeEvent['id']);
-        // E1.8: helper tests also spin up their own one-off `-bank-...` events
+        // Helper tests also spin up their own one-off `-bank-...` events
         // (organizer_bank/trasa B) — their registrations need the same cleanup
         // before the event row itself can go.
         $eventIds = $this->pdo->prepare('SELECT id FROM events WHERE slug LIKE :slug');
@@ -200,7 +200,7 @@ final class RegistrationContractTest extends HttpTestCase
     }
 
     /**
-     * E1.5, spec 13 rozstrzygnięcie 1: Zawodnik (właściciel Zapisu) can request a
+     * Zawodnik (właściciel Zapisu) can request a
      * refund for their own paid registration, and — since this is only a request,
      * not an execution — the response reflects `requested`, not something further
      * along the state machine.
@@ -313,7 +313,7 @@ final class RegistrationContractTest extends HttpTestCase
     }
 
     /**
-     * Odwołanie Wydarzenia (rozstrzygnięcie 2): cancelling the event bulk-marks
+     * Cancelling a Wydarzenie: cancelling the event bulk-marks
      * every paid registration as `approved` ("do zwrotu") in one action — no
      * per-registration refund-request round trip needed.
      */
@@ -373,7 +373,7 @@ final class RegistrationContractTest extends HttpTestCase
     }
 
     /**
-     * E1.8: registration transfer title is a pure `ZC-{id}` derivation, always
+     * Registration transfer title is a pure `ZC-{id}` derivation, always
      * present regardless of route, exactly like a computed ticket/QR field.
      */
     public function testRegistrationExposesDeterministicTransferTitle(): void
@@ -391,7 +391,7 @@ final class RegistrationContractTest extends HttpTestCase
     }
 
     /**
-     * E1.8: the owning organizer marks a pending trasa-B registration as paid —
+     * The owning organizer marks a pending trasa-B registration as paid —
      * this must go through the same pending -> confirmed transition the trasa-A
      * webhook uses, not a parallel status write.
      */
@@ -552,7 +552,7 @@ final class RegistrationContractTest extends HttpTestCase
     }
 
     /**
-     * E1.1 dropped the free-text `status` column entirely (see
+     * The free-text `status` column was dropped entirely (see
      * 031_e11_event_lifecycle.sql), so there is no ENUM to patch in place any more — the
      * schema this test needs only exists once every migration has actually run. Calling
      * the real Migrator (idempotent, no ledger — see its docblock) is the only thing that
@@ -573,7 +573,7 @@ final class RegistrationContractTest extends HttpTestCase
             'discipline' => 'running',
             // Relative to "today": a hard-coded past date silently flips the
             // event to 'finished' via EventRepository::lazilyFinishPastEvents()
-            // (E1.1) on every read.
+            // on every read.
             'date' => (new \DateTimeImmutable('+90 days'))->format('Y-m-d'),
             'location' => 'Stadion Testowy',
             'city' => 'Warszawa',

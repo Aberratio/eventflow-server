@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E0.8: the activity/audit log must be server-authored only — no route lets a client
+ * The activity/audit log must be server-authored only — no route lets a client
  * forge an entry attributed to someone else, staff mutations are logged automatically
  * with the actor pulled from the verified JWT, global reads are admin/superadmin only,
  * and an event's organizer can see the slice of the log scoped to their own event.

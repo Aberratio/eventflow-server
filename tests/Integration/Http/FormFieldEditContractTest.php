@@ -13,7 +13,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * B-02: PATCH /events/{id}/form-fields/{fieldId} may change a custom field's
+ * PATCH /events/{id}/form-fields/{fieldId} may change a custom field's
  * type and its variants (with prices, also negative) instead of delete + add.
  * Safety rule: a field that already has answers keeps its type, and a variant
  * used by an answer cannot be removed (409); adding / relabelling / repricing

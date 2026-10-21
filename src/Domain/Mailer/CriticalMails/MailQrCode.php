@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Domain\Mailer\CriticalMails;
 use ZmierzymyCzas\Support\QrPng;
 
 /**
- * PP.19: the inline QR image (a `cid:` PNG attachment) plus the HTML block that shows it next to the
+ * The inline QR image (a `cid:` PNG attachment) plus the HTML block that shows it next to the
  * code as text. CriticalMailer appends the block after the rendered template, so organizer template
  * overrides keep the QR too. The QR content is the raw token (pqr_... / zqr_...), exactly what
  * Biuro Zawodów scans; no URL wrapping.

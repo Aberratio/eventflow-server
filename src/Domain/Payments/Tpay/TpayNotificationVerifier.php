@@ -31,7 +31,7 @@ use ZmierzymyCzas\Domain\Payments\Http\HttpClientInterface;
  * holds the key.
  *
  * Never trust the notification body until every one of these steps passes — this is
- * the whole point of the ticket's "nigdy nie ufaj nagłówkom/body bez weryfikacji".
+ * the whole point of the rule "never trust headers/body without verification".
  */
 final class TpayNotificationVerifier
 {

@@ -9,7 +9,7 @@ use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * PP.18: a real connection to the test database whose FIRST prepare() of a statement containing
+ * A real connection to the test database whose FIRST prepare() of a statement containing
  * the needle throws the given exception; every later one behaves normally. Lets a batch test
  * make exactly one row fail.
  */

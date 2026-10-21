@@ -12,11 +12,11 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E2.6 ("Eksport listy startowej: CSV (Windows-1250) + XLSX", spec 21
- * Answer §3): `GET /events/{eventId}/distances/{distanceId}/start-list-export`.
+ * Start-list export (CSV in Windows-1250 + XLSX):
+ * `GET /events/{eventId}/distances/{distanceId}/start-list-export`.
  *
  * Drives the real route (not RegistrationRepository::startListExportRows()
- * directly) — the trap E1.10's ledger entry names explicitly: a repository-
+ * directly) — a known trap: a repository-
  * level test proves the row-building logic, but only a real HTTP request
  * through routes.php can prove the route itself enforces $canManageEvent
  * and actually calls $logActivity, the way
@@ -101,7 +101,7 @@ final class StartListExportContractTest extends HttpTestCase
         self::assertStringContainsString('Numer startowy', (string) $decoded);
         self::assertStringContainsString('Status płatności', (string) $decoded);
 
-        // The important trap (E1.10's ledger note): assert the activity log
+        // The important trap: assert the activity log
         // row through the REAL route, not by calling the repository/AdminRepository
         // insert directly — this only passes if routes.php actually wires
         // $logActivity into this endpoint.
@@ -217,9 +217,9 @@ final class StartListExportContractTest extends HttpTestCase
     }
 
     /**
-     * E3.8 (issue 12 §6, "Import z pliku zostaje jako droga awaryjna"):
-     * regression coverage proving the E2.6 file-export fallback and the
-     * E3.1-E3.6 BZ pull-integration model coexist. This is the "integration
+     * File import stays as a fallback ("Import z pliku zostaje jako droga awaryjna"):
+     * regression coverage proving the file-export fallback and the
+     * BZ pull-integration model coexist. This is the "integration
      * ON" direction — an organizer who has flipped `bz_integration_enabled`
      * on and set a `bz_organization_token` must still be able to use the
      * CSV/XLSX export exactly as before, e.g. as a manual backup during the

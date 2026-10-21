@@ -7,13 +7,13 @@ namespace ZmierzymyCzas\Domain\Care;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * Opieka: relacja N:M między Kontem a Zawodnikiem, uogólniająca dawne
- * Authorizations (Konto -> Konto). Konto z relacją Opieki nad Zawodnikiem
- * może go zapisywać na zawody.
+ * Opieka: an N:M relation between a Konto and a Zawodnik, generalising the former
+ * Authorizations (Konto -> Konto). A Konto with an Opieka relation to a Zawodnik
+ * can register them for events.
  */
 final class CareRepository extends Repository
 {
-    /** Zawodnicy, nad którymi opiekę sprawuje dane Konto (może ich zapisywać). */
+    /** Zawodnicy cared for by the given Konto (who may register them). */
     public function listMyCompetitors(string $kontoId): array
     {
         $stmt = $this->pdo->prepare(
@@ -34,7 +34,7 @@ final class CareRepository extends Repository
         }, $stmt->fetchAll());
     }
 
-    /** Konta, które sprawują opiekę nad danym Zawodnikiem (mogą go zapisywać). */
+    /** Konta that care for the given Zawodnik (and may register them). */
     public function listCaregivers(string $zawodnikId): array
     {
         $stmt = $this->pdo->prepare(
@@ -80,9 +80,9 @@ final class CareRepository extends Repository
     }
 
     /**
-     * Cofa Opiekę. Może to zrobić opiekun (konto_id), albo Zawodnik, którego
-     * dotyczy Opieka, jeśli ma własne Konto (zawodnik.user_id = kontoId) —
-     * czyli osoba, nad którą sprawowana jest opieka, też może ją cofnąć.
+     * Revokes an Opieka. Either the caregiver (konto_id) can do it, or the Zawodnik the
+     * Opieka concerns, if they have their own Konto (zawodnik.user_id = kontoId) —
+     * i.e. the person being cared for can also revoke it.
      */
     public function revoke(string $id, string $kontoId): bool
     {
@@ -96,7 +96,7 @@ final class CareRepository extends Repository
     }
 
     /**
-     * E8.1 (competitor merge): moves every Opieka over the absorbed profile onto
+     * Competitor merge: moves every Opieka over the absorbed profile onto
      * the survivor. `care_relations` has a UNIQUE (konto_id, zawodnik_id) pair —
      * a caregiver who already cares for the survivor (common case: the same
      * confused parent created both duplicate profiles and cares for both) would
@@ -116,7 +116,7 @@ final class CareRepository extends Repository
         )->execute(['survivorId' => $survivorId, 'absorbedId' => $absorbedId]);
     }
 
-    /** Czy dane Konto może zapisywać danego Zawodnika (opieka albo to jego własny profil). */
+    /** Whether the given Konto may register the given Zawodnik (via Opieka, or it is their own profile). */
     public function canRegister(string $kontoId, string $zawodnikId): bool
     {
         if ($this->exists($kontoId, $zawodnikId)) {

@@ -8,8 +8,8 @@ use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Domain\FormFields\FormFieldCatalog;
 
 /**
- * model-formularza-zapisow.md §2/§3: zamknięty katalog 13 pozycji, trzy klasy
- * sterowania.
+ * Form-field model: a closed catalog of 13 fields, three control
+ * classes.
  */
 final class FormFieldCatalogTest extends TestCase
 {
@@ -57,9 +57,9 @@ final class FormFieldCatalogTest extends TestCase
     }
 
     /**
-     * Data urodzenia/Płeć są dziś zawsze wymagane — odblokowanie Nie/Pokaż
-     * wymagałoby klasyfikacji wiekowej Dystansu, która nie jest jeszcze wpięta
-     * w tym kodzie (udokumentowana luka, patrz FormFieldCatalog::allowedStates()).
+     * Date of birth/Gender are always required today; unlocking No/Show
+     * would need an age classification of the Dystans, which is not wired in yet
+     * in this code (a documented gap, see FormFieldCatalog::allowedStates()).
      */
     public function testAgeDrivenFieldsAreAlwaysRequiredUntilAgeClassificationIsWired(): void
     {
@@ -75,7 +75,7 @@ final class FormFieldCatalogTest extends TestCase
         );
     }
 
-    /** Anonimizacja jest wyjątkiem wśród swobodnych: tylko Nie/Pokaż (model §2). */
+    /** Anonymization is the exception among the free fields: only No/Show. */
     public function testAnonymizationOnlyAllowsHiddenOrShown(): void
     {
         self::assertSame(FormFieldCatalog::CONTROL_FREE, FormFieldCatalog::controlClassFor('anonymization'));

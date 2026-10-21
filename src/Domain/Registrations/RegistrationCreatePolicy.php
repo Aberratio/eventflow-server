@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Registrations;
 
 /**
- * PP.52: pure payload policy for `POST /registrations`. The caller only picks
+ * Pure payload policy for `POST /registrations`. The caller only picks
  * WHAT to register for (event, distance, variant, team, extras) and optionally
  * WHICH Zawodnik (competitorId). Identity (userId/userName/userEmail/
  * registeredById) is derived server-side from the JWT and the Zawodnik, and a
  * Zapis's payment status is set only by the payment state machine (webhook,
- * mark-paid) — never claimed by the caller (same rule as PP.2 for PATCH).
- * PP.54: `actorUserId` (the authenticated caller, for the team captain-consent check) is
+ * mark-paid) — never claimed by the caller (same rule as for PATCH).
+ * `actorUserId` (the authenticated caller, for the team captain-consent check) is
  * set by the HTTP layer only and is never taken from the body, so it is not selectable here.
  */
 final class RegistrationCreatePolicy
@@ -22,7 +22,7 @@ final class RegistrationCreatePolicy
         'teamName', 'teamId', 'teamInviteToken', 'createTeam', 'specialCategory',
         'pricingVariantId', 'discountCode', 'merchandise', 'merchandiseOrders',
         'insuranceVariantId',
-        // B-07: answers to the Event's form (validated and priced server-side by RegistrationFormService).
+        // Answers to the Event's form (validated and priced server-side by RegistrationFormService).
         'formFieldAnswers', 'identity',
     ];
 

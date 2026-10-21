@@ -9,7 +9,7 @@ use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E8.1 fix-loop: a real second connection to the same test database (built
+ * A real second connection to the same test database (built
  * the same way `Connection::fromEnv()` does — this cannot reuse the caller's
  * existing PDO object, PDO has no "wrap this connection" mode), which throws
  * on demand for exactly one SQL statement: the `approveRefund()` UPDATE

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Registrations;
 
 /**
- * R-02 (spec 20 "Answer" §2-3, zakres P2 - do potwierdzenia przez Zamawiającego): may the owner of a
+ * May the owner of a
  * Zapis change it on their own right now? One policy, one date per Wydarzenie, shared by every
  * self-service operation (cancellation today; change of Dystans and transfer reuse it as they land).
  *

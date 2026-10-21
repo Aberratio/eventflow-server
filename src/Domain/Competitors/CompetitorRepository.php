@@ -8,8 +8,8 @@ use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Support\QrCode;
 
 /**
- * Zawodnik: profil danych startowych, byt samodzielny — nie własność Konta.
- * Może istnieć bez żadnego powiązanego Konta (np. dziecko zarejestrowane przez rodzica).
+ * Zawodnik: a profile of starting data, a standalone entity — not owned by a Konto.
+ * It can exist without any linked Konto (e.g. a child registered by a parent).
  */
 final class CompetitorRepository extends Repository
 {
@@ -36,9 +36,9 @@ SQL;
     }
 
     /**
-     * Zwraca istniejącego Zawodnika powiązanego z Kontem, tworząc go w locie,
-     * jeśli konto powstało przed wdrożeniem tego modelu (np. w testach) i jeszcze
-     * nie ma swojego profilu Zawodnika.
+     * Returns the existing Zawodnik linked to the Konto, creating it on the fly
+     * if the account was created before this model was introduced (e.g. in tests) and does not yet
+     * have a Zawodnik profile.
      *
      * @param array<string, mixed> $user
      */
@@ -67,8 +67,8 @@ SQL;
     }
 
     /**
-     * Zawodnicy, którzy pasują imieniem, nazwiskiem i datą urodzenia — obrona przed
-     * duplikatami jest ostrzeżeniem, nie blokadą (patrz E0.1 AC3).
+     * Zawodnicy matching by first name, last name and date of birth — duplicate
+     * defense is a warning, not a block.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -91,7 +91,7 @@ SQL;
 
     /**
      * @param array<string, mixed> $data
-     * @return array<string, mixed> Zawodnik wraz z listą potencjalnych duplikatów w kluczu "duplicateWarnings".
+     * @return array<string, mixed> Zawodnik with a list of potential duplicates under the "duplicateWarnings" key.
      */
     public function create(array $data, bool $skipDuplicateCheck = false): array
     {
@@ -111,9 +111,9 @@ SQL;
             'email' => $data['email'] ?? null,
             'phone' => $data['phone'] ?? null,
             'club' => $data['club'] ?? null,
-            // E1.12: kod tożsamości — generowany zawsze, tu, przy tworzeniu Zawodnika
-            // (nigdy przez BZ, patrz generateIdentityCode()'s docblock), więc nigdy
-            // nie ma Zawodnika bez kodu i nie ma stanu "jeszcze nie wygenerowano".
+            // Identity code — always generated here, when the Zawodnik is created
+            // (never by BZ, see generateIdentityCode()'s docblock), so there is never
+            // a Zawodnik without a code and no "not generated yet" state.
             'identity_code' => $this->generateIdentityCode(),
             'user_id' => $data['userId'] ?? null,
         ]);
@@ -124,13 +124,13 @@ SQL;
     }
 
     /**
-     * E8.1: Moderator/Admin szuka dwóch profili do porównania przed scaleniem.
-     * Celowo prosty (imię/nazwisko/kod tożsamości, LIKE) — to nie jest publiczne
-     * wyszukiwanie uczestników, tylko narzędzie obsługi do znalezienia podejrzanego
-     * duplikatu zgłoszonego przez opiekuna/organizatora (spec Answer §2 krok 1: nie
-     * ma formalnego mechanizmu "zgłoszenia", moderator po prostu wyszukuje). Nie
-     * zwraca już scalonych profili — te są martwym archiwum, nie kandydatami do
-     * kolejnego scalenia.
+     * A Moderator/Admin looks for two profiles to compare before merging.
+     * Deliberately simple (first name/last name/identity code, LIKE) — this is not a public
+     * participant search, only a support tool for finding a suspected
+     * duplicate reported by a caregiver/organizer (there is no formal
+     * "report" mechanism; the moderator just searches). It does not
+     * return already-merged profiles — those are a dead archive, not candidates for
+     * another merge.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -160,8 +160,8 @@ SQL;
         $stmt->execute(['needleFirst' => $like, 'needleLast' => $like, 'needleFull' => $like, 'exact' => $needle]);
         $results = $stmt->fetchAll();
 
-        // E8.1 fix-loop: this search box is the one real, existing place in
-        // this codebase where a moderator pastes a raw kod tożsamości
+        // This search box is the one real, existing place in
+        // this codebase where a moderator pastes a raw identity code
         // (`zqr_...`, see the UI's own placeholder text) to find a Zawodnik —
         // there is no separate BZ-facing "resolve a scanned code" HTTP route
         // in this repo (BZ's own scanner/resolution logic lives in the
@@ -187,13 +187,13 @@ SQL;
     }
 
     /**
-     * E8.1 (spec Answer §3): odczyt wsteczny — zwraca Zawodnika, do którego
-     * dziś faktycznie trafia dany kod tożsamości (`zqr_`), niezależnie od tego,
-     * czy ten dokładny kod jest jego WŁASNYM, aktywnym kodem, czy starym aliasem
-     * po scaleniu (ewentualnie łańcuchu kilku scaleń — profil A scalony w B,
-     * B później scalony w C: kod A ma nadal trafiać w C). Alias nigdy nie jest
-     * promowany w UI (spec: "wyłącznie ścieżka odczytu wstecznego") — to jedyne
-     * miejsce, które go czyta.
+     * Backward lookup — returns the Zawodnik that
+     * an identity code (`zqr_`) actually resolves to today, whether
+     * that exact code is their OWN active code or an old alias
+     * left by a merge (possibly a chain of merges — profile A merged into B,
+     * B later merged into C: A's code must still resolve to C). An alias is never
+     * promoted in the UI (backward lookup only) — this is the only
+     * place that reads it.
      */
     public function resolveIdentityCode(string $code): ?array
     {
@@ -235,8 +235,8 @@ SQL;
     }
 
     /**
-     * E8.1: przełącza wchłonięty profil w stan archiwalny `scalony` z odsyłaczem
-     * do przeżywającego (spec Answer §2 krok 7) — nigdy nie jest to usuwane.
+     * Switches the absorbed profile to the archival `scalony` (merged) state with a pointer
+     * to the survivor — it is never deleted.
      *
      * @return array<string, mixed>|null
      */
@@ -275,12 +275,12 @@ SQL;
     }
 
     /**
-     * E6.6 (issue 15 §6): self-service anonymization toggle — a Zawodnik (or
+     * Self-service anonymization toggle — a Zawodnik (or
      * whoever has Opieka over them, same authorization circle routes.php
      * already uses for rotateIdentityCode()) can flip this on their own
      * profile. Mirrors regenerateIdentityCode()'s shape deliberately: a
      * single-purpose, narrowly-named method rather than routing this through
-     * the generic update() above, so the one field this ticket actually needs
+     * the generic update() above, so the one field this action actually needs
      * writable from a public-ish self-service action isn't bundled with
      * name/birth-date/contact-detail edits that need their own scrutiny.
      */
@@ -295,17 +295,17 @@ SQL;
     }
 
     /**
-     * E1.12 (spec 11, "Kod tożsamości"): rotacja na żądanie — Zawodnik sam, albo
-     * Konto sprawujące nad nim Opiekę, może w każdej chwili unieważnić stary kod
-     * i dostać nowy. Świadomie: bez historii starych kodów (spec §4, "żaden kod
-     * nie ma statusu") — po prostu nadpisujemy `identity_code`, stary token po
-     * prostu przestaje istnieć gdziekolwiek w bazie, nic więcej nie trzeba robić.
+     * Identity code rotation on demand — the Zawodnik themselves, or the
+     * Konto holding Opieka over them, may invalidate the old code at any time
+     * and get a new one. Deliberately no history of old codes (no code
+     * has a status) — we simply overwrite `identity_code`, and the old token
+     * ceases to exist anywhere in the database; nothing else needs doing.
      *
-     * Autoryzacja (kto wolno wywołać) to sprawa wywołującego (routes.php, przez
-     * `CareRepository::canRegister()` — ta sama relacja Opieki, która pozwala
-     * zapisywać Zawodnika na zawody, pozwala też rotować jego kod), nie tego
-     * repozytorium — mirror tego, jak `RegistrationRepository` nie zna się na
-     * uprawnieniach wywołującego.
+     * Authorization (who may call this) is the caller's concern (routes.php, via
+     * `CareRepository::canRegister()` — the same Opieka relation that allows
+     * registering a Zawodnik for events also allows rotating their code), not this
+     * repository's — mirroring how `RegistrationRepository` knows nothing about
+     * the caller's permissions.
      */
     public function regenerateIdentityCode(string $id): ?array
     {
@@ -318,10 +318,10 @@ SQL;
     }
 
     /**
-     * E8.1: zapisuje stary kod tożsamości wchłoniętego profilu jako alias
-     * wskazujący na przeżywającego — patrz `resolveIdentityCode()` i migracja
-     * 059 dla pełnego uzasadnienia (spec Answer §3: nie natychmiastowe
-     * unieważnienie, bo scalanie inicjuje obsługa bez wiedzy Zawodnika).
+     * Stores the absorbed profile's old identity code as an alias
+     * pointing at the survivor — see `resolveIdentityCode()` and migration
+     * 059 for the full rationale (not an immediate
+     * invalidation, because support initiates merges without the Zawodnik's knowledge).
      */
     public function addIdentityCodeAlias(string $oldIdentityCode, string $survivorId): void
     {
@@ -333,17 +333,17 @@ SQL;
     }
 
     /**
-     * E1.12 (spec 11, "Kod tożsamości"): identyczna konstrukcja co E1.11's
-     * `generateStartCode()` (`random_bytes(24)`, 192 bity entropii, 48 znaków hex) —
-     * różni się wyłącznie prefiksem (`zqr_` zamiast `pqr_`), zgodnie ze spec §3:
-     * "Oba kody mają identyczną budowę składniową (...) i różnią się wyłącznie
-     * prefiksem", tak żeby Biuro Zawodów mogło rozróżnić kod tożsamości od kodu
-     * startowego samym formatem (regex), bez zmiany długości/alfabetu.
+     * Same construction as `generateStartCode()`
+     * (`random_bytes(24)`, 192 bits of entropy, 48 hex chars) —
+     * differing only in the prefix (`zqr_` instead of `pqr_`):
+     * both codes have the same syntactic structure and differ only by
+     * prefix, so that Biuro Zawodów can tell an identity code from a
+     * start code by format alone (regex), without changing length/alphabet.
      *
-     * Ten kod należy do Zawodnika (byt samodzielny, może istnieć bez Konta — patrz
-     * `ensureForUser()`), nie do Zapisu ani Konta — dziecko dopisane przez rodzica
-     * bez własnego Konta i tak dostaje własny kod tożsamości, bo powstaje razem
-     * z wierszem competitors, nie z uwierzytelnieniem.
+     * This code belongs to the Zawodnik (a standalone entity that can exist without a Konto — see
+     * `ensureForUser()`), not to a Zapis or Konto — a child added by a parent
+     * without their own Konto still gets their own identity code, because it is created together
+     * with the competitors row, not with authentication.
      */
     private function generateIdentityCode(): string
     {

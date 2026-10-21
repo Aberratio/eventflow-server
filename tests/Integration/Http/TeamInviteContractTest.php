@@ -10,7 +10,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E7.2 (issue 23 Answer §1, "link do zaproszenia dla pozostałych miejsc"):
+ * Invitation link for the remaining slots ("link do zaproszenia dla pozostałych miejsc"):
  * GET /teams/{teamId} is the read side of a captain's shareable invitation
  * link (`/events/{eventSlug}/register?joinTeam={teamId}`) — public,
  * unauthenticated, returns the same shape as the sibling

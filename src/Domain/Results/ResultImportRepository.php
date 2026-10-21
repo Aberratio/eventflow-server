@@ -247,10 +247,10 @@ SQL;
                     ]);
                 }
 
-                // Spec 14 sekcja 1: DNF moze niesc czas do momentu przerwania, jesli
-                // pomiar go dal - tylko DNS/DSQ nigdy nie maja czasu. "finished" i
-                // "dnf" oba moga wiec zapisac realny mapped['time']; positions()
-                // wyzej juz wyklucza dnf/dns/dsq z klasyfikacji miejsc.
+                // A DNF may carry a time up to the moment of withdrawal, if the
+                // timing system recorded one - only DNS/DSQ never have a time. Both "finished" and
+                // "dnf" may therefore store a real mapped['time']; positions()
+                // above already excludes dnf/dns/dsq from the place classification.
                 $hasTime = in_array($mapped['status'], ['finished', 'dnf'], true) && $mapped['time'] !== '';
                 $resultId = $this->id();
                 $this->insert('results', [
@@ -290,7 +290,7 @@ SQL;
                 $this->updateById('result_import_rows', $rowId, ['status' => 'committed', 'updated_at' => date(DATE_ATOM)]);
             }
 
-            // G-03: "miejsce wg płci" over the freshly written results of the classification.
+            // "miejsce wg płci" over the freshly written results of the classification.
             ResultRepository::recomputeGenderPositions($this->pdo, (string) $batch['eventId'], (string) $batch['distanceId']);
             $this->updateById('result_import_batches', $batchId, [
                 'status' => 'committed',
@@ -689,9 +689,9 @@ SQL);
             } elseif (str_contains($key, 'nazwisko') || str_contains($key, 'lastname')) {
                 $target = 'lastName';
             } elseif (str_contains($key, 'miedzyczas') || str_contains($key, 'punktkontrolny') || str_contains($key, 'split') || str_contains($key, 'checkpoint')) {
-                // Spec 14 sekcja 2: miedzyczasy sa opcjonalna lista par
-                // nazwa+czas, nie pojedynczym polem - zbierane osobno ponizej,
-                // nie przez zwykle mapowanie 1:1.
+                // Splits ("miedzyczasy") are an optional list of name+time pairs,
+                // not a single field - collected separately below,
+                // not through the usual 1:1 mapping.
                 $mapping['splits'] ??= [];
                 $mapping['splits'][] = $header;
                 continue;
@@ -782,8 +782,8 @@ SQL);
             $errors[] = $time['error'];
         }
 
-        // Netto jest opcjonalne (nie kazdy pomiar ma mate startowa) - brak albo
-        // niepoprawny format to ostrzezenie, nigdy blad blokujacy wiersz.
+        // Net time is optional (not every timing has a start mat) - a missing or
+        // malformed value is a warning, never an error that blocks the row.
         $netRaw = trim((string) ($mapped['netTime'] ?? ''));
         if ($netRaw === '') {
             $mapped['netTime'] = '';
@@ -800,8 +800,8 @@ SQL);
             }
         }
 
-        // Miedzyczasy sa opcjonalne i nigdy nie blokuja wiersza - punkt kontrolny
-        // z niepoprawnym czasem jest po prostu pomijany, z ostrzezeniem.
+        // Splits are optional and never block a row - a checkpoint
+        // with a malformed time is simply skipped, with a warning.
         $splits = [];
         foreach ((array) ($mapped['splits'] ?? []) as $split) {
             $parsedSplit = $this->parseDuration((string) ($split['rawTime'] ?? ''));
@@ -842,11 +842,11 @@ SQL);
     }
 
     /**
-     * DNF/DNS/DSQ (spec 14 sekcja 1) sa wartosciami statusu wyniku, nie brakiem
-     * wiersza: DNF niesie czas do momentu przerwania jesli pomiar go dal (lub
-     * pusty), DNS i DSQ nigdy nie maja czasu. Rozpoznaje status zarowno z
-     * osobnej kolumny "status", jak i wtedy, gdy plik wpisuje go wprost w
-     * kolumnie czasu (real-world przyklad w przyklady/import-wynikow).
+     * DNF/DNS/DSQ are result status values, not a missing
+     * row: a DNF carries the time up to the moment of withdrawal if timing gave one (or
+     * empty), DNS and DSQ never have a time. Recognizes the status both from a
+     * separate "status" column and when the file writes it directly in the
+     * time column (real-world example in przyklady/import-wynikow).
      *
      * @return array{time: string, seconds: ?float, status: string, error: ?string}
      */
@@ -867,7 +867,7 @@ SQL);
         }
 
         if ($normalizedStatus === 'dns' || $normalizedStatus === 'dsq') {
-            // DNS/DSQ nigdy nie maja czasu, nawet jesli plik pomiaru jakis podal.
+            // DNS/DSQ never have a time, even if the timing file supplied one.
             return ['time' => '', 'seconds' => null, 'status' => $normalizedStatus, 'error' => null];
         }
 
@@ -893,9 +893,9 @@ SQL);
     }
 
     /**
-     * Parsuje "M:SS", "H:MM:SS" albo te same z setnymi sekundy
-     * ("H:MM:SS.ss", separator kropka lub przecinek) - spec 14 sekcja 2,
-     * "dokladnosc do setnej sekundy".
+     * Parses "M:SS", "H:MM:SS" or the same with hundredths of a second
+     * ("H:MM:SS.ss", dot or comma separator) - precision
+     * to the hundredth of a second.
      *
      * @return array{formatted: string, seconds: float}|null
      */
@@ -1046,9 +1046,9 @@ SQL);
     }
 
     /**
-     * Ticket 07 pkt 13 / E0.3: Wariant opłaty oznaczony jako dostepny wylacznie
-     * przy zapisie w biurze zawodow. Reuse zamiast wynajdywania nowej flagi -
-     * patrz migration 029_pricing_model_migration.sql.
+     * The Wariant opłaty marked as available only for registration at the
+     * race office. Reused instead of inventing a new flag -
+     * see migration 029_pricing_model_migration.sql.
      *
      * @return array<string, mixed>|null
      */
@@ -1071,13 +1071,13 @@ SQL);
     }
 
     /**
-     * Spec 14 sekcja 1: "Uczestnik bez Zapisu w systemie ... wymusza utworzenie
-     * Zapisu Wariantem oznaczonym „dostępny wyłącznie przy zapisie w biurze
-     * zawodów", zamiast tworzyć wynik osierocony." Ten sam Wariant co ticket 07
-     * pkt 13 (E0.3) - zadnej nowej flagi. Zawodnik dostaje profil bez Konta
-     * (ten sam wzorzec co "dziecko zarejestrowane przez rodzica" w
-     * CompetitorRepository), a organizator wykonujacy dopasowanie zostaje
-     * registeredById, dokladnie jak przy zapisie robionym przez opiekuna.
+     * A participant without a Zapis in the system forces creating a Zapis
+     * with the Wariant marked "dostępny wyłącznie przy zapisie w biurze
+     * zawodów" instead of creating an orphaned result. Same Wariant as the
+     * office registration flow - no new flag. The Zawodnik gets a profile without a Konto
+     * (same pattern as "dziecko zarejestrowane przez rodzica" in
+     * CompetitorRepository), and the organizer doing the matching becomes
+     * registeredById, exactly as for a registration made by a guardian.
      */
     public function createRegistrationForRow(string $rowId, string $actorId): array
     {
@@ -1113,7 +1113,7 @@ SQL);
 
         [$firstName, $lastName] = $this->splitName($fullName);
         $genderRaw = strtoupper(trim((string) ($mapped['gender'] ?? '')));
-        // PP.79: the Kategoria wiekowa is derived from the Zawodnik's birth year and gender, so the
+        // The Kategoria wiekowa is derived from the Zawodnik's birth year and gender, so the
         // file's own values go onto the new Zawodnik (only when they are usable).
         $birthYearRaw = trim((string) ($mapped['birthYear'] ?? ''));
         $birthYear = preg_match('/^\d{4}$/', $birthYearRaw) === 1
@@ -1168,14 +1168,14 @@ SQL);
             'distanceId' => $batch['distanceId'],
             'category' => $category,
             'pricingVariantId' => $variant['id'],
-            // PP.65: this office action picks the office-only variant on purpose; the HTTP route
+            // This office action picks the office-only variant on purpose; the HTTP route
             // behind it already restricts it to event managers.
             'trustedOfficeRegistration' => true,
             'registeredById' => $actorId,
             'merchandiseOrders' => [],
-            // Uczestnik juz przebiegl dystans (pojawil sie w pliku wynikow) -
-            // Zapis powstaje od razu potwierdzony i oplacony, tak jak kazdy
-            // zapis w biurze zawodow w dniu startu.
+            // The participant has already run the distance (appears in the results file) -
+            // the Zapis is created confirmed and paid right away, like any
+            // registration at the race office on the day of the start.
             'paymentDetails' => ['startFeePaid' => true],
         ]);
     }

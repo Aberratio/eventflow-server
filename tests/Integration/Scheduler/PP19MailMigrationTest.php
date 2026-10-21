@@ -10,7 +10,7 @@ use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Database\Migrator;
 use ZmierzymyCzas\Support\Env;
 
-/** PP.19: migration 066 (portable, idempotent, legacy rows keep next_attempt_at NULL). */
+/** Migration 066 (portable, idempotent, legacy rows keep next_attempt_at NULL). */
 final class PP19MailMigrationTest extends TestCase
 {
     private const FILE = '066_pp19_mail_outbox_retry.sql';

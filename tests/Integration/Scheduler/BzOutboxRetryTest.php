@@ -18,7 +18,7 @@ use ZmierzymyCzas\Scheduler\Jobs\BzOutboxRetryJob;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeBzHttpClient;
 
-/** PP.18: bz.outbox_retry (failed / stale-queued pushes, attempts, backoff). */
+/** bz.outbox_retry (failed / stale-queued pushes, attempts, backoff). */
 final class BzOutboxRetryTest extends TestCase
 {
     private PDO $pdo;

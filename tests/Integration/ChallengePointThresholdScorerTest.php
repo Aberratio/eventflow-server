@@ -16,7 +16,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E6.2 (issue 15 §2): scoring a `point_threshold` node for one competitor —
+ * Scoring a `point_threshold` node for one competitor —
  * place-to-points lookup via the global table (ChallengePointsSettingsRepository)
  * plus "N best of the linked Events" selection.
  */
@@ -199,8 +199,8 @@ final class ChallengePointThresholdScorerTest extends TestCase
     public function testTiedPlacementPointsAreSummedLikeAnyOtherScore(): void
     {
         // A points table with a genuine tie (two places worth the same
-        // points) - issue 15 §2's "remisy" note is about competitors tying
-        // in the Wyzwanie's own points classification (out of this ticket's
+        // points) - the "remisy" (ties) rule is about competitors tying
+        // in the Wyzwanie's own points classification (out of the scorer's
         // scope, see ChallengePointThresholdScorer's class doc comment), but
         // this proves the scorer itself has no special-case bug when two of
         // a *single* competitor's own results happen to be worth equal

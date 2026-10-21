@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Scheduler;
 use PDO;
 use Psr\Log\LoggerInterface;
 
-/** PP.18: lock -> jobs in order -> per-job isolation -> run log -> exit code. */
+/** Lock -> jobs in order -> per-job isolation -> run log -> exit code. */
 final class SchedulerRunner
 {
     /**

@@ -34,7 +34,7 @@ final class JsonErrorMiddleware implements MiddlewareInterface
             return $handler->handle($request);
         } catch (Throwable $exception) {
             if ($exception instanceof InputValidationException) {
-                // PP.76: expected client error, not a server fault, so not logged and never 500.
+                // Expected client error, not a server fault, so not logged and never 500.
                 return JsonResponder::error(new SlimResponse(), $exception->errorCode, $exception->getMessage(), 422, ['field' => $exception->field]);
             }
 
@@ -76,7 +76,7 @@ final class JsonErrorMiddleware implements MiddlewareInterface
     }
 
     /**
-     * PP.20 seam: every 5xx passes through here exactly once. Logs the exception summary,
+     * Server-error seam: every 5xx passes through here exactly once. Logs the exception summary,
      * method and path only (never query string, headers or body) and must never throw.
      */
     private function reportServerError(Throwable $exception, Request $request, string $requestId, int $status): void

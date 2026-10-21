@@ -38,7 +38,7 @@ abstract class HttpTestCase extends TestCase
         }
     }
 
-    /** PP.4: hook for tests that need to share one connection (e.g. a savepoint-isolated one). */
+    /** Hook for tests that need to share one connection (e.g. a savepoint-isolated one). */
     protected function createPdo(): PDO
     {
         return Connection::fromEnv();
@@ -78,7 +78,7 @@ abstract class HttpTestCase extends TestCase
         ];
     }
 
-    /** PP.7: the session version the guard compares against; 0 for an unknown user (the guard then answers 401). */
+    /** The session version the guard compares against; 0 for an unknown user (the guard then answers 401). */
     protected function tokenVersionOf(string $userId): int
     {
         try {

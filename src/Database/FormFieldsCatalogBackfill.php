@@ -7,24 +7,24 @@ namespace ZmierzymyCzas\Database;
 use PDO;
 
 /**
- * Backfill for migration 041 (E1.13): every event gets all 13 system form-field
- * positions from the catalogue (model §2), with the same default states 041's own
+ * Backfill for migration 041: every event gets all 13 system form-field
+ * positions from the catalogue, with the same default states 041's own
  * comment documents.
  *
- * PP.13: runs on every `Migrator::applyAll()` call, not only when 041 itself
+ * Runs on every `Migrator::applyAll()` call, not only when 041 itself
  * (re-)applies through the ledger — same reasoning as
  * {@see CompetitorProfileBackfill} and {@see ChallengeConditionTreeBackfill}:
  * seeders/fixtures insert `events` rows directly by SQL, after migrations (and the
  * ledger) have already run. `FormFieldRepository::ensureSystemCatalog()` is the
- * app-level equivalent for an event created through the API at runtime (its own
- * docblock: "łata wydarzenia utworzone później, np. w testach") — this is the same
+ * app-level equivalent for an event created through the API at runtime (which
+ * patches events created later, e.g. in tests) — this is the same
  * idempotent catch-up, kept here so a raw migrate (no app code involved, e.g.
  * `tests/bin/test-db.php migrate`) also has every event fully catalogued.
  * Idempotent: `WHERE NOT EXISTS (... f.event_id = e.id AND f.field_key = k.field_key)`.
  *
  * The `phone`/`club` legacy-JSON `state = 'shown'` flip and the custom-fields JSON
  * migration that follow this INSERT in 041.sql are deliberately NOT part of this
- * class and stay ledger-gated (run once): PP.13 R6 — re-running that flip against
+ * class and stay ledger-gated (run once): re-running that flip against
  * live data on a staging bootstrap would silently change organizer-configured
  * visibility, which is out of scope here (report only, do not change).
  */

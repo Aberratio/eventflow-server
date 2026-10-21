@@ -13,7 +13,7 @@ use ZmierzymyCzas\Domain\Series\SeriesRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * TD.23: SeriesRepository::replaceEvents() was converted from a per-row
+ * SeriesRepository::replaceEvents() was converted from a per-row
  * INSERT+UPDATE loop to a batched multi-row INSERT and a single batched
  * UPDATE. These tests exercise it with a realistic multi-event input (more
  * than one row) so a wrong VALUES-group mapping, a wrong sort_order, or a
@@ -67,7 +67,7 @@ final class SeriesRepositoryTest extends TestCase
             'name' => $this->slugPrefix . ' Series',
             'slug' => $this->slugPrefix . '-series',
             'type' => 'local',
-            'description' => 'PP.13 fixture (series.description is NOT NULL, no default)',
+            'description' => 'Fixture (series.description is NOT NULL, no default)',
             'eventIds' => $eventIds,
         ], ['sub' => 'phpunit-organizer', 'email' => 'organizer@example.test']);
 
@@ -101,7 +101,7 @@ final class SeriesRepositoryTest extends TestCase
             'name' => $this->slugPrefix . ' Series 2',
             'slug' => $this->slugPrefix . '-series-2',
             'type' => 'local',
-            'description' => 'PP.13 fixture (series.description is NOT NULL, no default)',
+            'description' => 'Fixture (series.description is NOT NULL, no default)',
             'eventIds' => [$first, $second],
         ], ['sub' => 'phpunit-organizer', 'email' => 'organizer@example.test']);
 
@@ -120,7 +120,7 @@ final class SeriesRepositoryTest extends TestCase
             'name' => $this->slugPrefix . ' Series Empty',
             'slug' => $this->slugPrefix . '-series-empty',
             'type' => 'local',
-            'description' => 'PP.13 fixture (series.description is NOT NULL, no default)',
+            'description' => 'Fixture (series.description is NOT NULL, no default)',
             'eventIds' => [],
         ], ['sub' => 'phpunit-organizer', 'email' => 'organizer@example.test']);
 

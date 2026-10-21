@@ -1,13 +1,13 @@
--- R-02 (spec 20 "Życie Zapisu po opłaceniu", zakres P2 - do potwierdzenia przez Zamawiającego):
--- samoobsługa Zapisu per Wydarzenie + historia zmian Zapisu.
---   * self_service_enabled  - przełącznik: czy właściciel Zapisu może sam zrezygnować (a w kolejnych
---     krokach R-02: zmienić Dystans). Domyślnie włączone; wyłączone = "tylko organizator".
---   * self_service_deadline - wspólna data graniczna samoobsługi. NULL = domyślnie 7 dni przed
---     startem Wydarzenia (liczone w aplikacji, SelfServicePolicy).
---   * registration_changes  - dziennik zmian jednego Zapisu widoczny dla zawodnika i organizatora.
---     `type` obejmuje już zmianę Dystansu i transfer (kolejne kroki R-02 tylko dopisują wiersze).
+-- Registration (Zapis) self-service per Event (Wydarzenie) + Registration change history:
+-- Per-event switches and a change log:
+--   * self_service_enabled  - switch: whether the owner of a Registration can cancel it themselves (and in later
+--     steps change the Distance). Enabled by default; disabled = "organizer only".
+--   * self_service_deadline - common cut-off date for self-service. NULL = by default 7 days before
+--     the Event start (computed in the application, SelfServicePolicy).
+--   * registration_changes  - change log of a single Registration, visible to the competitor and organizer.
+--     `type` already covers Distance change and transfer (later steps only add rows).
 --
--- Przenośne i idempotentne (adnotacja @guard, CREATE TABLE IF NOT EXISTS).
+-- Portable and idempotent (@guard annotation, CREATE TABLE IF NOT EXISTS).
 
 -- @guard: column-missing events.self_service_enabled
 ALTER TABLE events ADD COLUMN self_service_enabled TINYINT(1) NOT NULL DEFAULT 1;

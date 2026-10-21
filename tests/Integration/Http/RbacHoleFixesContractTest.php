@@ -13,7 +13,7 @@ use ZmierzymyCzas\Tests\Support\HttpTestCase;
 use ZmierzymyCzas\Tests\Support\SavepointPdo;
 
 /**
- * PP.4: targeted positive/negative tests for the RBAC holes the route review found
+ * Targeted positive/negative tests for the RBAC holes the route review found
  * (H1-H7, H9-H11). Allowed actors really succeed and state really stays unchanged on
  * denial. Everything runs inside a savepoint that is rolled back after each test.
  */
@@ -209,8 +209,8 @@ final class RbacHoleFixesContractTest extends HttpTestCase
     }
 
     /**
-     * G-10 (macierz §2: przekazanie własności = zastrzeżone dla Właściciela, "jedyna droga wyjścia,
-     * gdy Właściciel odchodzi"; Admin może wymusić). Moderator = Współzarządzający: 403 (covered above).
+     * Ownership transfer is reserved for the Owner ("jedyna droga wyjścia,
+     * gdy Właściciel odchodzi"); Admin may force it. Moderator = Co-manager: 403 (covered above).
      */
     public function testOwnerAndAdminMayTransferOwnershipButForeignOrganizerMayNot(): void
     {
@@ -233,7 +233,7 @@ final class RbacHoleFixesContractTest extends HttpTestCase
         self::assertSame(200, $admin->getStatusCode(), (string) $admin->getBody());
         self::assertSame($target, $this->scalar('SELECT organizer_id FROM events WHERE id = :id', ['id' => $forced['id']]));
 
-        // The existing PP.4 stance stays: a live (published) Event cannot be handed over by anyone.
+        // The existing stance stays: a live (published) Event cannot be handed over by anyone.
         $live = $this->newEvent();
         self::$sharedPdo->prepare("UPDATE events SET publication_status = 'published' WHERE id = :id")->execute(['id' => $live['id']]);
         $locked = $this->request('PATCH', '/api/v1/events/' . $live['id'], ['organizerId' => $target], $this->as('organizer'));
@@ -241,7 +241,7 @@ final class RbacHoleFixesContractTest extends HttpTestCase
     }
 
     /**
-     * PP.4 admin (owner decision): Admin MAY hand over a published Event (override of
+     * Owner decision: Admin MAY hand over a published Event (override of
      * published_organizer_locked) and the handover lands in the activity log; the owning
      * organizer stays locked out (409) and nothing changes.
      */

@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Domain\Mailer\ResultsPublication;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * PP.19: one row per (event, distance) saying "official results were published, mail the
+ * One row per (event, distance) saying "official results were published, mail the
  * participants". The publish request only writes this row (O(1)); the scheduler's
  * mail.results_published job fans out to the recipients.
  */

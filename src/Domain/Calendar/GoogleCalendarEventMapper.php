@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Calendar;
 
-/** R-17: Platform Event -> Google Calendar event resource (title, date, place, link to the event page). */
+/** Platform Event -> Google Calendar event resource (title, date, place, link to the event page). */
 final class GoogleCalendarEventMapper
 {
     /**
@@ -55,7 +55,7 @@ final class GoogleCalendarEventMapper
             'source' => ['title' => (string) ($event['name'] ?? ''), 'url' => $url],
             'start' => $startPart,
             'end' => $endPart,
-            // The admin panel promises "1 dzień i 1 tydzień przed".
+            // The admin panel promises "1 day and 1 week before".
             'reminders' => ['useDefault' => false, 'overrides' => [
                 ['method' => 'popup', 'minutes' => 1440],
                 ['method' => 'popup', 'minutes' => 10080],

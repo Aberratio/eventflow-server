@@ -10,8 +10,8 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * R-08 (spec 22): opiekun / organizator zgłasza możliwy duplikat Zawodnika,
- * Moderator/Admin widzi zgłoszenia w kolejce obok scalania profili.
+ * A guardian / organizer reports a possible duplicate Zawodnik,
+ * Moderator/Admin sees the reports in a queue next to profile merging.
  */
 final class CompetitorDuplicateReportContractTest extends HttpTestCase
 {

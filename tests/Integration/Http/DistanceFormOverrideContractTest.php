@@ -12,7 +12,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * R-04 (spec 10): a Dystans inherits the event form and may override an inherited Pozycja or add its
+ * A Dystans inherits the event form and may override an inherited Pozycja or add its
  * own. Resolution is used by the public form endpoint, the registration create/quote validation and
  * the organizer editor; other Dystanse and the event-level form are never affected.
  */

@@ -6,7 +6,7 @@ namespace ZmierzymyCzas\Domain\Auth;
 
 use PDO;
 
-/** PP.7: deny-list of logged-out session ids (`jti`), kept only until the token would have expired anyway. */
+/** Deny-list of logged-out session ids (`jti`), kept only until the token would have expired anyway. */
 final class SessionRevocationRepository
 {
     private const MARGIN_SECONDS = 3600;

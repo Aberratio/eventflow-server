@@ -12,15 +12,15 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
 
 /**
- * E8.1 (issue 22, "Scalanie i przejmowanie profili Zawodnika"): trzecia warstwa
- * obrony przed duplikatami Zawodnika — wyłącznie Moderator/Admin (routes.php
+ * Merging and taking over Zawodnik profiles: the third layer of
+ * defense against duplicate Zawodnicy — Moderator/Admin only (routes.php
  * gates every endpoint here with AuthMiddleware ['admin', 'moderator']; this
  * class does not re-check authorization, same division of labour as
  * RegistrationRepository not knowing about the caller's role).
  *
- * Scope note (spec Answer, "Czego to rozstrzygnięcie świadomie nie dotyka"):
+ * Scope note:
  * this is ONLY the third defense layer (merging two existing profiles).
- * "Przejęcie profilu przez konto" (claiming, e-mail verification) is a
+ * Claiming a profile by an account (e-mail verification) is a
  * different, already-specified mechanism and is not built here.
  *
  * Identity-chain finding this service leans on (see comparison()'s docblock
@@ -52,7 +52,7 @@ final class CompetitorMergeService
     }
 
     /**
-     * Spec Answer §2 step 2: both profiles, side by side, with everything each
+     * Both profiles, side by side, with everything each
      * one carries. Lifetime records are deliberately read here via
      * `ResultRepository::lifetimeRecordsForCompetitor()` — confirmed (see that
      * method's own docblock) to be a live, derived-on-read query over
@@ -93,7 +93,7 @@ final class CompetitorMergeService
     }
 
     /**
-     * Spec Answer §2 step 6: two active Zapisy (not cancelled/removed/expired)
+     * Two active Zapisy (not cancelled/removed/expired)
      * for the same Dystans of the same Wydarzenie, one from each profile.
      * Direction-agnostic on purpose — comparison() is called before the
      * moderator has picked a survivor, so conflicts are reported per-pair,
@@ -134,7 +134,7 @@ final class CompetitorMergeService
     }
 
     /**
-     * Executes the merge, or pauses it. Spec Answer §2 step 6: a detected
+     * Executes the merge, or pauses it. A detected
      * registration conflict PAUSES automatic merging for that pair — this
      * method returns a `status: 'conflict_pending'` result (no mutation at
      * all, nothing partially applied) whenever a conflict exists without a
@@ -180,7 +180,7 @@ final class CompetitorMergeService
             return ['status' => 'conflict_pending', 'conflicts' => $unresolved];
         }
 
-        // Full pre-merge snapshot — spec Answer §4/§5: this is the ONLY place
+        // Full pre-merge snapshot: this is the ONLY place
         // the absorbed profile's state survives once the merge lands (no
         // "undo" button is built; a bad merge is corrected by support, by
         // hand, from exactly this record).
@@ -223,7 +223,7 @@ final class CompetitorMergeService
 
             $this->competitors->markMerged($absorbedId, $survivorId);
 
-            // R-08: otwarte zgłoszenia duplikatu tej pary są tym samym rozstrzygnięte.
+            // Open duplicate reports for this pair are thereby resolved.
             (new CompetitorDuplicateReportRepository($this->pdo))->markMergedForPair($survivorId, $absorbedId);
 
             $this->pdo->commit();
@@ -233,7 +233,7 @@ final class CompetitorMergeService
         }
 
         // The merge itself is already fully committed at this point — the
-        // activity-log snapshot is the ticket's ONLY recovery mechanism (no
+        // activity-log snapshot is the ONLY recovery mechanism (no
         // "undo" button by design), so it must not depend on anything that
         // can still fail below. Written BEFORE the refund/cancel loop on
         // purpose: every value it needs (survivor/absorbed before-state,
@@ -264,8 +264,8 @@ final class CompetitorMergeService
             ],
         ]);
 
-        // Spec Answer §2 step 6: the rejected side of a conflicting pair "goes
-        // through the standard cancellation/refund path (E1.5), never
+        // The rejected side of a conflicting pair "goes
+        // through the standard cancellation/refund path, never
         // silently disappears" — reusing requestRefund()/approveRefund() for
         // an already-paid Zapis, cancel() otherwise. Deliberately run AFTER
         // the merge transaction commits, not nested inside it: these methods
@@ -367,8 +367,8 @@ final class CompetitorMergeService
     }
 
     /**
-     * Spec Answer §2 step 4: "obie wartości zostają w logu, nawet ta
-     * odrzucona" — for every field a decision applies to (differing or not),
+     * "Both values stay in the log, even the rejected
+     * one" — for every field a decision applies to (differing or not),
      * record both candidate values and which one won, by name, not just id.
      *
      * @return array<int, array<string, mixed>>

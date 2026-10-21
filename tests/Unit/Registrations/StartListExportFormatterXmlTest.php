@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Tests\Unit\Registrations;
 use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Domain\Registrations\StartListExportFormatter;
 
-/** G-11: XML start-list export — same columns/order as the CSV, valid UTF-8 XML, correct escaping. */
+/** XML start-list export — same columns/order as the CSV, valid UTF-8 XML, correct escaping. */
 final class StartListExportFormatterXmlTest extends TestCase
 {
     public function testXmlHasOneEntryPerRowWithEveryColumnInCsvOrder(): void

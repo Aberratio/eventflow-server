@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
-/** R-02 (zakres P2): change of Dystans - window, capacity, counters, Rozliczenie, balance, history. */
+/** Change of Dystans - window, capacity, counters, Rozliczenie, balance, history. */
 final class RegistrationDistanceChangeContractTest extends HttpTestCase
 {
     private UserRepository $users;

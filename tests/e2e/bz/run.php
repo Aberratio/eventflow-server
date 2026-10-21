@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * ZC <-> BZ end-to-end contract test (PP.43).
+ * ZC <-> BZ end-to-end contract test.
  *
  * Starts the real Zmierzymy Czas server (this checkout) and the real Biuro Zawodow API
  * (a second checkout, BZ_DIR) on two fresh MySQL databases, then drives the scenario

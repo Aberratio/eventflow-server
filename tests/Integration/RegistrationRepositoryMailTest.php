@@ -22,7 +22,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
 /**
- * E1.10 trigger wiring inside RegistrationRepository: mail #4 on create(), #5
+ * Trigger wiring inside RegistrationRepository: mail #4 on create(), #5
  * on the pending -> confirmed transition (both trasa A/B routes fold through
  * markGatewayPaymentPaid(), see its doc comment), and #14 on approveRefund().
  * Uses a real outbox + mail_templates table with a fake Central Mailer HTTP

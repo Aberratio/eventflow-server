@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Support\Log;
 
 /**
- * PP.20: file-based, per-key alert throttle. One JSON map `key => {last, suppressed}` guarded
+ * File-based, per-key alert throttle. One JSON map `key => {last, suppressed}` guarded
  * by flock(). Any I/O failure answers "do not send" (fail quiet: no mail storm on a broken disk).
  */
 final class AlertThrottle

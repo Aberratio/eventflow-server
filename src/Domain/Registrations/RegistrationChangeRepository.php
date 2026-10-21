@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Domain\Registrations;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * R-02: the per-Zapis change history (`registration_changes`, migration 130). One row per
+ * The per-Zapis change history (`registration_changes`, migration 130). One row per
  * self-service or organizer-driven change; the type column already covers the change of Dystans
  * and the transfer, so those only call record() with their own from/to snapshots.
  */

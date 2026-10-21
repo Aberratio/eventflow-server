@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Auth;
 
 /**
- * R-10: pure throttle arithmetic (no I/O, the clock is a parameter).
+ * Pure throttle arithmetic (no I/O, the clock is a parameter).
  *
  * State of one subject: failures counted in the current window, when that window began, how many
  * lockouts in a row it already earned (drives the growing lockout) and until when it is blocked.

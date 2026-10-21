@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Events\EventBackgroundRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * TD.16: EventBackgroundRepository had zero direct test coverage before this
+ * EventBackgroundRepository had zero direct test coverage before this
  * file. Covers create()/update()'s trimming and merge semantics (shared
  * shape with PartnerRepository) plus usages(), the one method unique to this
  * repository: it drives the "can this background be deleted / is it in

@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * B-08: admins edit info pages in a rich-text CMS editor. Text blocks flagged format "html" are
+ * Admins edit info pages in a rich-text CMS editor. Text blocks flagged format "html" are
  * sanitized on write with HtmlSanitizer (same as event descriptions); legacy blocks (no format) stay
  * plain text and are served with format "text".
  */

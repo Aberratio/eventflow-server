@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Events;
 
 /**
- * PP.55: the one shape an Event may have when it leaves the server to anyone who is not
+ * The one shape an Event may have when it leaves the server to anyone who is not
  * its manager ($canManageEvent) - guests, participants, foreign organizers, public feeds.
  * Allowlist: a key that is not listed here (including any column added later) is dropped.
  */
@@ -31,7 +31,7 @@ final class PublicEventPresenter
         'distances', 'paymentMethods', 'merchandise', 'discountCodes', 'galleryAlbums', 'resultDocuments', 'documents',
     ];
 
-    /** Credential-shaped keys: always present, always null (E3.2 response shape; client null-compare). */
+    /** Credential-shaped keys: always present, always null (response shape; client null-compare). */
     public const NULLED_KEYS = ['accessCode', 'bzOrganizationToken'];
 
     /** Manager-only keys, dropped. Documentation + the completeness unit test; not used at runtime. */
@@ -62,7 +62,7 @@ final class PublicEventPresenter
                 array_values(array_filter($out['discountCodes'], 'is_array'))
             );
         }
-        // E8.2 (moved verbatim from routes.php $stripBzToken): showFreeSlots=false hides slotsRemaining.
+        // Moved verbatim from routes.php $stripBzToken: showFreeSlots=false hides slotsRemaining.
         $display = is_array($event['displayOptions'] ?? null) ? $event['displayOptions'] : [];
         $showFreeSlots = ($display['showFreeSlots'] ?? true) !== false;
         if (!$showFreeSlots && !empty($out['distances']) && is_array($out['distances'])) {

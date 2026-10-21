@@ -214,7 +214,7 @@ PDF;
         self::assertSame('dns', $dns['status']);
         self::assertSame('DNS', $dns['time']);
         self::assertSame('dsq', $dsq['status']);
-        // DSQ never carries a time even though the file supplied one (spec 14 sekcja 1).
+        // DSQ never carries a time even though the file supplied one.
         self::assertSame('DSQ', $dsq['time']);
         self::assertSame(0, (int) $dns['position']);
         self::assertSame(0, (int) $dsq['position']);
@@ -258,7 +258,7 @@ PDF;
      * Spec 14 sekcja 1: a participant with no matching Zapis must not become an
      * orphan result - the organizer's manual-match action forces a Zapis using
      * the office-only ("dostępny wyłącznie przy zapisie w biurze zawodów")
-     * pricing variant from ticket 07 pkt 13, then the row becomes ready.
+     * pricing variant, then the row becomes ready.
      */
     public function testUnmatchedRowCanForceCreateOfficeRegistrationAndThenCommits(): void
     {
@@ -415,7 +415,7 @@ PDF;
                     'name' => '10 km',
                     'length' => 10,
                     'unit' => 'km',
-                    // PP.79: categories are computed/validated on the server, so every category a fixture
+                    // Categories are computed/validated on the server, so every category a fixture
                     // Zapis uses must be configured here (the real DNF sample's K40 runner included).
                     'categories' => ['Open', 'M30', 'M40', 'K30', 'K40'],
                     'ageCategories' => [],

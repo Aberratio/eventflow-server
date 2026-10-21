@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Auth\PasswordRule;
 use ZmierzymyCzas\Support\InputValidationException;
 
 /**
- * PP.89: input rules for the two ways a Konto is created over HTTP (POST /users by an admin,
+ * Input rules for the two ways a Konto is created over HTTP (POST /users by an admin,
  * POST /auth/register by an anonymous caller). Pure (no database) so the rules are unit-testable;
  * the e-mail uniqueness check stays in the route. Every violation throws InputValidationException,
  * which JsonErrorMiddleware renders as 422 with `details.field`.

@@ -18,7 +18,7 @@ use ZmierzymyCzas\Domain\Teams\TeamRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 
 /**
- * PP.4: the fixture world of the RBAC grid. Built once per test class inside the
+ * The fixture world of the RBAC grid. Built once per test class inside the
  * class-wide outer transaction (SavepointPdo), never committed, so there is no cleanup.
  * Every fixture key is addressable from a grid row (`params`, `body` with '@key').
  */
@@ -52,7 +52,7 @@ final class RbacFixtures
             'moderator' => 'moderator',
             'admin' => 'admin',
             'superadmin' => 'superadmin',
-            // R-01: Event Team members of someone else's Event - any global role (participant / organizer).
+            // Event Team members of someone else's Event - any global role (participant / organizer).
             'coManager' => 'participant',
             'coManagerOrg' => 'organizer',
             'revoked' => 'participant',
@@ -95,7 +95,7 @@ final class RbacFixtures
                 }
             }
         }
-        // R-01 S2: a pending invitation for the `participant` actor (its address): grid rows for the roster routes,
+        // A pending invitation for the `participant` actor (its address): grid rows for the roster routes,
         // the public preview and accept. A merely invited member must still get nothing on the manager policies.
         $issued = $eventTeam->invite((string) $event['id'], $fx->actors['participant']['email'], $organizerId);
         $fx->values['teamMemberRow'] = (string) $issued['member']['id'];
@@ -131,7 +131,7 @@ final class RbacFixtures
         ]);
         $fx->values['team'] = (string) $team['id'];
 
-        // G-04: a relay member's Zapis on that team (the team's captain = owner) for the swap row.
+        // A relay member's Zapis on that team (the team's captain = owner) for the swap row.
         $memberRegId = $fx->prefix . '-member';
         $pdo->prepare(
             'INSERT INTO registrations (id, event_id, event_name, user_id, user_name, user_email, distance_id, distance_name, category, registered_at, status, qr_code, team_id)
@@ -232,7 +232,7 @@ final class RbacFixtures
             'gender' => 'K',
         ], true);
         $fx->values['competitorB'] = (string) $other['id'];
-        // R-08: zawodnik child ma Zapis na wydarzeniu organizatora + otwarte zgłoszenie duplikatu.
+        // The child Zawodnik has a Zapis on the organizer's Event + an open duplicate report.
         $pdo->prepare('UPDATE registrations SET competitor_id = :c WHERE id = :id')->execute(['c' => $fx->values['child'], 'id' => $fx->values['registration']]);
         $fx->values['dupReport'] = (string) (new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo))
             ->create($fx->values['child'], $fx->values['competitorB'], $fx->values['owner'], 'participant', 'rbac')['id'];

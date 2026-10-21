@@ -12,7 +12,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * R-03: GET /admin/settlements (+ /export) - raport rozliczeniowy trasy A. Fixture: dwa wydarzenia,
+ * GET /admin/settlements (+ /export) - raport rozliczeniowy trasy A. Fixture: dwa wydarzenia,
  * wplaty bramki (paid / created / poza okresem) i zwroty (gateway / manual / poza okresem).
  */
 final class AdminSettlementReportContractTest extends HttpTestCase

@@ -11,8 +11,8 @@ use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E1.12: kod tożsamości QR (`zqr_`) na Zawodniku — mirror
- * RegistrationRepositoryTest's start-code coverage (E1.11), just for the
+ * Kod tożsamości QR (`zqr_`) na Zawodniku — mirror
+ * RegistrationRepositoryTest's start-code coverage, just for the
  * competitor-owned code instead of the registration-owned one.
  */
 final class CompetitorRepositoryTest extends TestCase
@@ -68,7 +68,7 @@ final class CompetitorRepositoryTest extends TestCase
         self::assertNotSame($first['identityCode'], $second['identityCode']);
     }
 
-    /** An unrelated profile update (E0.1 territory) must not rotate the identity code. */
+    /** An unrelated profile update must not rotate the identity code. */
     public function testUnrelatedUpdateDoesNotRotateIdentityCode(): void
     {
         $competitor = $this->competitors->create(['firstName' => 'Ola', 'lastName' => $this->namePrefix]);
@@ -78,7 +78,7 @@ final class CompetitorRepositoryTest extends TestCase
         self::assertSame($competitor['identityCode'], $updated['identityCode']);
     }
 
-    /** Rotation (spec 11 §2/§4): overwrites the old code with a fresh one, no history kept. */
+    /** Rotation: overwrites the old code with a fresh one, no history kept. */
     public function testRegenerateIdentityCodeRotatesToADistinctNewCode(): void
     {
         $competitor = $this->competitors->create(['firstName' => 'Kasia', 'lastName' => $this->namePrefix]);
@@ -100,7 +100,7 @@ final class CompetitorRepositoryTest extends TestCase
     }
 
     /**
-     * E6.6 (issue 15 §6): the anonymization flag itself — defaults to false
+     * The anonymization flag itself — defaults to false
      * (an existing profile's behavior never changes on its own), and the
      * self-service toggle flips it in either direction, is persisted, and
      * touches nothing else on the profile.

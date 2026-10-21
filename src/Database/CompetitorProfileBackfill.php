@@ -15,7 +15,7 @@ use ZmierzymyCzas\Support\QrCode;
  * The SQL version was correct exactly once — on the run that first applied 027,
  * when `competitors.identity_code` did not exist yet. Migrations carry no ledger
  * and are re-applied on every `composer migrate`, so from the run after 040
- * (E1.12) onwards that same statement inserts into a table where `identity_code`
+ * onwards that same statement inserts into a table where `identity_code`
  * is NOT NULL, has no DEFAULT and is UNIQUE. This MariaDB runs without
  * STRICT_TRANS_TABLES, so the omitted column is not an error — every inserted row
  * silently gets `''`, and the second one is error 1062 on
@@ -90,7 +90,7 @@ final class CompetitorProfileBackfill
     }
 
     /**
-     * 027 runs both before and after 040 (E1.12) depending on how far the database
+     * 027 runs both before and after 040 depending on how far the database
      * has got, and a migration file is re-applied whole every run — so whether the
      * column is there is a question about this run, not about the schema version.
      */

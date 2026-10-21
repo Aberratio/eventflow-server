@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Scheduler\Jobs;
 use ZmierzymyCzas\Domain\Calendar\GoogleCalendarSyncService;
 use ZmierzymyCzas\Scheduler\ScheduledJob;
 
-/** R-17: sends queued / failed Google Calendar entries. Skipped while the integration is off or has no key. */
+/** Sends queued / failed Google Calendar entries. Skipped while the integration is off or has no key. */
 final class GoogleCalendarOutboxRetryJob implements ScheduledJob
 {
     public const BATCH_LIMIT = 50;

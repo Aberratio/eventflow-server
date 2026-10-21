@@ -11,7 +11,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.70 (+ PP.78): blocking, role changes and staff e-mail edits end the
+ * Blocking, role changes and staff e-mail edits end the
  * account's sessions; a blocked account never gets a session (login 403, guard
  * 401). Tokens come from POST /auth/login so the real claims (tv, jti) apply.
  */
@@ -327,7 +327,7 @@ final class AccountSessionContractTest extends HttpTestCase
 
     public function testAccountLockedMailIsAttemptedOnlyOnTheActiveToBlockedEdge(): void
     {
-        // (setUp configures an unusable mailer for this test.) PP.19: a failed send no longer turns the
+        // (setUp configures an unusable mailer for this test.) a failed send no longer turns the
         // request into a 500; the attempt is observable as a durable outbox row (status failed, retried later).
         $modToken = $this->login($this->moderator);
         $userId = (string) $this->user['id'];
@@ -365,7 +365,7 @@ final class AccountSessionContractTest extends HttpTestCase
         self::assertFalse($created['emailVerified']);
         $fetched = $this->request('GET', '/api/v1/users/' . $created['id'], [], $this->auth($adminToken));
         self::assertFalse($this->json($fetched)['data']['emailVerified']);
-        // PP.82: no known default password; the owner sets one from the e-mailed link.
+        // No known default password; the owner sets one from the e-mailed link.
         self::assertSame(401, $this->loginResponse($email)->getStatusCode());
     }
 

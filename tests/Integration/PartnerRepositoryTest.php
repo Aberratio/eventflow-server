@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Cms\PartnerRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * TD.16: PartnerRepository had zero direct test coverage before this file.
+ * PartnerRepository had zero direct test coverage before this file.
  * Covers create()'s trimming/default-sort-order/boolean-coercion, update()'s
  * "only touch what's present" merge semantics including clearing a nullable
  * field back to null via an empty string, and that featured() actually

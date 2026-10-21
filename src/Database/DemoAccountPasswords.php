@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Auth\PasswordRule;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 
 /**
- * PP.90: demo accounts (seeders, /dev/seed-event) carry well-known passwords (`demo1234`, `demo123`).
+ * Demo accounts (seeders, /dev/seed-event) carry well-known passwords (`demo1234`, `demo123`).
  * Outside local they must not: scrub() gives each of them a fresh unusable password hash and bumps
  * token_version, which also ends every live session of the account.
  *

@@ -16,7 +16,7 @@ use ZmierzymyCzas\Tests\Support\SavepointPdo;
 use ZmierzymyCzas\Tests\Support\TestDatabase;
 
 /**
- * PP.76: guards the wiring that makes every test DB connection run with MySQL 8.4's strict
+ * Guards the wiring that makes every test DB connection run with MySQL 8.4's strict
  * sql_mode. Without it the 422 contract tests would not discriminate on non-strict local
  * MariaDB (the missing-column inserts would silently succeed instead of failing like production).
  * A new PDO test double must call Connection::applySessionSqlMode($this) after its constructor

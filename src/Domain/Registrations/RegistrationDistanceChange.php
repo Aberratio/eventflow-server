@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Registrations;
 
 /**
- * R-02 (spec 20 §2 + spec 07 pkt 12, zakres P2 - do potwierdzenia przez Zamawiającego): change of the
+ * Change of the
  * Dystans (and/or the Wariant opłaty) of an existing Zapis. Part of RegistrationRepository - it needs
  * the pricing, locking and refund helpers that class keeps private - split out only to keep that file
  * from growing further.

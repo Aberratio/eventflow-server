@@ -8,24 +8,24 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerConfig;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
 
 /**
- * The full 15-item critical mail catalog (17-katalog-maili-i-kontrakt-z-mailerem.md
- * §1), one typed method per mail type, built on top of E1.9's
+ * The full 15-item critical mail catalog, one typed method per mail type,
+ * built on top of the
  * CentralMailerOutboxService. This is the only class in the codebase that
  * knows how to turn "registration X just got paid" into an actual outbox row:
  * resolve the template (MailTemplateRepository — organizer override, else
  * global default, else MailCatalog's built-in default), render it
  * (MailRenderer — closed-list substitution), build the deterministic
- * idempotency key (§6: `{sourceEntityId}:{mailType}:v{templateVersion}`,
+ * idempotency key (`{sourceEntityId}:{mailType}:v{templateVersion}`,
  * never a timestamp or random suffix), and enqueue.
  *
  * Skips silently (returns null, no exception) whenever Central Mailer isn't
  * configured — mirrors TpayConfig::isConfigured()/PayNowConfig::isConfigured()
- * and E1.9's own CentralMailerConfig::isConfigured() doc comment: "do not
+ * and CentralMailerConfig::isConfigured()'s doc comment: "do not
  * attempt to send" rather than a request that could only ever fail. Also
  * skips silently when $recipientEmail is blank (e.g. a Zawodnik with no
  * Konto email of their own) — nothing to send to.
  *
- * Reply-to (17 §4): `from` is always Central Mailer's configured platform
+ * Reply-to: `from` is always Central Mailer's configured platform
  * address; `reply-to` is the organizer's contact e-mail (EventReplyToResolver) for
  * the event-scoped mails (4, 5, 7, 8, 9, 10 - REPLY_TO_ORGANIZER_MAILS) and absent
  * otherwise (authentication and systemic mails), so Central Mailer applies its global
@@ -35,7 +35,7 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
  */
 final class CriticalMailer
 {
-    /** 17 §4: event-scoped mails whose Reply-To is the organizer's contact. */
+    /** Event-scoped mails whose Reply-To is the organizer's contact. */
     private const REPLY_TO_ORGANIZER_MAILS = [
         MailCatalog::REGISTRATION_CREATED,
         MailCatalog::PAYMENT_CONFIRMED,
@@ -87,7 +87,7 @@ final class CriticalMailer
     }
 
     /**
-     * PP.82: the password-set link for an account an admin created.
+     * The password-set link for an account an admin created.
      * @param string $sourceEntityId the action-token id (unique per mail instance, see sendEmailVerification)
      */
     public function sendAccountSetup(string $sourceEntityId, string $email, string $setupLink, int $expiresInHours): ?array
@@ -110,7 +110,7 @@ final class CriticalMailer
     }
 
     /**
-     * Mail #5 ("Potwierdzenie płatności / bilet"). PP.19: when the Zapis has a start code
+     * Mail #5 ("Potwierdzenie płatności / bilet"). when the Zapis has a start code
      * (`registrations.qr_code`, `pqr_...`), the mail carries it as an inline PNG QR (`cid:`) plus the
      * code as text; the block is appended after the rendered template, so event-level template
      * overrides keep it. A Zapis without a code sends no attachment.
@@ -139,7 +139,7 @@ final class CriticalMailer
     /**
      * Mail #6 ("Kod tożsamości"), sent once at Zawodnik creation to the
      * Opiekun's (guardian's) Konto — a child Zawodnik has no email of their
-     * own (17 §1 row 6). PP.19: carries the Zawodnik's identity code (`zqr_...`) as an inline
+     * own. It carries the Zawodnik's identity code (`zqr_...`) as an inline
      * PNG QR plus the code as text; without a code no attachment is sent.
      */
     public function sendIdentityCode(
@@ -158,7 +158,7 @@ final class CriticalMailer
         ]);
     }
 
-    /** PP.18: lets the scheduler skip (and not claim anything) when no mail could be enqueued anyway. */
+    /** Lets the scheduler skip (and not claim anything) when no mail could be enqueued anyway. */
     public function isConfigured(): bool
     {
         return $this->config->isConfigured();
@@ -226,7 +226,7 @@ final class CriticalMailer
         ]);
     }
 
-    /** Mail #12: systemic (the shop is the platform's, not an organizer's — 17 §5), never has an $eventId. */
+    /** Mail #12: systemic (the shop is the platform's, not an organizer's), never has an $eventId. */
     public function sendShopOrderStatus(string $orderId, string $email, string $orderNumber, string $status, string $trackingNumber = ''): ?array
     {
         return $this->send(MailCatalog::SHOP_ORDER_STATUS, $orderId, null, $email, [
@@ -254,7 +254,7 @@ final class CriticalMailer
     }
 
     /**
-     * R-01: the Event Team invitation. $sourceEntityId must be unique per issued token (member id + token
+     * The Event Team invitation. $sourceEntityId must be unique per issued token (member id + token
      * prefix), so a resend is a new mail instead of an idempotent no-op.
      */
     public function sendEventTeamInvitation(string $sourceEntityId, string $eventId, string $email, string $eventName, string $inviterName, string $acceptLink, int $expiresInDays): ?array
@@ -267,7 +267,7 @@ final class CriticalMailer
         ]);
     }
 
-    /** R-01: informs a Co-manager that access was taken away. $sourceEntityId must be unique per revocation. */
+    /** Informs a Co-manager that access was taken away. $sourceEntityId must be unique per revocation. */
     public function sendEventTeamRevoked(string $sourceEntityId, string $eventId, string $email, string $eventName): ?array
     {
         return $this->send(MailCatalog::EVENT_TEAM_REVOKED, $sourceEntityId, $eventId, $email, [
@@ -296,7 +296,7 @@ final class CriticalMailer
             $attachments[] = MailQrCode::attachment($qr['code'], $qr['contentId'], $qr['filename']);
         }
 
-        // §6: deterministic, never a timestamp/random suffix — the template
+        // Deterministic, never a timestamp/random suffix — the template
         // version (bumped on every admin/organizer save, see
         // MailTemplateRepository::save()) is the only thing beyond the
         // (entity, mail type) pair that legitimately changes the key, and it

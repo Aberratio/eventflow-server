@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Cms\InfoPageRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * TD.16: InfoPageRepository had zero direct test coverage before this file.
+ * InfoPageRepository had zero direct test coverage before this file.
  * Covers the JSON `content` round-trip, the boolean/int hydration performed
  * by hydrate(), update()'s "only touch what's present" merge semantics, and
  * reorder()'s index-becomes-sort_order behaviour — the parts of this class

@@ -7,9 +7,9 @@ namespace ZmierzymyCzas\Domain\Registrations;
 use ZmierzymyCzas\Support\InputValidationException;
 
 /**
- * R-02 (spec 20 "Transfer - wersja prosta", zakres P2 - do potwierdzenia przez Zamawiającego): the Event's
+ * The Event's
  * manager moves a Zapis to another Zawodnik. Part of RegistrationRepository - it shares the person-swap core
- * with the relay team swap (swapRegistrationPerson(), G-04) and needs the settlement helpers that class keeps
+ * with the relay team swap (swapRegistrationPerson()) and needs the settlement helpers that class keeps
  * private.
  *
  * The Zapis itself stays (id, Dystans, status, bib number, frozen Rozliczenie); the person, the contact data

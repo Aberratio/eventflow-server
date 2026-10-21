@@ -11,7 +11,7 @@ use ZmierzymyCzas\Tests\Support\FaultInjectingPdo;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.89: two requests for the same new e-mail can both pass the findByEmail() check; the loser hits the
+ * Two requests for the same new e-mail can both pass the findByEmail() check; the loser hits the
  * UNIQUE index (SQLSTATE 23000). That must be a 409 email_taken with the transaction rolled back, not a 500.
  * The INSERT into users is made to fail with 23000 through a PDO double.
  */

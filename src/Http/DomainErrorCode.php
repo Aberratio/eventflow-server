@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Http;
 
 /**
- * PP.51: the only way a caught RuntimeException's message may become a response `error.code`.
+ * The only way a caught RuntimeException's message may become a response `error.code`.
  * Domain codes in this codebase are snake_case identifiers thrown on purpose
  * (`throw new RuntimeException('file_too_large')`). Anything else (a PDOException with SQLSTATE
  * text, query fragments or duplicate-entry values; a library message; a message with a

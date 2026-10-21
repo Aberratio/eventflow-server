@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-// R-12: child process for RegistrationPriceFloorAndCapacityTest. argv[1] = JSON payload for
+// Child process for RegistrationPriceFloorAndCapacityTest. argv[1] = JSON payload for
 // RegistrationRepository::create(). Prints "ok" or the exception message (own PDO connection = real parallelism).
 
 use ZmierzymyCzas\Database\Connection;

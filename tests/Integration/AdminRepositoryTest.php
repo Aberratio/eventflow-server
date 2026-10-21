@@ -12,15 +12,15 @@ use ZmierzymyCzas\Domain\Admin\AdminRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * TD.16: AdminRepository had zero direct test coverage before this file.
+ * AdminRepository had zero direct test coverage before this file.
  * This repository backs the platform-admin panel, so the highest-risk
- * behaviour is: the retention prune on activityLogs() (E0.8 — silently
+ * behaviour is: the retention prune on activityLogs() (silently
  * keeping audit-log entries forever, or silently deleting ones still inside
  * the window, are both real regressions here), the filter predicates on the
  * same method, the security_settings merge semantics (a partial update
  * clobbering the 2FA/session-timeout config for every admin would be a real
  * incident), and platformStats()'s exclusion of soft-deleted events plus its
- * organizer/package-credit counts (E8.3).
+ * organizer/package-credit counts.
  */
 final class AdminRepositoryTest extends TestCase
 {
@@ -108,7 +108,7 @@ final class AdminRepositoryTest extends TestCase
             'targetName' => $this->prefix . '-recent-target',
         ]);
 
-        // R-05: deletion moved from the read path to the scheduler job; reads only filter.
+        // Deletion moved from the read path to the scheduler job; reads only filter.
         $targetNames = array_column($this->admin->activityLogs(), 'targetName');
         $this->admin->purgeExpiredActivityLogs(new \DateTimeImmutable());
 

@@ -13,7 +13,7 @@ use ZmierzymyCzas\Tests\Support\HttpTestCase;
 use ZmierzymyCzas\Tests\Support\SavepointPdo;
 
 /**
- * R-01 (S2): inviting Co-managers by e-mail, accepting the invitation, resending and revoking. Runs on the
+ * Inviting Co-managers by e-mail, accepting the invitation, resending and revoking. Runs on the
  * RBAC fixture world (the Owner is `organizer`); every test is rolled back to a savepoint.
  */
 final class EventTeamInvitationContractTest extends HttpTestCase

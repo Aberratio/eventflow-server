@@ -9,7 +9,7 @@ use Psr\Log\LoggerInterface;
 use ZmierzymyCzas\Database\Connection;
 
 /**
- * PP.18: argv handling, wiring and exit codes of bin/scheduler.php. In-process testable.
+ * Argv handling, wiring and exit codes of bin/scheduler.php. In-process testable.
  *
  * Exit codes: 0 ok / skipped / lock held; 1 at least one job failed; 2 database unavailable;
  * 64 usage error.

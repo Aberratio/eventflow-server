@@ -8,8 +8,8 @@ use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Support\InputValidationException;
 
 /**
- * R-07: batch generator for discount codes. A batch is only a grouping label over ordinary
- * `event_discount_codes` rows (ticket 07 pkt 7: one Discount Code entity, a one-time code is
+ * Batch generator for discount codes. A batch is only a grouping label over ordinary
+ * `event_discount_codes` rows (one Discount Code entity; a one-time code is
  * max_uses = 1), so registration-time validation needs no change.
  */
 final class DiscountCodeBatchRepository extends Repository

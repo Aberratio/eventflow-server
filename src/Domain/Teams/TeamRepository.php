@@ -7,43 +7,42 @@ namespace ZmierzymyCzas\Domain\Teams;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * E7.1 ("Cykl życia Drużyny: niepełny skład legalny, limit liczy Zapisy",
- * issue 23 Answer §1) — the real entity behind what used to be an
+ * Team lifecycle ("Cykl życia Drużyny": an incomplete roster is legal, the limit counts Zapisy)
+ * — the real entity behind what used to be an
  * unconstrained `registrations.team_id`/`team_name` free-text pair.
  *
  * Deliberately thin: this class only owns team creation/lookup and the
  * derived "completeness" read. It does NOT own:
  *  - capacity/limit counting — that is `event_distances.registered_count`,
- *    maintained entirely by RegistrationRepository (E1.3) and untouched by
- *    this ticket; a team's completeness is a separate, purely informational
+ *    maintained entirely by RegistrationRepository and untouched by
+ *    this repository; a team's completeness is a separate, purely informational
  *    number, never fed back into the Dystans limit;
  *  - joining/creating a Zapis into a team — RegistrationRepository::create()
  *    is the only writer of `registrations.team_id`, and is the one that
  *    calls into this class (create()/find()) while already holding the
  *    Dystans row lock, so every team-size check below is implicitly
  *    serialized by that same lock — no separate row lock is taken here.
- *  - E7.5's Kategoria specjalna — `special_category` exists on the table and
+ *  - The Kategoria specjalna — `special_category` exists on the table and
  *    is carried through find()/forDistance() so it is never lost, but
  *    nothing here ever sets it to anything but null.
  *
- *    UPDATE (E7.5 implementation): create() now accepts an optional
+ *    UPDATE: create() now accepts an optional
  *    specialCategory, validated against the Dystans's configured
- *    event_distances.special_categories list (the SAME list ticket 10's
+ *    event_distances.special_categories list (the SAME list the
  *    individual-registration "Kategorie specjalne" checkboxes read — no
  *    separate "team categories" concept invented here). updateSpecialCategory()
  *    lets the captain (created_by_user_id) change it later, up until the
  *    event's start date. Both paths only ever set this column to a value the
  *    caller explicitly asked for — nothing here recomputes or corrects it
- *    from memberCount()/roster composition, per the ticket's own explicit
- *    point (Answer §7) that a stale declaration is an accepted cost.
+ *    from memberCount()/roster composition, by design: a stale declaration is an accepted cost.
  *
- * PP.54 (invitation): a team's id is PUBLIC (forDistance() lists it), so it
+ * A team's id is PUBLIC (forDistance() lists it), so it
  * is not an invitation. Joining an existing team requires the team's random
  * `invite_token` (inviteToken()/inviteTokenMatches()) or the captain acting
  * (isCaptain()); the token is deliberately absent from COLUMNS so no public
  * read can carry it.
  *
- * "Completeness" (Answer §1: "stan czysto pochodny, wyliczany z liczby
+ * "Completeness" ("stan czysto pochodny, wyliczany z liczby
  * powiązanych Zapisów, nie osobne pole do ręcznego ustawiania") is computed
  * fresh on every read from a live COUNT(*) against `registrations`, using
  * the exact same "counted population" as RegistrationRepository's own
@@ -60,7 +59,7 @@ final class TeamRepository extends Repository
      * by the same logic no longer counts as an occupied slot in its team's
      * roster either. Duplicated (not shared) because RegistrationRepository
      * has no public accessor for it and pulling it out into a shared
-     * constant is a bigger refactor than this ticket's scope.
+     * constant is a bigger refactor than this change warrants.
      */
     private const NOT_COUNTED_STATUSES = ['cancelled', 'removed', 'expired'];
 
@@ -72,7 +71,7 @@ final class TeamRepository extends Repository
 
     /**
      * @param array<string, mixed> $data eventId, distanceId, name, createdByUserId (optional),
-     *                                    specialCategory (optional, E7.5 — the caller
+     *                                    specialCategory (optional — the caller
      *                                    (RegistrationRepository::resolveTeamForRegistration())
      *                                    is responsible for validating it against
      *                                    specialCategoriesForDistance() BEFORE calling this,
@@ -98,7 +97,7 @@ final class TeamRepository extends Repository
     }
 
     /**
-     * PP.54: the invitation token is a random secret, NOT the team id (ids are public via
+     * The invitation token is a random secret, NOT the team id (ids are public via
      * forDistance()). It is never part of COLUMNS, so find()/forDistance() cannot leak it.
      */
     public static function newInviteToken(): string
@@ -142,20 +141,20 @@ final class TeamRepository extends Repository
     }
 
     /**
-     * E7.5 (issue 23 Answer §7): lets the captain change a previously
+     * Lets the captain change a previously
      * declared Kategoria specjalna. Editability window judgment call (the
-     * spec only fixes a deadline for the member-swap case, E7.3/Answer §2 —
+     * spec only fixes a deadline for the member-swap case —
      * it says nothing about this field): open until the Event's own start
-     * date, then locked. Rationale: the spec's whole argument for making
+     * date, then locked. Rationale: the whole argument for making
      * this manual in the first place is "predictability for the organizer
      * arranging results" — the same predictability concern that justifies
      * cutting off changes once the event is actually under way, same as any
      * other pre-race declaration. This is a deliberately simple choice, not
      * a new configurable deadline parameter like relay_team_completion
-     * deadline (E7.1) — nothing in the spec asks for one here.
+     * deadline — nothing asks for one here.
      *
      * Permission model mirrors resolveTeamForRegistration()'s existing
-     * "captain" concept (issue 23 Answer §2's own words: "kapitan
+     * "captain" concept ("kapitan
      * (uprawnienie ograniczone do Zapisów swojej Drużyny ... nie pełna
      * Opieka)") — the only thing recorded anywhere today for "who is the
      * captain" is teams.created_by_user_id (set once, at create()), so that
@@ -201,11 +200,11 @@ final class TeamRepository extends Repository
 
     /**
      * The organizer-configured special-category list for one Dystans — the
-     * SAME `event_distances.special_categories` JSON column ticket 10's
+     * SAME `event_distances.special_categories` JSON column the
      * individual-registration form already reads
      * (EventRepository::DISTANCE_JSON), reused unchanged rather than
-     * inventing a parallel "team categories" list (issue 23 Answer §7:
-     * "analogicznie do ... ticketu 10").
+     * inventing a parallel "team categories" list ("analogicznie" to the individual
+     * registration form).
      *
      * @return array<int, array<string, mixed>>
      */
@@ -229,8 +228,7 @@ final class TeamRepository extends Repository
 
     /**
      * A team's Kategoria specjalna is optional (null/empty is always legal —
-     * declaring one is the captain's choice, not a requirement this ticket
-     * adds). When a value IS given, it must match one of the Dystans's
+     * declaring one is the captain's choice, not a requirement added here). When a value IS given, it must match one of the Dystans's
      * configured special categories by name — exactly the set the client's
      * own dropdown is built from, so a mismatch can only mean a stale/
      * tampered request, matching the "reject unknown category" ask.
@@ -259,7 +257,7 @@ final class TeamRepository extends Repository
 
     /**
      * Every team for one Event+Dystans, most recently created first — the
-     * "which teams can I join" read (E7.1 point 4/7; the client's "join an
+     * "which teams can I join" read (the client's "join an
      * existing team" step, `RegistrationForm.tsx`/`useRegistrationForm.ts`,
      * calls this via `GET /events/{eventId}/distances/{distanceId}/teams`
      * instead of its old purely client-side text-grouping heuristic).
@@ -303,12 +301,12 @@ final class TeamRepository extends Repository
      * edits the Dystans afterward).
      *
      * `complete` means "reached the full roster" — `memberCount >=
-     * relay_max_team_size` — matching the ticket's own worked example
+     * relay_max_team_size` — matching the documented worked example
      * literally ("Drużyna z trzema Zapisami na cztery miejsca" is explicitly
      * NOT yet complete, still short one invite). `relay_min_team_size` is
      * exposed alongside it as the separate "legal floor to even start"
-     * number (Answer §1 — a team below it is still a legal, existing
-     * Drużyna, just one this ticket does nothing further to gate), not
+     * number (a team below it is still a legal, existing
+     * Drużyna, just one nothing further gates), not
      * folded into `complete` itself. `complete` is null (unknown) rather
      * than true/false when the Dystans has no `relay_max_team_size`
      * configured at all — there is then no declared target size to compare

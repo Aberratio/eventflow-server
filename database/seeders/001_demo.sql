@@ -175,7 +175,7 @@ VALUES
 ('r-kasia-wroclaw', 'e-wroclaw-night', 'Nocny Bieg Wroclaw 2026', 'u-kasia', 'Katarzyna Wozniak', 'kasia@example.com', 'd-wroclaw-10k', '10 km', 'K30', '2026-03-10T14:10:00+01:00', 'confirmed', '78', 'pqr_ef40a6380c34891f302d5ca2aff113acd6df039ad598ad1b'),
 ('r-jan-virtual', 'e-virtual-spring', 'Wirtualny Maraton Wiosenny 2026', 'u-participant', 'Jan Kowalski', 'jan@example.com', 'd-virtual-10k', '10 km', 'OPEN', '2026-05-02T12:00:00+02:00', 'pending', NULL, 'pqr_9fffe9ef70f0d842cd51beeda7d1605b350fd411ca93bf05');
 
--- Rozliczenie (E0.3): "Oplata startowa" line item per Zapis, replacing registrations.price_paid.
+-- Rozliczenie: "Oplata startowa" line item per Zapis, replacing registrations.price_paid.
 INSERT INTO registration_settlement_items (id, registration_id, name, basis, amount, frozen_at, sort_order) VALUES
 ('rsi-jan-10k', 'r-jan-10k', 'Oplata startowa', 'distance_price', 89.00, '2026-05-02T10:00:00+02:00', 0),
 ('rsi-anna-lodz', 'r-anna-lodz', 'Oplata startowa', 'distance_price', 60.00, '2026-04-20T09:15:00+02:00', 0),

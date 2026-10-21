@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Competitors;
 
 /**
- * PP.4: what a caller may learn about *other* Zawodnik profiles that look like a
+ * What a caller may learn about *other* Zawodnik profiles that look like a
  * duplicate: that they exist, and the name/birth date the caller typed anyway.
- * Never contact data, never the identity code (a bearer secret, spec 11 section 2).
+ * Never contact data, never the identity code (a bearer secret).
  */
 final class CompetitorDuplicatePresenter
 {

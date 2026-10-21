@@ -232,7 +232,7 @@ final class SeriesAndPartnersContractTest extends HttpTestCase
         self::assertIsArray($payload['data']);
     }
 
-    // ── PP.76: strict-MySQL input validation (422 instead of 500) ────────────
+    // ── strict-MySQL input validation (422 instead of 500) ────────────
 
     /** @return array<string, string> */
     private function adminHeaders(): array
@@ -300,7 +300,7 @@ final class SeriesAndPartnersContractTest extends HttpTestCase
     }
 
     /**
-     * Behavioural change, not a strict-mode crash: before PP.76 a blank name on PATCH was
+     * Behavioural change, not a strict-mode crash: before the fix a blank name on PATCH was
      * stored as is (200), on every MySQL mode.
      */
     public function testPatchSeriesRejectsBlankName(): void

@@ -14,7 +14,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E3.5 (issue 12 §2): "Last-write-wins z jawnym śladem" — the return leg of
+ * "Last-write-wins z jawnym śladem" — the return leg of
  * the BZ sync contract, PATCH /api/v1/events/{eventId}/bz/participants/{registrationId}.
  * Mirrors BzParticipantsContractTest's auth matrix (same two layers, same
  * generic error shapes) and adds the LWW-specific coverage: a newer BZ edit
@@ -225,7 +225,7 @@ final class BzParticipantSyncContractTest extends HttpTestCase
     }
 
     /**
-     * Defense in depth (issue 12 §5, "bez kwot"): a payment/amount-shaped key
+     * Defense in depth ("bez kwot"): a payment/amount-shaped key
      * must never be accepted from this endpoint, even with a fresh timestamp.
      */
     public function testPaymentShapedFieldsAreAlwaysRejectedAsOutOfScope(): void
@@ -251,7 +251,7 @@ final class BzParticipantSyncContractTest extends HttpTestCase
 
     /**
      * Only a field explicitly flagged visibleToBz can be return-synced —
-     * mirrors bzParticipantList()'s own pull-side filtering (E3.3).
+     * mirrors bzParticipantList()'s own pull-side filtering.
      */
     public function testOnlyBzVisibleCustomFieldCanBeSyncedBack(): void
     {
@@ -283,7 +283,7 @@ final class BzParticipantSyncContractTest extends HttpTestCase
     }
 
     /**
-     * E3.6 (issue 12 §4): the core new-field case — a fresh check-in report
+     * The core new-field case — a fresh check-in report
      * from BZ (both checked_in_at and checked_in_by) must apply, be visible
      * on the plain registration read afterwards, and be logged.
      */

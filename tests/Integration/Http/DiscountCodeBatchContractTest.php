@@ -11,8 +11,8 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * R-07: `POST|GET /events/{eventId}/discount-code-batches[...]` - the batch generator over
- * event_discount_codes (ticket 07 pkt 7).
+ * `POST|GET /events/{eventId}/discount-code-batches[...]` - the batch generator over
+ * event_discount_codes.
  */
 final class DiscountCodeBatchContractTest extends HttpTestCase
 {

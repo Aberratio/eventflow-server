@@ -12,11 +12,11 @@ use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E6.2 resync-gap fix (issue 15 §2's known gap, flagged by E6.1's own
+ * Resync-gap fix (a known gap flagged by the condition tree's own
  * verification): PATCH /challenges/{id} editing the legacy flat `events`
- * list used to leave the E6.1 condition tree untouched unless the caller
+ * list used to leave the condition tree untouched unless the caller
  * also sent an explicit `conditionTree` — silently stale, and load-bearing
- * now that E6.2 makes the tree drive real scoring decisions.
+ * now that the tree drives real scoring decisions.
  *
  * See ChallengeRepository::update()'s doc comment for the chosen fix: only
  * the unambiguous "still the create()-time default tree" shape is

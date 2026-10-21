@@ -10,7 +10,7 @@ use Monolog\LogRecord;
 use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerClientInterface;
 
 /**
- * PP.20: e-mails an alert (Central Mailer, priority `technical`) for records at ERROR or above
+ * E-mails an alert (Central Mailer, priority `technical`) for records at ERROR or above
  * that carry `context['alert']`, throttled per alert key. Receives the already-redacted record.
  * Deliberately independent of the database and the mail outbox: an alert must still work when
  * the DB is what failed.

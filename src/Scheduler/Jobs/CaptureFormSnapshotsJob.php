@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Scheduler\Jobs;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Scheduler\ScheduledJob;
 
-/** PP.18: E1.14 form snapshot for finished events, captured shortly after the finish (was "first read"). */
+/** Form snapshot for finished events, captured shortly after the finish (was "first read"). */
 final class CaptureFormSnapshotsJob implements ScheduledJob
 {
     public function __construct(private readonly RegistrationRepository $registrations)

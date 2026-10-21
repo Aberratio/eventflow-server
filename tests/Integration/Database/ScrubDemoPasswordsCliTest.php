@@ -9,7 +9,7 @@ use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * PP.90: bin/scrub-demo-passwords.php refuses on APP_ENV=local, writes nothing with --dry-run and prints counts only.
+ * bin/scrub-demo-passwords.php refuses on APP_ENV=local, writes nothing with --dry-run and prints counts only.
  *
  * The CLI reads APP_ENV and the DB_* settings through Env::load(), where a `.env` file beats the process
  * environment (CI and developers have one). The test therefore runs the command with an auto_prepend_file that

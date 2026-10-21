@@ -10,7 +10,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.59: event child rows (distances, payment methods, merchandise, discount codes, gallery albums,
+ * Event child rows (distances, payment methods, merchandise, discount codes, gallery albums,
  * documents, pricing variants) are written through a column allowlist, with server-owned ids, a diff
  * sync that never touches counters of kept rows, validation before any write, and one transaction.
  */

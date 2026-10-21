@@ -10,7 +10,7 @@ use ZmierzymyCzas\Support\HtmlSanitizer;
 use ZmierzymyCzas\Support\UrlPolicy;
 
 /**
- * PP.50: the corpus below is shared with client src/lib/__tests__/safeUrl.test.ts.
+ * The corpus below is shared with client src/lib/__tests__/safeUrl.test.ts.
  * Expected values: [input, link result (null = rejected), frame result (null = rejected)].
  */
 final class UrlPolicyTest extends TestCase

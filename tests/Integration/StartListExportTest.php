@@ -17,12 +17,12 @@ use ZmierzymyCzas\Domain\Registrations\StartListExportFormatter;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E2.6 ("Eksport listy startowej: CSV (Windows-1250) + XLSX", spec 21
- * Answer §3) — repository-level acceptance criteria for
+ * Start-list export (CSV in Windows-1250 + XLSX):
+ * Repository-level acceptance criteria for
  * RegistrationRepository::startListExportRows():
- *  - columns = form fields for the Distance's Event + numer startowy +
- *    status płatności;
- *  - NO monetary/price/amount field ever appears (spec: "bez kwot");
+ *  - columns = form fields for the Distance's Event+ bib number +
+ *    payment status;
+ *  - NO monetary/price/amount field ever appears ("bez kwot");
  *  - `is_confidential` fields are EXCLUDED, the same as the public start
  *    list (see FormFieldRepository::exportColumns()'s docblock) — a
  *    non-confidential field with the same "shown" state still appears;

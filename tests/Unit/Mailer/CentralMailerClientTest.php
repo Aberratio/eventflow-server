@@ -103,7 +103,7 @@ final class CentralMailerClientTest extends TestCase
             'subject' => 'Reset hasła',
             'html' => '<p>link</p>',
             'priority' => 'technical',
-            'category' => 'marketing', // must be overridden — §1.2
+            'category' => 'marketing', // must be overridden
         ], 'reset-hasla:user-1:token-1');
 
         $sent = json_decode((string) $this->http->calls[0]['body'], true);

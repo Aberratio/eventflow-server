@@ -203,9 +203,9 @@ final class ResultsContractTest extends HttpTestCase
     }
 
     /**
-     * E2.4 (spec 14 sekcja 3): GET /competitors/{id}/records mirrors the
+     * GET /competitors/{id}/records mirrors the
      * self/Opiekun/staff authorization already proven for
-     * /competitors/{id}/rotate-identity-code (E1.12) - a stranger participant
+     * /competitors/{id}/rotate-identity-code - a stranger participant
      * with no Opieka relation must be refused, while the Zawodnik themselves,
      * an admin, and a Konto with granted Opieka must all be let through.
      */
@@ -260,7 +260,7 @@ final class ResultsContractTest extends HttpTestCase
     }
 
     /**
-     * E2.4 core behavior at the HTTP layer: a finished, non-virtual result
+     * Core behavior at the HTTP layer: a finished, non-virtual result
      * shows up as the competitor's record for that distance length; a
      * dns result for the same competitor+distance in a second Event does not
      * displace it (dns is excluded, not just "slower").
@@ -293,7 +293,7 @@ final class ResultsContractTest extends HttpTestCase
     }
 
     /**
-     * Spec 14 sekcja 6: "Korekta jest możliwa zawsze ... ze śladem: kto zmienił,
+     * Correction rule: "Korekta jest możliwa zawsze ... ze śladem: kto zmienił,
      * kiedy, z jakiego na jaki czas". Mirrors the pattern already proven for
      * registration form-snapshot corrections (RegistrationFormSnapshotContractTest):
      * assert on the real activity_logs row, not just the HTTP response.
@@ -329,7 +329,7 @@ final class ResultsContractTest extends HttpTestCase
     }
 
     /**
-     * E2.3 (spec 14 sekcja 6): the "mark official" mutation - $canUploadResults
+     * The "mark official" mutation - $canUploadResults
      * gate (same as every other /results/* mutation), operates on the whole
      * event+distance, and leaves the result individually correctable
      * afterwards without reverting the set to preliminary.
@@ -397,7 +397,7 @@ final class ResultsContractTest extends HttpTestCase
     public function testCreateRegistrationForUnmatchedImportRowRequiresEventManagerRole(): void
     {
         $distanceId = (string) $this->activeEvent['distances'][0]['id'];
-        // Ticket 07 pkt 13 / E0.3: an office-only Wariant lives on
+        // An office-only Wariant lives on
         // event_distance_pricing_variants - inserted directly here rather than
         // via EventRepository::update() (a full distances replace) to keep this
         // test focused on the route under test, not the event-editing pipeline.
@@ -482,7 +482,7 @@ final class ResultsContractTest extends HttpTestCase
         return (int) $stmt->fetchColumn();
     }
 
-    /** PP.76: strict MySQL answered 1364 (event_name has no default) -> 500; now a 422 naming the field. */
+    /** Strict MySQL answered 1364 (event_name has no default) -> 500; now a 422 naming the field. */
     public function testCreateResultWithoutCompetitorNameIs422(): void
     {
         $response = $this->request('POST', '/api/v1/results', [
@@ -495,7 +495,7 @@ final class ResultsContractTest extends HttpTestCase
         self::assertSame(0, $this->countResultsOfActiveEvent());
     }
 
-    /** PP.76: a finished result without timeInSeconds hit 1364 on strict MySQL. */
+    /** A finished result without timeInSeconds hit 1364 on strict MySQL. */
     public function testCreateFinishedResultWithoutTimeIs422(): void
     {
         $response = $this->request('POST', '/api/v1/results', [
@@ -509,7 +509,7 @@ final class ResultsContractTest extends HttpTestCase
         self::assertSame(0, $this->countResultsOfActiveEvent());
     }
 
-    /** PP.76: an unknown status was 1265 (ENUM) -> 500 on strict MySQL. */
+    /** An unknown status was 1265 (ENUM) -> 500 on strict MySQL. */
     public function testCreateResultWithUnknownStatusIs422(): void
     {
         $response = $this->request('POST', '/api/v1/results', $this->resultPayload(['status' => 'bogus']), $this->organizerHeaders());
@@ -552,7 +552,7 @@ final class ResultsContractTest extends HttpTestCase
         self::assertSame(0, $payload['data']['position']);
     }
 
-    /** PP.76: {"userName": null} was 1048 -> 500 on strict MySQL. */
+    /** {"userName": null} was 1048 -> 500 on strict MySQL. */
     public function testPatchResultRejectsNullCompetitorName(): void
     {
         $created = $this->json($this->request('POST', '/api/v1/results', $this->resultPayload(), $this->organizerHeaders()));
@@ -566,7 +566,7 @@ final class ResultsContractTest extends HttpTestCase
         self::assertSame($this->participant['name'], $stmt->fetchColumn());
     }
 
-    /** PP.76: the search used :search twice in one native prepare -> HY093 -> 500 for every search. */
+    /** The search used :search twice in one native prepare -> HY093 -> 500 for every search. */
     public function testResultsSearchFindsByName(): void
     {
         $name = $this->prefix . ' Searchable';
@@ -581,7 +581,7 @@ final class ResultsContractTest extends HttpTestCase
         self::assertSame($name, $payload['data'][0]['userName']);
     }
 
-    /** PP.76: array-valued query params are ignored (public read), not a 500. */
+    /** Array-valued query params are ignored (public read), not a 500. */
     public function testResultsListIgnoresArrayValuedFilters(): void
     {
         $response = $this->request('GET', '/api/v1/results?search[]=x&eventId[]=y');
@@ -609,7 +609,7 @@ final class ResultsContractTest extends HttpTestCase
     }
 
     /**
-     * E1.1 dropped the free-text `status` column entirely (see
+     * The free-text `status` column was dropped entirely (see
      * 031_e11_event_lifecycle.sql), so there is no ENUM to patch in place any more — the
      * schema this test needs only exists once every migration has actually run. Calling
      * the real Migrator (idempotent, no ledger — see its docblock) is the only thing that

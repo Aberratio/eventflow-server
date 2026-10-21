@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Domain\Calendar;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * R-17 (§5.9): the Google service-account key. The ONLY accepted form is a path to the key's JSON file
+ * The Google service-account key. The ONLY accepted form is a path to the key's JSON file
  * (GOOGLE_CALENDAR_SERVICE_ACCOUNT_FILE) kept outside the web root — never in the database, never in an
  * API response. Without a readable, well-formed key the integration is inactive and nothing is sent.
  */

@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.5: server-side sanitization (second line of defence — the client also
+ * Server-side sanitization (second line of defence — the client also
  * sanitizes on every render, so already-stored rows stay safe regardless).
  * Confirms rich-text columns are cleaned on write for every write path listed
  * in the plan: events.description/rules_html/organizers_html/
@@ -31,7 +31,7 @@ final class EventRichTextSanitizationContractTest extends HttpTestCase
         // Not calling Migrator::applyAll() here: on this lane DB, migration
         // 052_e5_5_invoice_data.sql is not idempotent (plain `ADD COLUMN`, no
         // `IF NOT EXISTS`/information_schema guard — a pre-existing issue owned by
-        // another lane, PP.13) and fails on a second run. Migrations were already
+        // another lane) and fails on a second run. Migrations were already
         // applied once for this DB before running these tests.
         $this->organizer = $this->users->create([
             'name' => 'XSS Test Organizer',

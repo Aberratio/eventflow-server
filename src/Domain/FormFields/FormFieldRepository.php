@@ -7,29 +7,29 @@ namespace ZmierzymyCzas\Domain\FormFields;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
- * "Pozycja formularza" (model-formularza-zapisow.md §1) — jeden byt dla pól
- * systemowych i własnych, jedna uporządkowana lista per Wydarzenie.
+ * "Form item" (Pozycja formularza) — one entity for system and custom fields,
+ * one ordered list per Wydarzenie.
  *
- * Cztery rzeczy, które ten ticket świadomie zostawia jako udokumentowane
- * szwy (seam), zamiast implementować (patrz §10 modelu — "poza umową"):
+ * Four things this class deliberately leaves as documented
+ * seams rather than implementing:
  *
- *  1. Nadpisywanie per Dystans (§7) — `distance_id` istnieje w schemacie
- *     (migracja 041) i jest tu zawsze NULL; ta klasa nie ma żadnej metody
- *     resolve-z-nadpisaniem. Dopisanie jej później to dodanie metody, nie
- *     zmiana schematu.
- *  2. Cena wariantu (§4.1) — `options[].price` jest zapisywana i zwracana,
- *     ale żadna metoda tej klasy ani RegistrationRepository nie sumuje jej do
- *     Rozliczenia. Miejsce, w którym wpięcie by nastąpiło, jest oznaczone
- *     w RegistrationRepository (grep "E1.13 seam").
- *  3. Pole poufne (§4.2) — `is_confidential` blokuje widoczność zarówno na
- *     publicznej liście (`publicListColumns()` poniżej), jak i w eksporcie
- *     organizatora (`exportColumns()` poniżej). Ograniczenie odczytu do
- *     Zespołu (bez Moderatora, ticket 10 §9) i automatyczne kasowanie po
- *     zakończeniu Wydarzenia NIE są tu zbudowane.
- *  4. Anonimizacja (§8/F4) — `anonymization` to zwykła systemowa pozycja ze
- *     stanem Nie/Pokaż, przechowywana jak każda inna. Nic w tej klasie ani
- *     gdziekolwiek indziej nie czyta jej wartości, żeby zamaskować nazwisko
- *     na liście/wynikach — ten mechanizm nie istnieje.
+ *  1. Per-Dystans override — `distance_id` exists in the schema
+ *     (migration 041) and is always NULL here; this class has no
+ *     resolve-with-override method. Adding one later is a new method, not a
+ *     schema change.
+ *  2. Variant price — `options[].price` is stored and returned,
+ *     but no method of this class or of RegistrationRepository adds it to the
+ *     Rozliczenie. The place where it would be wired in is marked
+ *     in RegistrationRepository.
+ *  3. Confidential field — `is_confidential` blocks visibility both on the
+ *     public list (`publicListColumns()` below) and in the organizer
+ *     export (`exportColumns()` below). Restricting reads to the
+ *     Team (excluding the Moderator) and automatic deletion after
+ *     the Wydarzenie ends are NOT built here.
+ *  4. Anonymization — `anonymization` is an ordinary system item with a
+ *     No/Show state, stored like any other. Nothing in this class or
+ *     anywhere else reads its value to mask a name
+ *     in the list/results — that mechanism does not exist.
  */
 final class FormFieldRepository extends Repository
 {
@@ -52,10 +52,10 @@ final class FormFieldRepository extends Repository
     private const INSERT_JSON_FIELDS = ['validation_config', 'options'];
 
     /**
-     * Zapewnia istnienie wszystkich 13 pozycji systemowych dla wydarzenia
-     * (idempotentne — migracja 041 już to robi dla wydarzeń istniejących
-     * w chwili wdrożenia; to wywołanie łata wydarzenia utworzone później, np.
-     * w testach, które nie przechodzą przez migrator ponownie).
+     * Ensures all 13 system items exist for the event
+     * (idempotent — migration 041 already does this for events existing
+     * at deploy time; this call patches events created later, e.g.
+     * in tests that do not run the migrator again).
      *
      * @return array<int, array<string, mixed>>
      */
@@ -68,8 +68,8 @@ final class FormFieldRepository extends Repository
                 continue;
             }
             $defaultState = FormFieldCatalog::allowedStates($position['key'])[0];
-            // Swobodne pola domyślnie ukryte; nieusuwalne/napędzające logikę
-            // domyślnie required (jedyny/najsurowszy dozwolony stan).
+            // Free fields hidden by default; non-removable/logic-driving
+            // required by default (the only/strictest allowed state).
             if ($position['controlClass'] === FormFieldCatalog::CONTROL_FREE) {
                 $defaultState = FormFieldCatalog::STATE_HIDDEN;
             }
@@ -102,7 +102,7 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * R-04: rows that belong to one Dystans only (overrides of inherited Pozycje + Dystans-only fields).
+     * Rows that belong to one Dystans only (overrides of inherited Pozycje + Dystans-only fields).
      * listForEvent() deliberately never returns them, so every event-level reader (public start list,
      * exports, snapshot, aggregates) keeps seeing exactly the event form.
      *
@@ -116,7 +116,7 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * R-04: the effective form of one Dystans = the event form (inherited) with the Dystans overrides
+     * The effective form of one Dystans = the event form (inherited) with the Dystans overrides
      * swapped in at the same position, followed by the Dystans-only fields. Every row carries
      * `source`: 'event' (inherited as is), 'override' (Dystans replaces the inherited Pozycja) or
      * 'distance' (exists on this Dystans only). An empty `$distanceId` yields the plain event form.
@@ -152,7 +152,7 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * R-04: "Nadpisz na tym Dystansie" - copies the event-level Pozycja into a Dystans-scoped row that
+     * "Nadpisz na tym Dystansie" - copies the event-level Pozycja into a Dystans-scoped row that
      * the organizer then edits through the normal PATCH endpoint. Copy-on-override: from then on the
      * Dystans row no longer follows later edits of the event row (reset to inherit again).
      *
@@ -185,7 +185,7 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * R-04: "Przywróć dziedziczenie" - drops the Dystans override of an event-level Pozycja. Refused
+     * "Przywróć dziedziczenie" - drops the Dystans override of an event-level Pozycja. Refused
      * while registrations hold answers stored under the override (they would be deleted with it).
      *
      * @throws FormFieldConflictException override has answers
@@ -261,9 +261,9 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * Tworzy pole własne. Klucz nadawany raz, stabilny (model §5) — nie ma
-     * metody, która by go później zmieniała; `updateLabel()`/`updateTooltip()`
-     * poniżej celowo dotykają wyłącznie prezentacji.
+     * Creates a custom field. The key is assigned once and is stable — there is no
+     * method that would change it later; `updateLabel()`/`updateTooltip()`
+     * below deliberately touch presentation only.
      *
      * @param array<string, mixed> $data
      */
@@ -278,8 +278,8 @@ final class FormFieldRepository extends Repository
         }
 
         $key = (string) ($data['fieldKey'] ?? ('custom_' . bin2hex(random_bytes(6))));
-        // Blokujemy tylko kolizję z katalogiem systemowym, nie treść nazwy —
-        // model §1: "Nie blokujemy nazw pól własnych."
+        // We only block a collision with the system catalog, not the content of the name —
+        // custom field names are not blocked.
         if (FormFieldCatalog::isSystemKey($key)) {
             throw new \InvalidArgumentException('Ten klucz jest zarezerwowany dla pozycji systemowej.');
         }
@@ -303,19 +303,19 @@ final class FormFieldRepository extends Repository
             'distance_scope' => $distanceId ?? '',
             'kind' => 'custom',
             'field_key' => $key,
-            'storage_location' => FormFieldCatalog::STORAGE_REGISTRATION, // model F1: pola własne zawsze na Zapisie
+            'storage_location' => FormFieldCatalog::STORAGE_REGISTRATION, // custom fields always live on the Zapis
             'state' => (string) ($data['state'] ?? FormFieldCatalog::STATE_SHOWN),
             'sort_order' => (int) ($data['sortOrder'] ?? 999),
             'label_override' => $data['label'] ?? null,
             'tooltip_override' => $data['tooltip'] ?? null,
-            // Domyślnie Nie, także bez flagi poufności (model §4.2).
+            // Default No, also without the confidentiality flag.
             'public_list_visible' => !empty($data['publicListVisible']) ? 1 : 0,
             'field_type' => $type,
             'validation_config' => $data['validationConfig'] ?? null,
             'options' => $options,
             'is_confidential' => !empty($data['isConfidential']) ? 1 : 0,
-            // E3.3: default Nie, same non-breaking-by-default stance as
-            // public_list_visible above (issue 12 §5).
+            // Default Nie, same non-breaking-by-default stance as
+            // public_list_visible above.
             'visible_to_bz' => !empty($data['visibleToBz']) ? 1 : 0,
         ], self::INSERT_JSON_FIELDS));
 
@@ -326,8 +326,8 @@ final class FormFieldRepository extends Repository
     {
         $field = $this->find($id);
         if ($field === null || $field['kind'] !== 'custom') {
-            // Systemowe: "można ukryć, nigdy usunąć" (model §1) — usuwanie
-            // przez to repozytorium jest wprost niedostępne dla nich.
+            // System fields: "can be hidden, never deleted" — deleting
+            // through this repository is explicitly unavailable for them.
             return false;
         }
         $this->pdo->prepare('DELETE FROM form_fields WHERE id = :id')->execute(['id' => $id]);
@@ -335,18 +335,18 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * B-02: edycja typu i/lub listy wariantów istniejącego pola własnego
-     * (zamiast usuń + dodaj). Klucz pola i klucze wariantów zostają stabilne.
-     * Reguły bezpieczeństwa wobec już zapisanych odpowiedzi:
-     * - zmiana TYPU pola, które ma jakiekolwiek odpowiedzi → 409 HAS_ANSWERS;
-     * - USUNIĘCIE wariantu (po kluczu) użytego w odpowiedzi → 409 OPTION_IN_USE;
-     *   dodanie, zmiana etykiety i ceny są zawsze dozwolone.
-     * Specyfikacja (model §6 / issue 10) zakazuje zmiany typu tylko dla pola
-     * odziedziczonego przez Dystans; na poziomie Wydarzenia go nie zakazuje.
+     * Edit of the type and/or option list of an existing custom field
+     * (instead of delete + add). The field key and option keys stay stable.
+     * Safety rules for answers already stored:
+     * - changing the field TYPE when it has any answers → 409 HAS_ANSWERS;
+     * - REMOVING an option (by key) used in an answer → 409 OPTION_IN_USE;
+     *   adding, and changing the label and price, are always allowed.
+     * The requirements forbid changing the type only for a field
+     * inherited by a Dystans; at the Wydarzenie level they do not forbid it.
      *
      * @param array<string, mixed> $data fieldType?, options?
-     * @throws \InvalidArgumentException walidacja (422)
-     * @throws FormFieldConflictException kolizja z odpowiedziami (409)
+     * @throws \InvalidArgumentException validation (422)
+     * @throws FormFieldConflictException collision with answers (409)
      */
     public function updateDefinition(string $id, array $data): array
     {
@@ -370,7 +370,7 @@ final class FormFieldRepository extends Repository
             throw new \InvalidArgumentException('Nieznany typ pola własnego.');
         }
         if ($newType !== $currentType && $field['distanceId'] !== null && $this->inheritsFromEvent($field)) {
-            // spec 10 §6: a Dystans may not retype a Pozycja it inherits from the event.
+            // a Dystans may not retype a Pozycja it inherits from the event.
             throw new \InvalidArgumentException('Dystans nie może zmienić typu pola odziedziczonego z wydarzenia.');
         }
 
@@ -465,10 +465,10 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * Zmienia stan (Nie/Pokaż/Wymagany), egzekwując trzy klasy sterowania
-     * (model §3) przez `FormFieldCatalog::allowedStates()`. Dla pól własnych
-     * dozwolone są wszystkie trzy stany bez ograniczeń (własne pola są zawsze
-     * "swobodne").
+     * Changes the state (No/Show/Required), enforcing the three control classes
+     * via `FormFieldCatalog::allowedStates()`. For custom fields
+     * all three states are allowed without restriction (custom fields are always
+     * "free").
      */
     public function updateState(string $id, string $newState): array
     {
@@ -494,11 +494,11 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * Nadpisanie etykiety/tooltipa — wyłącznie prezentacyjne (model §5).
-     * Świadomie nie ma parametru `fieldKey` tutaj: klucz jest odczytywany
-     * gdziekolwiek indziej wprost z kolumny `field_key`, ta metoda jej nigdy
-     * nie dotyka, więc integracje maszynowe (klucz kanoniczny) pozostają
-     * nienaruszone niezależnie od tego, ile razy organizator zmieni etykietę.
+     * Label/tooltip override — presentation only.
+     * Deliberately no `fieldKey` parameter here: the key is read
+     * everywhere else directly from the `field_key` column, and this method never
+     * touches it, so machine integrations (the canonical key) stay
+     * intact no matter how many times the organizer changes the label.
      */
     public function updateLabelAndTooltip(string $id, ?string $label, ?string $tooltip): array
     {
@@ -513,11 +513,11 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * Widoczność na publicznej liście startowej. Blokowana na trwałe dla pól
-     * poufnych (model §4.2: "nigdy na publicznej liście — przełącznik
-     * widoczności zablokowany") — próba włączenia jej na polu poufnym jest
-     * odrzucana tu, więc `publicListColumns()` poniżej nie musi już nic
-     * sprawdzać poza samą flagą (obrona w głąb: sprawdza i tak, patrz niżej).
+     * Visibility on the public start list. Permanently blocked for
+     * confidential fields ("never on the public list — the visibility
+     * toggle is blocked") — an attempt to enable it on a confidential field is
+     * rejected here, so `publicListColumns()` below need not check anything
+     * beyond the flag itself (defense in depth: it checks anyway, see below).
      */
     public function updatePublicListVisibility(string $id, bool $visible): array
     {
@@ -533,9 +533,9 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * E3.3: visibility on the Biuro Zawodów pull (issue 12 §5). Same "blocked
+     * Visibility on the Biuro Zawodów pull. Same "blocked
      * for confidential fields" defense as updatePublicListVisibility() above —
-     * a poufne field (model §4.2) must never reach an external system either,
+     * a confidential (poufne) field must never reach an external system either,
      * even though the BZ contract is a separate audience from the public
      * start list.
      */
@@ -553,7 +553,7 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * TD.23: batched into a single `UPDATE ... CASE WHEN` instead of one
+     * Batched into a single `UPDATE ... CASE WHEN` instead of one
      * query per row — same per-row `id AND event_id` guard as before (a row
      * only changes if both match), same 1-based `sortOrder`, same no-op on
      * an empty list.
@@ -595,14 +595,14 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * Model §9: kolumny publicznej listy startowej pochodzą z kolejności
-     * i widoczności Pozycji formularza — nie osobnej konfiguracji "Lista".
-     * Pola poufne są wykluczone bezwarunkowo, niezależnie od
-     * `publicListVisible` (obrona w głąb wobec `updatePublicListVisibility()` —
-     * gdyby flaga poufności została ustawiona na polu już widocznym, ta metoda
-     * nadal go odetnie).
+     * The public start list columns come from the order
+     * and visibility of form items — not a separate "List" configuration.
+     * Confidential fields are excluded unconditionally, regardless of
+     * `publicListVisible` (defense in depth against `updatePublicListVisibility()` —
+     * if the confidentiality flag were set on an already visible field, this method
+     * would still cut it off).
      *
-     * @return array<int, array<string, mixed>> w kolejności formularza
+     * @return array<int, array<string, mixed>> in form order
      */
     public function publicListColumns(string $eventId): array
     {
@@ -613,18 +613,17 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * E3.3: subset of CUSTOM Pozycje formularza flagged visible to Biuro
-     * Zawodów (issue 12 §5, "pola custom oznaczone jako widoczne dla biura
-     * zawodów — podzbiór formularza z ticketu 10, nie wszystkie pola").
+     * Subset of CUSTOM Pozycje formularza flagged visible to Biuro
+     * Zawodów (a subset of the form, not all fields).
      * System fields are deliberately excluded here — the identity section
-     * (imię/nazwisko/e-mail) is sent to BZ unconditionally by the caller
+     * (first name/last name/e-mail) is sent to BZ unconditionally by the caller
      * (RegistrationRepository::bzParticipantList()), not gated by this flag,
      * the same way it is not gated by `public_list_visible` on the public
      * start list either. `is_confidential` is excluded unconditionally, same
      * defense-in-depth stance as publicListColumns()/exportColumns() above —
      * see updateBzVisibility()'s guard against the flag being set at all.
      *
-     * @return array<int, array<string, mixed>> w kolejności formularza
+     * @return array<int, array<string, mixed>> in form order
      */
     public function bzVisibleColumns(string $eventId): array
     {
@@ -637,7 +636,7 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * E2.6: organizer-facing start-list export columns — every non-`hidden`,
+     * Organizer-facing start-list export columns — every non-`hidden`,
      * non-`is_confidential` Pozycja formularza (system + custom) in form
      * order. Broader than publicListColumns() above in one way only: it does
      * NOT require `publicListVisible` (that flag only ever governs the
@@ -652,7 +651,7 @@ final class FormFieldRepository extends Repository
      * answers for this Wydarzenie at all, so it is left out the same way it
      * would show nothing anyway.
      *
-     * @return array<int, array<string, mixed>> w kolejności formularza
+     * @return array<int, array<string, mixed>> in form order
      */
     public function exportColumns(string $eventId): array
     {
@@ -664,7 +663,7 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * PP.18: the superset the E1.14 form snapshot is captured with — every non-confidential
+     * The superset the form snapshot is captured with — every non-confidential
      * field in form order, including the 13 system positions (ensureSystemCatalog(), so the BZ
      * identity fields always exist). A superset of publicListColumns(), exportColumns() and the
      * BZ identity + bzVisibleColumns() sets: whichever reader (or the scheduler) captures first,
@@ -682,12 +681,12 @@ final class FormFieldRepository extends Repository
     }
 
     /**
-     * E2.5: automatic answer-count aggregation for every choice-type custom
+     * Automatic answer-count aggregation for every choice-type custom
      * field (single_choice/multi_choice/consent) of an event — no organizer
-     * opt-in flag (model answer §1: "bez osobnej flagi 'zestawialne'"). Only
+     * opt-in flag (no separate "aggregatable" flag). Only
      * `kind = 'custom'` fields are considered; system fields never carry
      * a `fieldType` and are out of scope here (aggregating e.g. "gender" is
-     * a separate, unbuilt cross-section per the spec's §2).
+     * a separate, unbuilt cross-section).
      *
      * Counts only "live" registrations, mirroring the repo-wide
      * NOT_COUNTED_STATUSES idiom (RegistrationRepository) inline rather than
@@ -802,9 +801,9 @@ final class FormFieldRepository extends Repository
             $options[] = [
                 'key' => (string) ($option['key'] ?? $label),
                 'label' => $label,
-                // Seam #2 (model §4.1): cena jest przechowywana od razu (nawet
-                // ujemna, jak dopuszcza model), ale nic w tym repozytorium ani
-                // w RegistrationRepository jej nie sumuje do Rozliczenia.
+                // Seam: the price is stored right away (even
+                // negative, as the model allows), but nothing in this repository or
+                // in RegistrationRepository adds it to the Rozliczenie.
                 'price' => (float) ($option['price'] ?? 0.0),
             ];
         }

@@ -7,9 +7,9 @@ namespace ZmierzymyCzas\Domain\Bz;
 use Psr\Log\LoggerInterface;
 
 /**
- * E3.4's entry point — ties BzWebhookOutboxRepository and
+ * Entry point — ties BzWebhookOutboxRepository and
  * BzWebhookClientInterface together into the exact outbox pattern
- * CentralMailerOutboxService already established for E1.9: write the outbox
+ * CentralMailerOutboxService already established for write the outbox
  * row (with its deterministic idempotency key) before the HTTP call, never
  * after, and never re-send once a key has already been recorded.
  *
@@ -21,12 +21,12 @@ use Psr\Log\LoggerInterface;
  * CriticalMailer's split between "is Central Mailer configured at all" and
  * "does this specific send have somewhere to go"). It also never decides *what*
  * the payload contains beyond passing it through untouched — the money-leakage
- * discipline (issue 12 §5, "bez kwot") is the caller's responsibility, same as
+ * discipline (no amounts) is the caller's responsibility, same as
  * CentralMailerOutboxService trusts its caller for message content.
  */
 final class BzWebhookOutboxService
 {
-    /** PP.18: total attempts (the immediate one plus retries) before a push is given up on. */
+    /** Total attempts (the immediate one plus retries) before a push is given up on. */
     public const MAX_ATTEMPTS = 8;
     /** Minutes to wait after attempt N failed, before attempt N+1. */
     private const BACKOFF_MINUTES = [1 => 5, 2 => 15, 3 => 60, 4 => 180, 5 => 360, 6 => 720, 7 => 1440];
@@ -88,7 +88,7 @@ final class BzWebhookOutboxService
     }
 
     /**
-     * PP.18 (scheduler job bz.outbox_retry): retries `failed` pushes after their backoff and `queued`
+     * Scheduler job bz.outbox_retry: retries `failed` pushes after their backoff and `queued`
      * ones older than STALE_QUEUED_MINUTES (the sending process died). The payload (with its original
      * `occurredAt`) and the Idempotency-Key are resent (the same JSON content; the JSON column may reorder keys); BZ dedups on the key. Never logs the
      * token or the payload.

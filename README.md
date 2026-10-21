@@ -350,8 +350,7 @@ same baseline headers via `SecurityHeadersMiddleware::baselineHeaders(false)` �
 without HSTS, since `APP_ENV` could not be parsed at that point.
 
 Out of scope for now (tracked in later tickets): a dynamic per-event
-`frame-ancestors`/`X-Robots-Tag` (PP.28), upload MIME hardening beyond `nosniff`
-(PP.11), and COOP/COEP/CORP/`report-uri` (not planned — CORP in particular would break
+`frame-ancestors`/`X-Robots-Tag`, upload MIME hardening beyond `nosniff`, and COOP/COEP/CORP/`report-uri` (not planned — CORP in particular would break
 cross-origin `<img>` loads of API uploads from the frontend).
 
 ## Deployment and operations
@@ -373,3 +372,7 @@ VITE_API_URL=http://localhost:8081/api/v1
 The React app uses the real HTTP adapter by default and falls back to
 `http://localhost:8081/api/v1` when `VITE_API_URL` is not set. Override
 `VITE_API_URL` only when the API is available at a different address.
+
+## License
+
+All rights reserved. The source is published for portfolio and review purposes only; see [LICENSE](LICENSE).

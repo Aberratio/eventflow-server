@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * R-10: POST /auth/login is throttled per account (normalised e-mail, existing or not) and per IP:
+ * POST /auth/login is throttled per account (normalised e-mail, existing or not) and per IP:
  * 5 failures per account / 20 per IP in 15 minutes lock the subject with a growing lockout, answered
  * with 429 + Retry-After, a lockout is written to the activity log, a success resets the account.
  */

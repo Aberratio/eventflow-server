@@ -10,7 +10,7 @@ use ZmierzymyCzas\Domain\Events\EventChildSchema;
 use ZmierzymyCzas\Support\InputValidationException;
 
 /**
- * PP.59: the only place where client keys of event child rows are turned into column names.
+ * The only place where client keys of event child rows are turned into column names.
  * Column names come from constants, never from input.
  */
 final class EventChildSchemaTest extends TestCase

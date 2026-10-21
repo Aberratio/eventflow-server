@@ -19,8 +19,8 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E6.6 (issue 15 §6, "Ranking: publiczny, z respektowaniem anonimizacji"):
- * point totals via E6.2's scorer, descending sort, "1,1,3" ex-aequo rank
+ * Public ranking that respects anonymization:
+ * point totals via the points scorer, descending sort, "1,1,3" ex-aequo rank
  * sharing, and anonymization masking. `results`/`challenge_participations`
  * have no foreign keys to `events`/`challenges` in this schema, so — mirroring
  * ChallengeCompletionTest's own style — fixture rows are inserted directly
@@ -129,7 +129,7 @@ final class ChallengeRankingCalculatorTest extends TestCase
     }
 
     /**
-     * The Konto's own Zawodnik already exists: UserRepository::create() gives every Konto one (E0.1).
+     * The Konto's own Zawodnik already exists: UserRepository::create() gives every Konto one.
      *
      * @return array{0: array<string,mixed>, 1: array<string,mixed>} [user, competitor]
      */
@@ -142,7 +142,7 @@ final class ChallengeRankingCalculatorTest extends TestCase
             'role' => 'participant',
         ]);
         $competitor = $this->competitors->findByUserId((string) $user['id']);
-        self::assertNotNull($competitor, 'UserRepository::create() gives every Konto its own Zawodnik (E0.1).');
+        self::assertNotNull($competitor, 'UserRepository::create() gives every Konto its own Zawodnik.');
         return [$user, $competitor];
     }
 
@@ -188,7 +188,7 @@ final class ChallengeRankingCalculatorTest extends TestCase
     /**
      * Core scenario: three competitors, one event, points table with a
      * genuine tie at the top (places 1 and 2 both worth 100), place 3 worth
-     * 50. Proves total points come from E6.2's scorer, descending sort, and
+     * 50. Proves total points come from the points scorer, descending sort, and
      * the standard competition ranking convention ("1,1,3" — NOT "1,1,2"
      * dense ranking, NOT "1,2,2"): two competitors tied for 1st means the
      * next distinct competitor is 3rd.
@@ -236,7 +236,7 @@ final class ChallengeRankingCalculatorTest extends TestCase
         self::assertSame(3, $byUserId[$userThird['id']]['rank']);
     }
 
-    /** R-09: the Series ranking (several Wyzwania) uses the same `Anonim #<kod>` label. */
+    /** The Series ranking (several Wyzwania) uses the same `Anonim #<kod>` label. */
     public function testSeriesRankingOverSeveralChallengesUsesTheAnonymousLabel(): void
     {
         $this->pointsSettings->updateSettings(['pointsTable' => [100, 90], 'floorPoints' => 0]);
@@ -301,7 +301,7 @@ final class ChallengeRankingCalculatorTest extends TestCase
     }
 
     /**
-     * Edge case (issue 15 §6 doesn't resolve this, judgment call — see
+     * Edge case (not specified upstream, judgment call — see
      * ChallengeRankingCalculator's class doc comment): a Wyzwanie whose tree
      * has no `point_threshold` node at all falls back to a binary
      * completed/not-completed ranking rather than a fake point total.

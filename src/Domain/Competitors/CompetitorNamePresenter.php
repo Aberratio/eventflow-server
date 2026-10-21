@@ -5,17 +5,17 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Competitors;
 
 /**
- * E6.6 (issue 15 §6, "Ranking: publiczny, z respektowaniem anonimizacji"):
+ * Anonymization for public rankings:
  * the one, reusable place that decides whether a competitor's real name may
- * be shown publicly. "tym samym mechanizmem co na liście startowej, nie
- * osobnym wyjątkiem" (spec) — a single static helper, not a per-feature
- * ad-hoc check, so every public read this ticket touches (and any future one
+ * be shown publicly. Same mechanism as the start list, not
+ * a separate exception — a single static helper, not a per-feature
+ * ad-hoc check, so every public read (and any future one
  * that wires the same `competitors.is_anonymized` flag in) shares the exact
  * same masking decision and format.
  *
- * Masked-name format: a judgment call, spec deliberately leaves it open
- * ("spec nie precyzuje dokladnego formatu, brak precedensu w kodzie").
- * Chosen (R-09, spec 10): the label "Anonim #<kod>" (stable per Zawodnik, see anonymousLabel()) rather than
+ * Masked-name format: a judgment call, deliberately left open
+ * (the requirements give no exact format and the code has no precedent).
+ * Chosen: the label "Anonim #<kod>" (stable per Zawodnik, see anonymousLabel()) rather than
  * initials (e.g. "J.K.") — initials are still partially re-identifying when
  * cross-referenced against a public start list or bib number, which would
  * undermine the whole point of the flag; a flat label carries zero
@@ -24,7 +24,7 @@ namespace ZmierzymyCzas\Domain\Competitors;
  */
 final class CompetitorNamePresenter
 {
-    /** Fallback when no competitor id is known (R-09: normally the label is Anonim #<kod>). */
+    /** Fallback when no competitor id is known (normally the label is Anonim #<kod>). */
     public const ANONYMIZED_LABEL = 'Anonim';
 
     public const LABEL_PREFIX = 'Anonim #';
@@ -41,7 +41,7 @@ final class CompetitorNamePresenter
     }
 
     /**
-     * R-09 (spec 10): `Anonim #<kod>`. The code is stable per Zawodnik (the same across Events), derived
+     * `Anonim #<kod>`. The code is stable per Zawodnik (the same across Events), derived
      * from the competitor id with a one-way hash - never the secret QR identity code - and carries no
      * personal data. Without an id the plain fallback label is returned.
      */

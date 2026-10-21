@@ -15,10 +15,10 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * R-06 (zakres P2): Uczestnictwo w Wyzwaniu należy do Zawodnika (`competitor_id`), nie do
- * Konta. Pokrywa backfill migracji 120, zapis podopiecznego przez opiekuna, postęp liczony
- * per Zawodnik, 403 dla cudzego Zawodnika oraz niezmieniony ranking dla danych sprzed zmiany
- * (wiersze bez `competitor_id`, czytane po `user_id`).
+ * Participation in a Wyzwanie belongs to the Zawodnik (`competitor_id`), not to the
+ * Konto. Covers the migration 120 backfill, a ward joining via their guardian, progress computed
+ * per Zawodnik, 403 for someone else's Zawodnik, and an unchanged ranking for pre-change data
+ * (rows without `competitor_id`, read by `user_id`).
  */
 final class ChallengeCompetitorContractTest extends HttpTestCase
 {
@@ -254,7 +254,7 @@ final class ChallengeCompetitorContractTest extends HttpTestCase
 
     public function testRowsWithoutCompetitorKeepWorkingByUserId(): void
     {
-        // Pre-R-06 data: participation + entry without competitor_id, result keyed by user_id only.
+        // Legacy data: participation + entry without competitor_id, result keyed by user_id only.
         $user = $this->makeUser('Dawny uczestnik');
         $this->pdo->prepare(
             "INSERT INTO challenge_participations (id, challenge_id, user_id, competitor_id, user_name, joined_at)

@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Registrations;
 
 /**
- * B-01 (spec 08 axis 4, umowa §5.4): is a new Zapis accepted for this Event right now?
+ * Is a new Zapis accepted for this Event right now?
  * Mirrors the client's EventRegistrationPage rules so the server, not the form, is the gate.
  *
- * Verdicts: `open` (a real Zapis), `test` (Draft in test mode - a dry run, G-08) or a
+ * Verdicts: `open` (a real Zapis), `test` (Draft in test mode - a dry run) or a
  * Polish reason the Zapis is refused. Staff of the Event (`$manager`) skip the time/status
- * rules (they add people after close, spec 08) but never the publication rule.
+ * rules (they add people after close) but never the publication rule.
  */
 final class RegistrationOpenRules
 {

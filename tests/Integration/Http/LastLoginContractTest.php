@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * G-07 (umowa §5.8): a successful POST /auth/login persists users.last_login_at,
+ * A successful POST /auth/login persists users.last_login_at,
  * exposed as `lastLoginAt` (ISO 8601) on user payloads; null until the first login.
  */
 final class LastLoginContractTest extends HttpTestCase

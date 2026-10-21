@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Insurance\InsuranceRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * InsuranceRepository (E0.3) had zero direct test coverage before this file:
+ * InsuranceRepository had zero direct test coverage before this file:
  * the only exercise of its logic was indirect, through
  * RegistrationRepositoryTest's insurance-premium pricing tests, which never
  * touch create()/update()/delete()/list() at all. Those CRUD methods feed
@@ -123,7 +123,7 @@ final class InsuranceRepositoryTest extends TestCase
 
     /**
      * `updateSettings()` is a thin read/write on the *first* catalog row
-     * (E0.3's documented backward-compatibility seam). Confirms the merge
+     * (the documented backward-compatibility seam). Confirms the merge
      * semantics: a partial payload only overwrites the keys it sends, and
      * the identity of the underlying row is never rotated.
      */
@@ -147,7 +147,7 @@ final class InsuranceRepositoryTest extends TestCase
         ]);
     }
 
-    /** PP.5: create() and update() must sanitize infoHtml server-side (second line of defence). */
+    /** create() and update() must sanitize infoHtml server-side (second line of defence). */
     public function testCreateAndUpdateSanitizeInfoHtml(): void
     {
         $created = $this->insurance->create([
@@ -163,7 +163,7 @@ final class InsuranceRepositoryTest extends TestCase
         self::assertStringNotContainsString('onerror', $updated['infoHtml']);
     }
 
-    /** PP.5: updateSettings() must sanitize infoHtml server-side (second line of defence). */
+    /** updateSettings() must sanitize infoHtml server-side (second line of defence). */
     public function testUpdateSettingsSanitizesInfoHtml(): void
     {
         $before = $this->insurance->getSettings();

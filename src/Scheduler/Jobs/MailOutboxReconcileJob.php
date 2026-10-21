@@ -9,8 +9,8 @@ use ZmierzymyCzas\Domain\Mailer\CentralMailer\CentralMailerOutboxService;
 use ZmierzymyCzas\Scheduler\ScheduledJob;
 
 /**
- * PP.18: polls Central Mailer for the status of accepted outbox rows (GET only). Re-sending rows Central Mailer
- * never accepted (and 429 handling) is the separate 'mail.outbox_retry' job (PP.19).
+ * Polls Central Mailer for the status of accepted outbox rows (GET only). Re-sending rows Central Mailer
+ * never accepted (and 429 handling) is the separate 'mail.outbox_retry' job.
  */
 final class MailOutboxReconcileJob implements ScheduledJob
 {

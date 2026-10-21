@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
-/** PP.19: a Central Mailer outage must not turn creating a Zawodnik into a 500; the mail row waits for the retry. */
+/** A Central Mailer outage must not turn creating a Zawodnik into a 500; the mail row waits for the retry. */
 final class CareCreateMailFailureContractTest extends HttpTestCase
 {
     private string $prefix;

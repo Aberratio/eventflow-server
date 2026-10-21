@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.52: POST /registrations must derive identity and payment status server-side.
+ * POST /registrations must derive identity and payment status server-side.
  */
 final class RegistrationCreateContractTest extends HttpTestCase
 {
@@ -269,7 +269,7 @@ final class RegistrationCreateContractTest extends HttpTestCase
         self::assertSame($this->p['id'], $data['registeredById']);
         self::assertSame('Dziecko ' . $this->prefix, $data['userName']);
 
-        // PP.44: the Zapis row keeps the child as the participant and the guardian as contact.
+        // The Zapis row keeps the child as the participant and the guardian as contact.
         $row = $this->rawRegistration($data['id']);
         self::assertSame($child['id'], $row['competitor_id']);
         self::assertSame($this->p['id'], $row['user_id']);

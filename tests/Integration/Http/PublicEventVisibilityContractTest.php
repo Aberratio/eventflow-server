@@ -10,7 +10,7 @@ use ZmierzymyCzas\Tests\Support\HttpTestCase;
 use ZmierzymyCzas\Tests\Support\SavepointPdo;
 
 /**
- * PP.55: private / soft-deleted Events never leak through the public Event reads, and a
+ * Private / soft-deleted Events never leak through the public Event reads, and a
  * non-manager payload is the PublicEventPresenter allowlist shape.
  */
 final class PublicEventVisibilityContractTest extends HttpTestCase

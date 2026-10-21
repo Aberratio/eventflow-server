@@ -25,9 +25,9 @@ use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
 /**
  * CriticalMailer end-to-end against a real outbox + mail_templates table and a
- * fake Central Mailer HTTP client — exercises the full E1.10 chain: template
- * resolution, rendering, deterministic idempotency-key construction (§6),
- * queue routing (§2), and CentralMailerConfig::isConfigured() gating (mirrors
+ * fake Central Mailer HTTP client — exercises the full chain: template
+ * resolution, rendering, deterministic idempotency-key construction,
+ * queue routing, and CentralMailerConfig::isConfigured() gating (mirrors
  * TpayConfig/PayNowConfig's "skip silently" stance).
  */
 final class CriticalMailerTest extends TestCase
@@ -238,7 +238,7 @@ final class CriticalMailerTest extends TestCase
         self::assertSame($sourceId . ':' . MailCatalog::REGISTRATION_CREATED . ':v1', $row['idempotencyKey']);
     }
 
-    /** PP.18: only the unpaid reminder gains a payment-window discriminator; every other key stays byte-identical. */
+    /** Only the unpaid reminder gains a payment-window discriminator; every other key stays byte-identical. */
     public function testUnpaidReminderKeyCarriesWindowDiscriminatorOthersUnchanged(): void
     {
         $this->http->queueResponse(new HttpResponse(201, json_encode(['id' => 'cm-w1', 'status' => 'pending'])));

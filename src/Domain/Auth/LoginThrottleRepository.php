@@ -7,7 +7,7 @@ namespace ZmierzymyCzas\Domain\Auth;
 use PDO;
 
 /**
- * R-10: persistence of {@see LoginThrottlePolicy} state, one row per (scope, key hash).
+ * Persistence of {@see LoginThrottlePolicy} state, one row per (scope, key hash).
  *
  * @phpstan-import-type State from LoginThrottlePolicy
  */

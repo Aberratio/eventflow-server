@@ -51,7 +51,7 @@ final class CareContractTest extends HttpTestCase
             "DELETE c FROM competitors c JOIN users u ON u.id = c.user_id WHERE u.email LIKE :email"
         )->execute(['email' => $this->prefix . '-%@example.test']);
         // last_name is the random per-test prefix for every standalone ward this file
-        // creates (Zosia in the E0.1 tests, plus E1.12's Rotacja/Cudzy wards) — matching
+        // creates (Zosia in the earlier tests, plus the Rotacja/Cudzy wards) — matching
         // on it alone (not also first_name) catches all of them without over-deleting.
         $this->pdo->prepare('DELETE FROM competitors WHERE last_name = :last')
             ->execute(['last' => $this->prefix]);
@@ -97,7 +97,7 @@ final class CareContractTest extends HttpTestCase
 
         // Both parents now see a Zawodnik pod opieką — the app is expected to steer
         // them to the existing profile using the warning above; this asserts that
-        // creating a second one does NOT silently merge (out of scope for E0.1),
+        // creating a second one does NOT silently merge (out of scope here),
         // matching AC3: warn, don't block, don't silently dedupe.
         $listResponse = $this->request(
             'GET',
@@ -245,9 +245,9 @@ final class CareContractTest extends HttpTestCase
     }
 
     /**
-     * E1.12: rotacja na żądanie — Konto sprawujące Opiekę nad Zawodnikiem (tu:
-     * parent1 dodał dziecko pod swoją opiekę) może wygenerować mu nowy kod
-     * tożsamości, unieważniając stary od razu (nadpisanie, bez historii).
+     * On-demand rotation: a Konto holding Opieka over a Zawodnik (here:
+     * parent1 added the child under their care) can generate a new
+     * identity code, invalidating the old one at once (overwrite, no history).
      */
     public function testGuardianCanRotateWardsIdentityCode(): void
     {

@@ -11,7 +11,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.89: POST /users (admin) and POST /auth/register validate their input. A bad body is a 422 with a
+ * POST /users (admin) and POST /auth/register validate their input. A bad body is a 422 with a
  * Polish message and details.field (never a PHP warning or a 500 from strict MySQL), a taken e-mail is 409,
  * and self-registration applies the shared PasswordRule. Nothing is created on any 4xx.
  */

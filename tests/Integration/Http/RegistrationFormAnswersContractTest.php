@@ -10,9 +10,9 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * B-07: POST /registrations takes the form answers (`formFieldAnswers`) and the
+ * POST /registrations takes the form answers (`formFieldAnswers`) and the
  * identity-section values (`identity`) in the same transaction as the Zapis, and the
- * priced variants of choice fields land in the frozen Rozliczenie (spec 07 step 4).
+ * priced variants of choice fields land in the frozen Rozliczenie.
  */
 final class RegistrationFormAnswersContractTest extends HttpTestCase
 {

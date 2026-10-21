@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Support;
 
 /**
- * PP.76: pure declarative checker for request bodies that are written straight into NOT NULL,
+ * Pure declarative checker for request bodies that are written straight into NOT NULL,
  * ENUM or numeric columns. A violation throws InputValidationException (rendered as 422) instead
  * of letting strict MySQL fail the INSERT/UPDATE with a 500. Unknown keys are ignored.
  */

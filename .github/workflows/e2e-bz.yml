@@ -70,12 +70,12 @@ jobs:
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.gate.outputs.enabled == 'true'
 
       - name: Check out Biuro Zawodow API
         if: steps.gate.outputs.enabled == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Aberratio/biuro_zawodow-api
           ref: ${{ inputs.bz_ref || vars.BZ_API_REF || 'master' }}
@@ -127,7 +127,7 @@ jobs:
 
       - name: Upload redacted logs
         if: failure() && steps.gate.outputs.enabled == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-bz-logs
           path: ${{ runner.temp }}/e2e-logs

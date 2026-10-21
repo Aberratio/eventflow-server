@@ -229,6 +229,7 @@ final class RbacGrid
         'GET /api/v1/registrations/{id}/changes' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'R-02: history of one Zapis, owner + manager (zakres P2)'],
         'POST /api/v1/registrations/{id}/distance-change/quote' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'R-02: what a change of Dystans would cost, writes nothing (zakres P2)'],
         'POST /api/v1/registrations/{id}/distance-change' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'R-02: owner inside the self-service window, manager always (zakres P2)'],
+        'POST /api/v1/registrations/{id}/transfer' => ['policy' => self::REG_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'R-02: transfer of a Zapis to another Zawodnik, the Event manager only (zakres P2)'],
         'PATCH /api/v1/registrations/{id}/payment-details' => ['policy' => self::REG_MONEY, 'params' => ['id' => 'registration'], 'basis' => 'H6 (plan line 1860)'],
         'POST /api/v1/registrations/{id}/refund-request' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'spec 13: zawodnik prosi (plan line 1875)'],
         'POST /api/v1/registrations/{id}/refund-approve' => ['policy' => self::REG_MONEY, 'params' => ['id' => 'registration'], 'basis' => 'H6 (plan line 1894)'],

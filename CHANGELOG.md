@@ -93,6 +93,17 @@ as the first version.
   organizer, who gets `balanceDueMinor` and settles the extra by hand. The
   change is written to the registration history and the activity log, mailed
   to the registrant and pushed to Biuro Zawodów as `distance_change`.
+- Transfer of a registration to another competitor by the event manager (zakres
+  P2, do potwierdzenia przez Zamawiającego): `POST /registrations/{id}/transfer`
+  with `competitorId` or `newPerson`; the owner gets 403. The registration, its
+  distance, bib number and frozen settlement stay; the person, contact data and
+  category change, the start code rotates and the custom form answers are
+  dropped. The personal NNW insurance line is priced again for the new person;
+  any difference is only reported (`balanceDueMinor` / `overpaymentMinor`) -
+  no payment, refund or settlement between the two people. Relay team members
+  are refused (use the team member swap). The previous and the new person get
+  a mail, the change goes to the registration history, the activity log and to
+  Biuro Zawodów as `transfer`.
 - `/health` reports the deployed `version` (from the release tag) and
   `commit`, and the deploy fails its health check when the commit does not
   match. `APP_VERSION` only overrides the version now: clear the old

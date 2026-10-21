@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Events;
 
 use Psr\Log\LoggerInterface;
+use ZmierzymyCzas\Domain\Registrations\BibNumberService;
+use ZmierzymyCzas\Domain\Registrations\SelfServicePolicy;
 use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Support\HtmlSanitizer;
 use ZmierzymyCzas\Support\InputRules;
@@ -96,6 +98,7 @@ registration_embed AS registrationEmbed, registration_form_config AS registratio
 embed_enabled AS embedEnabled, embed_allowed_origins AS embedAllowedOrigins,
 display_options AS displayOptions, logistics_info AS logisticsInfo,
 organizer_info AS organizerInfo,
+self_service_enabled AS selfServiceEnabled, self_service_deadline AS selfServiceDeadline,
 background_id AS backgroundId
 SQL;
 
@@ -696,6 +699,12 @@ SQL;
         foreach (['featured', 'isLive', 'isVirtual', 'requireFinalAcceptance', 'isPrivate', 'isTest', 'isExternal', 'registrationUntilEventStart', 'enableMerchandiseInRegistration', 'bzIntegrationEnabled', 'embedEnabled'] as $bool) {
             $event[$bool] = (bool) ($event[$bool] ?? false);
         }
+        // R-02: self-service on by default; `selfServiceDeadline` is what the organizer stored (null =
+        // default), `selfServiceEffectiveDeadline` the cut-off that actually applies (ATOM) - both for the UI.
+        $event['selfServiceEnabled'] = (bool) ($event['selfServiceEnabled'] ?? true);
+        $storedDeadline = SelfServicePolicy::normalizeDeadline($event['selfServiceDeadline'] ?? null);
+        $event['selfServiceDeadline'] = $storedDeadline === null ? null : (new \DateTimeImmutable($storedDeadline))->format(DATE_ATOM);
+        $event['selfServiceEffectiveDeadline'] = SelfServicePolicy::effectiveDeadline($event)?->format(DATE_ATOM);
         // E8.11: embed_allowed_origins is nullable at the schema level (same as every
         // other JSON config column here) - a brand-new event, or one created before
         // this ticket, reads back as an empty allowlist rather than null, so callers
@@ -944,6 +953,8 @@ SQL;
             'displayOptions' => 'display_options',
             'logisticsInfo' => 'logistics_info',
             'backgroundId' => 'background_id',
+            'selfServiceEnabled' => 'self_service_enabled',
+            'selfServiceDeadline' => 'self_service_deadline',
         ];
         $out = $creating ? ['id' => $id, 'publication_status' => 'draft', 'featured' => 0] : [];
         foreach ($map as $input => $column) {
@@ -964,6 +975,9 @@ SQL;
             $out['is_private'] = (int) ($data['visibility'] === 'private');
         } elseif (array_key_exists('isPrivate', $data) && !array_key_exists('visibility', $data)) {
             $out['visibility'] = !empty($data['isPrivate']) ? 'private' : 'public';
+        }
+        if (array_key_exists('self_service_deadline', $out)) {
+            $out['self_service_deadline'] = SelfServicePolicy::normalizeDeadline($out['self_service_deadline']);
         }
         foreach (self::RICH_TEXT_COLUMNS as $column) {
             if (array_key_exists($column, $out)) {
@@ -1177,6 +1191,9 @@ SQL;
                     }
                 }
                 $prepared[] = $entry;
+            }
+            if ($key === 'distances') {
+                BibNumberService::validateRanges(array_map(static fn (array $entry): array => $entry['columns'], $prepared));
             }
             $collections[$key] = $prepared;
         }

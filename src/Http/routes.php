@@ -15,6 +15,9 @@ use ZmierzymyCzas\Domain\Auth\ActionTokenPurpose;
 use ZmierzymyCzas\Domain\Auth\ActionTokenRepository;
 use ZmierzymyCzas\Domain\Auth\DbSessionGuard;
 use ZmierzymyCzas\Domain\Auth\JwtService;
+use ZmierzymyCzas\Domain\Auth\LoginThrottle;
+use ZmierzymyCzas\Domain\Auth\LoginThrottleConfig;
+use ZmierzymyCzas\Domain\Auth\LoginThrottleRepository;
 use ZmierzymyCzas\Domain\Auth\PasswordRule;
 use ZmierzymyCzas\Domain\Auth\SessionRevocationRepository;
 use ZmierzymyCzas\Domain\Bz\BzWebhookClient;
@@ -30,6 +33,7 @@ use ZmierzymyCzas\Domain\Challenges\ChallengeRankingCalculator;
 use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
 use ZmierzymyCzas\Domain\Cms\InfoPageRepository;
 use ZmierzymyCzas\Domain\Cms\PartnerRepository;
+use ZmierzymyCzas\Domain\Events\DiscountCodeBatchRepository;
 use ZmierzymyCzas\Domain\Events\EventBackgroundRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Events\EventTeamRepository;
@@ -37,6 +41,7 @@ use ZmierzymyCzas\Domain\Events\PublicEventPresenter;
 use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Payments\Http\CurlHttpClient;
+use ZmierzymyCzas\Domain\Payments\SettlementReport;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowConfig;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowGateway;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowNotification;
@@ -46,8 +51,11 @@ use ZmierzymyCzas\Domain\Payments\Tpay\TpayGateway;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotification;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayNotificationVerifier;
 use ZmierzymyCzas\Domain\Payments\Tpay\TpayOAuthClient;
+use ZmierzymyCzas\Domain\Registrations\BibNumberTakenException;
+use ZmierzymyCzas\Domain\Registrations\RegistrationChangeRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationOpenRules;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
+use ZmierzymyCzas\Domain\Registrations\SelfServicePolicy;
 use ZmierzymyCzas\Domain\Registrations\StartListExportFormatter;
 use ZmierzymyCzas\Domain\Results\ResultImportRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
@@ -93,6 +101,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     // PP.7: every AuthMiddleware/optionalAuth below captures this guarded copy.
     $jwt = $jwt->withSessionGuard(new DbSessionGuard($pdo));
     $events = new EventRepository($pdo);
+    $discountBatches = new DiscountCodeBatchRepository($pdo);
     // R-17: Google Calendar (§5.9). Inactive (nothing queued or sent) until an admin enables it AND the key file exists.
     $calendarSettings = new GoogleCalendarSettingsRepository($pdo);
     $calendarSync = GoogleCalendarSyncService::fromEnv($pdo, $logger);
@@ -205,7 +214,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         if ($participation === null) {
             return;
         }
-        $completion = $challenges->checkCompletion((string) $participation['challengeId'], (string) $participation['userId']);
+        $completion = $challenges->checkCompletion(
+            (string) $participation['challengeId'],
+            (string) $participation['userId'],
+            ($participation['competitorId'] ?? null) !== null ? (string) $participation['competitorId'] : null
+        );
         if ($completion === null) {
             return;
         }
@@ -495,7 +508,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         });
     }
 
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $discountBatches, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // PP.20: a cheap round trip on the connection index.php already opened.
             try {
@@ -635,12 +648,43 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 ->withHeader('Cache-Control', 'public, max-age=31536000, immutable');
         });
 
-        $api->post('/auth/login', function (Request $request, Response $response) use ($users, $jwt, $body) {
+        // R-10: failed logins are counted per account (normalised e-mail, whether or not it exists) and per IP.
+        // A blocked caller gets 429 + Retry-After before the password is even checked, with the same answer for
+        // unknown and existing accounts. The IP is REMOTE_ADDR only (a forwarded header would be spoofable).
+        $api->post('/auth/login', function (Request $request, Response $response) use ($users, $jwt, $body, $pdo, $admin) {
+            $loginThrottle = new LoginThrottle(new LoginThrottleRepository($pdo), LoginThrottleConfig::fromEnv(), static fn (): int => time());
             $payload = $body($request);
-            $user = $users->findByEmail((string) ($payload['email'] ?? ''), true);
+            $email = (string) ($payload['email'] ?? '');
+            $ip = (string) ($request->getServerParams()['REMOTE_ADDR'] ?? '');
+            $wait = $loginThrottle->retryAfter($email, $ip);
+            if ($wait > 0) {
+                return JsonResponder::error(
+                    $response,
+                    'too_many_login_attempts',
+                    'Zbyt wiele nieudanych prób logowania. Spróbuj ponownie za ' . (int) ceil($wait / 60) . ' min.',
+                    429,
+                    ['retryAfterSeconds' => $wait]
+                )->withHeader('Retry-After', (string) $wait);
+            }
+            $user = $users->findByEmail($email, true);
             if (!$user || !password_verify((string) ($payload['password'] ?? ''), (string) $user['passwordHash'])) {
+                $lockedScopes = $loginThrottle->recordFailure($email, $ip);
+                foreach ($lockedScopes as $scope) {
+                    $byIp = $scope === LoginThrottleRepository::SCOPE_IP;
+                    $admin->insertActivityLog([
+                        'userId' => $byIp || !$user ? '' : (string) $user['id'],
+                        'action' => 'login_lockout',
+                        'description' => $byIp
+                            ? 'Zablokowano logowanie z adresu IP po zbyt wielu nieudanych próbach.'
+                            : 'Zablokowano logowanie na konto po zbyt wielu nieudanych próbach.',
+                        'targetType' => $byIp ? 'ip' : 'user',
+                        'targetId' => $byIp || !$user ? null : (string) $user['id'],
+                        'targetName' => $byIp ? $ip : null,
+                    ]);
+                }
                 return JsonResponder::error($response, 'invalid_credentials', 'Invalid email or password', 401);
             }
+            $loginThrottle->recordSuccess($email);
             unset($user['passwordHash']);
             // PP.70: a blocked account never gets a session. Checked after the password, so the
             // block itself is only disclosed to someone who knows the password.
@@ -1452,6 +1496,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     }
                 }
             }
+            // R-02: the self-service cut-off must be a real moment before the start of the Wydarzenie.
+            if (array_key_exists('selfServiceDeadline', $payload)
+                && !SelfServicePolicy::deadlineIsValid($payload['selfServiceDeadline'], [...(array) $event, ...array_intersect_key($payload, ['date' => true])])) {
+                return JsonResponder::error($response, 'validation_error', 'selfServiceDeadline must be a valid date before the start of the event', 422, ['field' => 'selfServiceDeadline']);
+            }
             $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::EVENT);
             if ($urlCheck['error'] !== null) {
                 return JsonResponder::error($response, 'invalid_url', $urlCheck['error']['message'], 422, ['field' => $urlCheck['error']['field']]);
@@ -2025,8 +2074,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // the same ordered list an organizer edits, just without hidden
         // internals. Manage endpoints require $eventManagerRoles, mirroring
         // the mail-templates group above.
+        // R-04: `?distanceId=` returns the effective form of that Dystans (event form + its overrides + its own fields).
         $api->get('/events/{eventId}/form-fields/public', function (Request $request, Response $response, array $args) use ($formFields) {
-            $fields = $formFields->ensureSystemCatalog((string) $args['eventId']);
+            $fields = $formFields->effectiveForDistance((string) $args['eventId'], (string) ($request->getQueryParams()['distanceId'] ?? ''));
             $visible = array_values(array_filter($fields, static fn (array $f): bool => $f['state'] !== 'hidden'));
             return JsonResponder::ok($response, $visible);
         });
@@ -2097,6 +2147,67 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'validation_error', 'Pozycje systemowe można wyłącznie ukryć, nie usunąć.', 422);
             }
             return JsonResponder::ok($response, ['deleted' => true]);
+        })->add(new AuthMiddleware($jwt));
+        // R-04: per-Dystans form. The effective form (with `source`: event|override|distance), a Dystans-only
+        // field, and copy-on-override / reset of an inherited Pozycja. Same event-manager gate as above.
+        $distanceFormGate = static function (Response $response, array $args, Request $request) use ($events, $canManageEvent): array|Response {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $distanceIds = array_map(static fn (array $d): string => (string) $d['id'], (array) ($event['distances'] ?? []));
+            if (!in_array((string) $args['distanceId'], $distanceIds, true)) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono dystansu.', 404);
+            }
+            return (array) $event;
+        };
+        $api->get('/events/{eventId}/distances/{distanceId}/form-fields', function (Request $request, Response $response, array $args) use ($formFields, $distanceFormGate) {
+            $gate = $distanceFormGate($response, $args, $request);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            return JsonResponder::ok($response, $formFields->effectiveForDistance((string) $args['eventId'], (string) $args['distanceId']));
+        })->add(new AuthMiddleware($jwt));
+        $api->post('/events/{eventId}/distances/{distanceId}/form-fields', function (Request $request, Response $response, array $args) use ($formFields, $distanceFormGate, $body) {
+            $gate = $distanceFormGate($response, $args, $request);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            try {
+                $created = $formFields->createCustom((string) $args['eventId'], $body($request), (string) $args['distanceId']);
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'validation_error', $e->getMessage(), 422);
+            }
+            return JsonResponder::ok($response, $created, 'Form field created', 201);
+        })->add(new AuthMiddleware($jwt));
+        $api->post('/events/{eventId}/distances/{distanceId}/form-fields/{fieldId}/override', function (Request $request, Response $response, array $args) use ($formFields, $distanceFormGate) {
+            $gate = $distanceFormGate($response, $args, $request);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            try {
+                $override = $formFields->createOverride((string) $args['eventId'], (string) $args['distanceId'], (string) $args['fieldId']);
+            } catch (\ZmierzymyCzas\Domain\FormFields\FormFieldConflictException $e) {
+                return JsonResponder::error($response, $e->errorCode, $e->getMessage(), 409);
+            } catch (\InvalidArgumentException $e) {
+                return JsonResponder::error($response, 'not_found', $e->getMessage(), 404);
+            }
+            return JsonResponder::ok($response, $override, 'Form field overridden', 201);
+        })->add(new AuthMiddleware($jwt));
+        $api->delete('/events/{eventId}/distances/{distanceId}/form-fields/{fieldId}/override', function (Request $request, Response $response, array $args) use ($formFields, $distanceFormGate) {
+            $gate = $distanceFormGate($response, $args, $request);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            try {
+                $reset = $formFields->resetOverride((string) $args['eventId'], (string) $args['distanceId'], (string) $args['fieldId']);
+            } catch (\ZmierzymyCzas\Domain\FormFields\FormFieldConflictException $e) {
+                return JsonResponder::error($response, $e->errorCode, $e->getMessage(), 409);
+            }
+            if (!$reset) {
+                return JsonResponder::error($response, 'not_found', 'Ten Dystans nie nadpisuje tej pozycji.', 404);
+            }
+            return JsonResponder::ok($response, ['reset' => true]);
         })->add(new AuthMiddleware($jwt));
         // E2.5: automatic answer-count aggregation for choice-type custom fields
         // (single_choice/multi_choice/consent) — no "zestawialne" flag, see
@@ -2194,6 +2305,71 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 ->withHeader('Content-Type', 'text/csv; charset=windows-1250')
                 ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.csv"');
         })->add(new AuthMiddleware($jwt));
+        // R-07: discount code batches (ticket 07 pkt 7 - a generator over event_discount_codes, not a second
+        // mechanism). Same $canManageEvent gate as the rest of the event-manager group (owner + admin roles;
+        // a foreign organizer gets 403, a foreign/unknown batch id 404). The CSV hands out live codes, so a
+        // successful export is activity-logged like the start-list export.
+        $api->post('/events/{eventId}/discount-code-batches', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent, $logActivity, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $batch = $discountBatches->generate((string) $args['eventId'], $body($request), (string) ($auth['sub'] ?? ''));
+            $logActivity(
+                $auth,
+                'discount_batch_generated',
+                sprintf('Wygenerowano partię kodów rabatowych "%s" (%d szt.)', $batch['label'], $batch['count']),
+                'event',
+                (string) $args['eventId'],
+                (string) ($event['name'] ?? '')
+            );
+            return JsonResponder::ok($response, $batch, 'Partia kodów została wygenerowana.', 201);
+        })->add(new AuthMiddleware($jwt));
+        $api->get('/events/{eventId}/discount-code-batches', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            return JsonResponder::ok($response, $discountBatches->listForEvent((string) $args['eventId']));
+        })->add(new AuthMiddleware($jwt));
+        $api->get('/events/{eventId}/discount-code-batches/{batchId}', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent) {
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $batch = $discountBatches->find((string) $args['eventId'], (string) $args['batchId']);
+            if ($batch === null) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono partii kodów.', 404);
+            }
+            return JsonResponder::ok($response, $batch);
+        })->add(new AuthMiddleware($jwt));
+        $api->get('/events/{eventId}/discount-code-batches/{batchId}/export', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $event = $events->find((string) $args['eventId']);
+            if (!$canManageEvent($event, $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $batch = $discountBatches->find((string) $args['eventId'], (string) $args['batchId']);
+            if ($batch === null) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono partii kodów.', 404);
+            }
+            $export = DiscountCodeBatchRepository::exportRows($batch);
+            $fileContent = StartListExportFormatter::toCsv($export['columns'], $export['rows']);
+            $filenameBase = 'kody-rabatowe-' . trim((string) preg_replace('/[^a-z0-9]+/i', '-', (string) ($batch['prefix'] !== '' ? $batch['prefix'] : 'partia')), '-');
+            $logActivity(
+                $auth,
+                'discount_batch_exported',
+                sprintf('Eksport partii kodów rabatowych "%s" (CSV)', $batch['label']),
+                'event',
+                (string) $args['eventId'],
+                (string) ($event['name'] ?? '')
+            );
+            $response->getBody()->write($fileContent);
+            return $response
+                ->withHeader('Content-Type', 'text/csv; charset=windows-1250')
+                ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.csv"');
+        })->add(new AuthMiddleware($jwt));
         $api->put('/events/{eventId}/form-fields/reorder', function (Request $request, Response $response, array $args) use ($events, $formFields, $canManageEvent, $body) {
             $event = $events->find((string) $args['eventId']);
             if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
@@ -2222,6 +2398,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             // their own Zapis on event Y.
             $field = $formFields->find((string) $args['fieldId']);
             if ($field === null || (string) ($field['eventId'] ?? '') !== (string) $gate['registration']['eventId']) {
+                return JsonResponder::error($response, 'not_found', 'Nie znaleziono pola formularza.', 404);
+            }
+            // R-04: a field of another Dystans' form is not part of this Zapis's form.
+            if ((string) ($field['distanceId'] ?? '') !== '' && (string) $field['distanceId'] !== (string) ($gate['registration']['distanceId'] ?? '')) {
                 return JsonResponder::error($response, 'not_found', 'Nie znaleziono pola formularza.', 404);
             }
             try {
@@ -2449,15 +2629,208 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     ['fields' => $policyResult['rejected']]
                 );
             }
+            if (array_key_exists('bibNumber', $policyResult['allowed'])) {
+                // R-13: manual override — inside the distance range, unique within the Event (409).
+                try {
+                    $policyResult['allowed']['bibNumber'] = $registrations->bibNumbers()->checkManual((string) $args['id'], $policyResult['allowed']['bibNumber']);
+                } catch (BibNumberTakenException $e) {
+                    return JsonResponder::error($response, 'bib_number_taken', $e->getMessage(), 409, ['bibNumber' => $e->bibNumber, 'registrationId' => $e->heldByRegistrationId]);
+                }
+            }
             return JsonResponder::ok($response, $registrations->update((string) $args['id'], $policyResult['allowed']));
         })
             ->add(new AuthMiddleware($jwt));
-        $api->post('/registrations/{id}/cancel', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations) {
+        // R-13: bulk "assign start numbers" — next free number inside each distance's range.
+        $api->post('/events/{eventId}/bib-numbers/assign', function (Request $request, Response $response, array $args) use ($events, $registrations, $canManageEvent, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $eventId = (string) $args['eventId'];
+            if (!$canManageEvent($events->find($eventId), $auth)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            }
+            $payload = $body($request);
+            $distanceIds = $payload['distanceIds'] ?? null;
+            if ($distanceIds !== null && (!is_array($distanceIds) || !array_is_list($distanceIds) || array_filter($distanceIds, static fn ($id): bool => !is_string($id)) !== [])) {
+                return JsonResponder::error($response, 'validation_error', 'Pole distanceIds musi być listą identyfikatorów dystansów.', 422, ['field' => 'distanceIds']);
+            }
+            $order = (string) ($payload['order'] ?? 'registered');
+            if (!in_array($order, ['registered', 'name'], true)) {
+                return JsonResponder::error($response, 'validation_error', 'Pole order musi mieć wartość registered albo name.', 422, ['field' => 'order']);
+            }
+            $paidOnly = (bool) ($payload['paidOnly'] ?? true);
+            return JsonResponder::ok($response, $registrations->bibNumbers()->assign($eventId, $distanceIds, $order, $paidOnly));
+        })->add(new AuthMiddleware($jwt));
+        // R-02 (spec 20, zakres P2): the Event's manager cancels whenever (as always); the owner only through
+        // SelfServicePolicy - switch on, before the cut-off date. A paid Zapis cancelled by its owner opens
+        // a refund request (E1.5 machine, organizer/admin approves); the change lands in the Zapis history.
+        $api->post('/registrations/{id}/cancel', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations, $events, $logActivity) {
+            $auth = (array) $request->getAttribute('auth');
+            $gate = $authorizeRegistration($response, (string) $args['id'], $auth);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            $verdict = (new SelfServicePolicy())->evaluate((array) $events->find((string) $gate['registration']['eventId']), $gate['registration'], $gate['isManager']);
+            if (!$verdict['allowed']) {
+                $messages = [
+                    SelfServicePolicy::REASON_DISABLED => 'Organizator wyłączył samodzielną rezygnację z tego wydarzenia.',
+                    SelfServicePolicy::REASON_CLOSED => 'Termin samodzielnej rezygnacji minął.',
+                    SelfServicePolicy::REASON_EVENT_OVER => 'Wydarzenie jest już zamknięte dla zmian.',
+                    SelfServicePolicy::REASON_REGISTRATION_INACTIVE => 'Ten zapis nie jest już aktywny.',
+                ];
+                $reason = (string) $verdict['reason'];
+                return JsonResponder::error($response, $reason, $messages[$reason] ?? 'Rezygnacja jest niedostępna.', 409, ['deadline' => $verdict['deadline']]);
+            }
+            $result = $registrations->cancelWithHistory((string) $args['id'], [
+                'id' => (string) ($auth['sub'] ?? ''),
+                'role' => (string) ($auth['role'] ?? ''),
+                'isManager' => $gate['isManager'],
+            ]);
+            if ($result !== null && $result['changed']) {
+                $logActivity(
+                    $auth,
+                    'registration_cancelled',
+                    $gate['isManager'] ? 'Anulowano zapis' : 'Rezygnacja z zapisu',
+                    'registration',
+                    (string) $args['id'],
+                    (string) ($gate['registration']['eventName'] ?? ''),
+                    ['refundRequested' => $result['refundRequested']]
+                );
+            }
+            return JsonResponder::ok($response, $result['registration'] ?? null);
+        })
+            ->add(new AuthMiddleware($jwt));
+        // R-02: the history of one Zapis (what changed, when, by whom) - for its owner and the Event's manager.
+        $api->get('/registrations/{id}/changes', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $pdo) {
             $gate = $authorizeRegistration($response, (string) $args['id'], (array) $request->getAttribute('auth'));
             if ($gate instanceof Response) {
                 return $gate;
             }
-            return JsonResponder::ok($response, $registrations->cancel((string) $args['id']));
+            return JsonResponder::ok($response, (new RegistrationChangeRepository($pdo))->listForRegistration((string) $args['id']));
+        })
+            ->add(new AuthMiddleware($jwt));
+        // R-02 (spec 20 §2 + spec 07 pkt 12, zakres P2): change of Dystans / Wariant opłaty of a Zapis. The quote
+        // and the change share one gate (SelfServicePolicy for the owner, the Event's manager always) and one
+        // calculation; the quote writes nothing. Owner + dearer Dystans -> 409 balance_due_requires_organizer.
+        $distanceChangeRoute = static function (bool $commit) use ($authorizeRegistration, $registrations, $events, $logActivity, $body): callable {
+            return static function (Request $request, Response $response, array $args) use ($commit, $authorizeRegistration, $registrations, $events, $logActivity, $body): Response {
+                $auth = (array) $request->getAttribute('auth');
+                $gate = $authorizeRegistration($response, (string) $args['id'], $auth);
+                if ($gate instanceof Response) {
+                    return $gate;
+                }
+                $payload = $body($request);
+                $distanceId = is_string($payload['distanceId'] ?? null) ? trim($payload['distanceId']) : '';
+                if ($distanceId === '') {
+                    return JsonResponder::error($response, 'validation_error', 'distanceId is required', 422, ['field' => 'distanceId']);
+                }
+                foreach (['pricingVariantId', 'category'] as $optional) {
+                    if (isset($payload[$optional]) && !is_string($payload[$optional])) {
+                        return JsonResponder::error($response, 'validation_error', $optional . ' must be a string', 422, ['field' => $optional]);
+                    }
+                }
+                $verdict = (new SelfServicePolicy())->evaluate((array) $events->find((string) $gate['registration']['eventId']), $gate['registration'], $gate['isManager']);
+                if (!$verdict['allowed']) {
+                    $messages = [
+                        SelfServicePolicy::REASON_DISABLED => 'Organizator wyłączył samodzielną zmianę zapisów w tym wydarzeniu.',
+                        SelfServicePolicy::REASON_CLOSED => 'Termin samodzielnej zmiany dystansu minął.',
+                        SelfServicePolicy::REASON_EVENT_OVER => 'Wydarzenie jest już zamknięte dla zmian.',
+                        SelfServicePolicy::REASON_REGISTRATION_INACTIVE => 'Ten zapis nie jest już aktywny.',
+                    ];
+                    $reason = (string) $verdict['reason'];
+                    return JsonResponder::error($response, $reason, $messages[$reason] ?? 'Zmiana dystansu jest niedostępna.', 409, ['deadline' => $verdict['deadline']]);
+                }
+                $actor = ['id' => (string) ($auth['sub'] ?? ''), 'role' => (string) ($auth['role'] ?? ''), 'isManager' => $gate['isManager']];
+                $variantId = isset($payload['pricingVariantId']) ? (string) $payload['pricingVariantId'] : null;
+                $category = isset($payload['category']) ? (string) $payload['category'] : null;
+                try {
+                    if (!$commit) {
+                        return JsonResponder::ok($response, $registrations->quoteDistanceChange((string) $args['id'], $distanceId, $variantId, $category, $actor));
+                    }
+                    $result = $registrations->changeDistance((string) $args['id'], $distanceId, $variantId, $category, $actor);
+                } catch (\ZmierzymyCzas\Domain\Registrations\DistanceChangeRejected $e) {
+                    return JsonResponder::error($response, $e->reason, $e->getMessage(), $e->status, $e->details);
+                } catch (RuntimeException $e) {
+                    if ($e->getMessage() === 'registration_capacity_exceeded') {
+                        return JsonResponder::error($response, 'registration_capacity_exceeded', 'Wybrany dystans osiągnął limit uczestników.', 409);
+                    }
+                    if ($e->getMessage() === 'registration_distance_invalid') {
+                        return JsonResponder::error($response, 'registration_distance_invalid', 'Wybrany dystans nie istnieje w tym wydarzeniu.', 422);
+                    }
+                    throw $e;
+                }
+                $change = $result['change'];
+                $logActivity(
+                    $auth,
+                    'registration_distance_changed',
+                    $gate['isManager'] ? 'Zmieniono dystans zapisu' : 'Zmiana dystansu zapisu',
+                    'registration',
+                    (string) $args['id'],
+                    (string) ($gate['registration']['eventName'] ?? ''),
+                    ['from' => $change['from'], 'to' => $change['to'], 'balanceDueMinor' => $change['balanceDueMinor'], 'refundDueMinor' => $change['refundDueMinor']]
+                );
+                return JsonResponder::ok($response, [
+                    ...$result['registration'],
+                    'balanceDueMinor' => $change['balanceDueMinor'],
+                    'refundDueMinor' => $change['refundDueMinor'],
+                    'refundRequested' => $result['refundRequested'],
+                    'change' => $change,
+                ]);
+            };
+        };
+        $api->post('/registrations/{id}/distance-change/quote', $distanceChangeRoute(false))
+            ->add(new AuthMiddleware($jwt));
+        $api->post('/registrations/{id}/distance-change', $distanceChangeRoute(true))
+            ->add(new AuthMiddleware($jwt));
+        // R-02 (spec 20 "Transfer - wersja prosta", zakres P2): the Event's manager moves a Zapis to another
+        // Zawodnik (existing `competitorId` or `newPerson`). Manager only - the owner gets 403. Shares the
+        // person-swap core with the relay swap (G-04); a relay member is refused and pointed to that swap.
+        // No money moves: balanceDueMinor / overpaymentMinor in the answer are informational.
+        $api->post('/registrations/{id}/transfer', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations, $logActivity, $body) {
+            $auth = (array) $request->getAttribute('auth');
+            $gate = $authorizeRegistration($response, (string) $args['id'], $auth, true);
+            if ($gate instanceof Response) {
+                return $gate;
+            }
+            try {
+                $result = $registrations->transferRegistration(
+                    (string) $args['id'],
+                    $body($request),
+                    ['id' => (string) ($auth['sub'] ?? ''), 'email' => (string) ($auth['email'] ?? ''), 'role' => (string) ($auth['role'] ?? '')]
+                );
+            } catch (RuntimeException $e) {
+                $errors = [
+                    'registration_not_found' => ['Nie znaleziono zapisu.', 404],
+                    'transfer_registration_inactive' => ['Ten zapis nie jest już aktywny - nie można go przenieść.', 409],
+                    'transfer_team_registration' => ['Zapisu w drużynie (sztafecie) nie przenosi się tym działaniem - zmień zawodnika w składzie drużyny (wymiana zawodnika).', 409],
+                    'team_swap_competitor_already_registered' => ['Ta osoba jest już zapisana na to wydarzenie.', 409],
+                    'team_swap_same_person' => ['To ten sam zawodnik, który jest już na tym zapisie.', 422],
+                    'team_swap_person_required' => ['Podaj istniejącego zawodnika (competitorId) albo dane nowej osoby (newPerson: imię i nazwisko).', 422],
+                    'team_swap_competitor_not_found' => ['Nie znaleziono zawodnika.', 404],
+                    'transfer_insurance_birth_date_missing' => ['Zapis ma ubezpieczenie NNW - nowa osoba musi mieć pełną datę urodzenia (birthDate), by przeliczyć składkę.', 422],
+                    'transfer_insurance_invalid' => ['Nie można przeliczyć ubezpieczenia NNW dla nowej osoby.', 422],
+                    'registration_distance_invalid' => ['Selected distance is invalid.', 422],
+                ];
+                if (isset($errors[$e->getMessage()])) {
+                    [$message, $status] = $errors[$e->getMessage()];
+                    return JsonResponder::error($response, $e->getMessage(), $message, $status);
+                }
+                throw $e;
+            }
+            $logActivity(
+                $auth,
+                'registration_transferred',
+                sprintf('Przeniesiono zapis: %s -> %s', $result['from']['name'], $result['to']['name']),
+                'registration',
+                (string) $args['id'],
+                (string) $result['to']['name'],
+                ['from' => $result['from'], 'to' => $result['to'], 'balanceDueMinor' => $result['balanceDueMinor'], 'overpaymentMinor' => $result['overpaymentMinor']]
+            );
+
+            return JsonResponder::ok($response, [
+                ...$result['registration'],
+                'balanceDueMinor' => $result['balanceDueMinor'],
+                'overpaymentMinor' => $result['overpaymentMinor'],
+                'transfer' => ['from' => $result['from'], 'to' => $result['to'], 'changeId' => $result['changeId']],
+            ]);
         })
             ->add(new AuthMiddleware($jwt));
         // PP.2: $eventManagerRoles alone only checked global role — an organizer of a
@@ -3718,15 +4091,28 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $archived, 'Challenge archived');
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->get('/challenge-participations', fn (Request $request, Response $response) => JsonResponder::ok($response, $challenges->participations($request->getQueryParams()['challengeId'] ?? null, $request->getQueryParams()['userId'] ?? null)))
+        // R-06: the "my challenges" list (userId = auth.sub, no challengeId) also returns the Zawodnik
+        // under one's Opieka with `competitorName`; a per-challenge query stays the caller's own row.
+        $api->get('/challenge-participations', function (Request $request, Response $response) use ($challenges) {
+            $params = $request->getQueryParams();
+            $auth = (array) $request->getAttribute('auth');
+            $userId = $params['userId'] ?? null;
+            $includeCare = $userId !== null && $userId !== '' && empty($params['challengeId']) && (string) $userId === (string) ($auth['sub'] ?? '');
+            return JsonResponder::ok($response, $challenges->participations($params['challengeId'] ?? null, $userId, null, $includeCare));
+        })
             ->add(new AuthMiddleware($jwt));
-        $api->post('/challenges/{id}/join', function (Request $request, Response $response, array $args) use ($challenges, $users, $notifyChallengeCompletion) {
+        $api->post('/challenges/{id}/join', function (Request $request, Response $response, array $args) use ($challenges, $users, $care, $body, $notifyChallengeCompletion) {
             $auth = (array) $request->getAttribute('auth');
             $user = $users->find((string) ($auth['sub'] ?? ''));
             if (!$user) {
                 return JsonResponder::error($response, 'not_found', 'User not found', 404);
             }
-            $joined = $challenges->join($args['id'], $user);
+            // R-06: optional `competitorId` - the caller's own Zawodnik or a ward under their Opieka.
+            $competitorId = trim((string) ($body($request)['competitorId'] ?? ''));
+            if ($competitorId !== '' && !$care->canRegister((string) $user['id'], $competitorId)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do zapisania tego Zawodnika na Wyzwanie.', 403);
+            }
+            $joined = $challenges->join($args['id'], $user, $competitorId !== '' ? $competitorId : null);
             // E1.10 mail #13: joining runs syncResultEntries(), which can
             // auto-approve entries from already-finished results and cross
             // the completion threshold on the spot (e.g. late sign-up after
@@ -3735,7 +4121,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $notifyChallengeCompletion($joined);
             return JsonResponder::ok($response, $joined, 'Challenge joined', 201);
         })->add(new AuthMiddleware($jwt));
-        $api->post('/challenge-entries', function (Request $request, Response $response) use ($challenges, $body) {
+        $api->post('/challenge-entries', function (Request $request, Response $response) use ($challenges, $care, $body) {
             $payload = $body($request);
             $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::PROOF);
             if ($urlCheck['error'] !== null) {
@@ -3745,6 +4131,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             // PP.4: an entry is always the caller's own - identity comes from the JWT, never the body.
             $auth = (array) $request->getAttribute('auth');
             $payload['userId'] = (string) ($auth['sub'] ?? '');
+            // R-06: an entry may be submitted for a ward (competitorId), never for a stranger.
+            $entryCompetitorId = trim((string) ($payload['competitorId'] ?? ''));
+            if ($entryCompetitorId !== '' && !$care->canRegister($payload['userId'], $entryCompetitorId)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do zgłaszania wyniku tego Zawodnika.', 403);
+            }
             return JsonResponder::ok($response, $challenges->submitEntry($payload, $auth), 'Challenge entry submitted', 201);
         })
             ->add(new AuthMiddleware($jwt));
@@ -3755,13 +4146,18 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // which itself reuses OrderRepository::create() for the actual order —
         // see its doc comment for the completion gate, double-claim lock and
         // why the order/challenge writes aren't in one shared transaction.
-        $api->post('/challenges/{id}/claim-reward', function (Request $request, Response $response, array $args) use ($challenges, $body) {
+        $api->post('/challenges/{id}/claim-reward', function (Request $request, Response $response, array $args) use ($challenges, $care, $body) {
             $auth = (array) $request->getAttribute('auth');
             $userId = (string) ($auth['sub'] ?? '');
             $payload = $body($request);
             $productId = (string) ($payload['productId'] ?? '');
+            // R-06: a caregiver can claim the reward of a ward's completed Wyzwanie.
+            $rewardCompetitorId = trim((string) ($payload['competitorId'] ?? ''));
+            if ($rewardCompetitorId !== '' && !$care->canRegister($userId, $rewardCompetitorId)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do odebrania nagrody tego Zawodnika.', 403);
+            }
             try {
-                $participation = $challenges->claimReward((string) $args['id'], $productId, $payload, $userId);
+                $participation = $challenges->claimReward((string) $args['id'], $productId, $payload, $userId, $rewardCompetitorId !== '' ? $rewardCompetitorId : null);
             } catch (\RuntimeException $e) {
                 $notFound = ['challenge_not_found' => 'Wyzwanie nie istnieje.'];
                 if (isset($notFound[$e->getMessage()])) {
@@ -4011,6 +4407,81 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             ->add(new AuthMiddleware($jwt, $adminRoles));
         $api->get('/admin/platform-stats', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->platformStats()))
             ->add(new AuthMiddleware($jwt, $adminRoles));
+
+        // R-03 (spec 13, trasa A): raport rozliczeniowy - wplaty bramka minus zwroty minus prowizja = kwota
+        // do recznej wyplaty dla organizatora. Admin-only. Kwoty w groszach. Eksport CSV/XLSX ta sama
+        // maszyneria co eksport listy startowej.
+        $parseSettlementQuery = static function (array $params): array {
+            $dateFrom = trim((string) ($params['dateFrom'] ?? ''));
+            $dateTo = trim((string) ($params['dateTo'] ?? ''));
+            foreach (['dateFrom' => $dateFrom, 'dateTo' => $dateTo] as $field => $value) {
+                $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+                if ($parsed === false || $parsed->format('Y-m-d') !== $value) {
+                    return ['error' => ['validation_error', 'Podaj okres rozliczenia w formacie RRRR-MM-DD (' . $field . ').']];
+                }
+            }
+            if ($dateFrom > $dateTo) {
+                return ['error' => ['validation_error', 'Data początkowa nie może być późniejsza niż końcowa.']];
+            }
+            $eventId = trim((string) ($params['eventId'] ?? ''));
+
+            return ['dateFrom' => $dateFrom, 'dateTo' => $dateTo, 'eventId' => $eventId !== '' ? $eventId : null];
+        };
+        $api->get('/admin/settlements', function (Request $request, Response $response) use ($pdo, $parseSettlementQuery) {
+            $settlementReport = new SettlementReport($pdo, max(0, (int) Env::get('SETTLEMENT_COMMISSION_BPS', 0)));
+            $parsed = $parseSettlementQuery($request->getQueryParams());
+            if (isset($parsed['error'])) {
+                return JsonResponder::error($response, $parsed['error'][0], $parsed['error'][1], 422);
+            }
+
+            return JsonResponder::ok($response, $settlementReport->report($parsed['dateFrom'], $parsed['dateTo'], $parsed['eventId']));
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->get('/admin/settlements/export', function (Request $request, Response $response) use ($pdo, $parseSettlementQuery, $logActivity) {
+            $settlementReport = new SettlementReport($pdo, max(0, (int) Env::get('SETTLEMENT_COMMISSION_BPS', 0)));
+            $params = $request->getQueryParams();
+            $format = strtolower((string) ($params['format'] ?? 'csv'));
+            if (!in_array($format, ['csv', 'xlsx'], true)) {
+                return JsonResponder::error($response, 'validation_error', 'Nieobsługiwany format eksportu. Dozwolone: csv, xlsx.', 422);
+            }
+            $parsed = $parseSettlementQuery($params);
+            if (isset($parsed['error'])) {
+                return JsonResponder::error($response, $parsed['error'][0], $parsed['error'][1], 422);
+            }
+
+            $report = $settlementReport->report($parsed['dateFrom'], $parsed['dateTo'], $parsed['eventId']);
+            $export = SettlementReport::exportRows($report['lines'], $report['summary']);
+            try {
+                $fileContent = $format === 'xlsx'
+                    ? StartListExportFormatter::toXlsx($export['columns'], $export['rows'])
+                    : StartListExportFormatter::toCsv($export['columns'], $export['rows']);
+            } catch (\RuntimeException $e) {
+                if ($e->getMessage() === 'xlsx_not_supported') {
+                    return JsonResponder::error($response, 'xlsx_not_supported', 'Serwer PHP nie obsluguje zapisu XLSX (brak rozszerzenia ZipArchive). Uzyj eksportu CSV.', 500);
+                }
+                throw $e;
+            }
+
+            $logActivity(
+                (array) $request->getAttribute('auth'),
+                'settlement_exported',
+                sprintf('Eksport raportu rozliczeniowego (%s) za okres %s - %s', strtoupper($format), $parsed['dateFrom'], $parsed['dateTo']),
+                'settlement',
+                $parsed['eventId'] ?? 'all',
+                ''
+            );
+
+            $filenameBase = 'rozliczenie-' . $parsed['dateFrom'] . '_' . $parsed['dateTo'];
+            $response->getBody()->write($fileContent);
+            if ($format === 'xlsx') {
+                return $response
+                    ->withHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                    ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.xlsx"');
+            }
+
+            return $response
+                ->withHeader('Content-Type', 'text/csv; charset=windows-1250')
+                ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.csv"');
+        })->add(new AuthMiddleware($jwt, $adminRoles));
 
         // Bilet is a view of Zapis, not a stored entity (E0.2) — derived from registrations.
         // PP.2: self or staff — same as /users/{userId}/registrations.
@@ -4376,6 +4847,43 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, CompetitorDuplicatePresenter::present($competitors->findDuplicates($firstName, $lastName, $birthDate)));
         })->add(new AuthMiddleware($jwt));
 
+        // R-08 (spec 22): opiekun (Opieka / własny profil) albo organizator/staff zgłasza, że profil
+        // {id} jest duplikatem innego. Samo zgłoszenie niczego nie scala - Moderator/Admin widzi je
+        // w kolejce GET /admin/competitors/duplicate-reports obok scalania profili.
+        $api->post('/competitors/{id}/duplicate-reports', function (Request $request, Response $response, array $args) use ($pdo, $competitors, $care, $body, $staffRoles): Response {
+            $auth = (array) $request->getAttribute('auth');
+            $kontoId = (string) ($auth['sub'] ?? '');
+            $role = (string) ($auth['role'] ?? '');
+            $id = (string) ($args['id'] ?? '');
+
+            if ($competitors->find($id) === null) {
+                return JsonResponder::error($response, 'not_found', 'Zawodnik nie istnieje.', 404);
+            }
+            $reports = new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo);
+            // Opiekun - swoi podopieczni; organizator - tylko zawodnik z Zapisem na jego wydarzenie
+            // (canManageEvent opiera się na organizerId); Moderator/Admin - każdy.
+            $allowed = in_array($role, $staffRoles, true)
+                || $care->canRegister($kontoId, $id)
+                || ($role === 'organizer' && $reports->competitorRegisteredOnOrganizersEvent($id, $kontoId));
+            if (!$allowed) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz Opieki nad tym Zawodnikiem ani Zapisu na Twoim wydarzeniu.', 403);
+            }
+
+            $data = $body($request);
+            $duplicateOfId = trim((string) ($data['duplicateOfId'] ?? ''));
+            if ($duplicateOfId === '' || $duplicateOfId === $id) {
+                return JsonResponder::error($response, 'validation_error', 'Wskaż inny profil Zawodnika jako duplikat (duplicateOfId).', 422);
+            }
+            if ($competitors->find($duplicateOfId) === null) {
+                return JsonResponder::error($response, 'not_found', 'Wskazany profil Zawodnika nie istnieje.', 404);
+            }
+
+            $report = $reports
+                ->create($id, $duplicateOfId, $kontoId, $role, (string) ($data['note'] ?? ''));
+
+            return JsonResponder::ok($response, $report, 'Zgłoszenie duplikatu zostało przekazane do weryfikacji.', 201);
+        })->add(new AuthMiddleware($jwt));
+
         // Pobierz: Zawodnicy pod moją opieką (myCompetitors) + Konta, które mają opiekę nade mną (caregivers).
         $api->get('/care', function (Request $request, Response $response) use ($competitors, $care): Response {
             $auth = (array) $request->getAttribute('auth');
@@ -4555,6 +5063,36 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
                 return JsonResponder::error($response, 'not_found', 'Jeden z profili Zawodnika nie istnieje.', 404);
             }
+        })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
+
+        // R-08: kolejka otwartych zgłoszeń duplikatów - tylko Moderator/Admin, jak scalanie.
+        $api->get('/admin/competitors/duplicate-reports', function (Request $request, Response $response) use ($pdo, $query): Response {
+            $status = (string) ($query($request)['status'] ?? 'open');
+            if (!in_array($status, ['open', 'rejected', 'merged', 'all'], true)) {
+                return JsonResponder::error($response, 'validation_error', 'status: open, rejected, merged lub all.', 422);
+            }
+
+            return JsonResponder::ok($response, (new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo))->list($status));
+        })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
+
+        // R-08: odrzucenie zgłoszenia (status merged ustawia wyłącznie scalenie profili).
+        $api->patch('/admin/competitors/duplicate-reports/{id}', function (Request $request, Response $response, array $args) use ($pdo, $body): Response {
+            $auth = (array) $request->getAttribute('auth');
+            $data = $body($request);
+            if ((string) ($data['status'] ?? '') !== 'rejected') {
+                return JsonResponder::error($response, 'validation_error', 'Dozwolona zmiana: status = rejected.', 422);
+            }
+            try {
+                $report = (new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo))
+                    ->reject((string) ($args['id'] ?? ''), (string) ($auth['sub'] ?? ''), (string) ($data['reason'] ?? ''));
+            } catch (\DomainException $e) {
+                return JsonResponder::error($response, 'report_already_resolved', 'Zgłoszenie zostało już rozstrzygnięte.', 409);
+            }
+            if ($report === null) {
+                return JsonResponder::error($response, 'not_found', 'Zgłoszenie nie istnieje.', 404);
+            }
+
+            return JsonResponder::ok($response, $report);
         })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
 
         // Wykonuje scalenie — albo wstrzymuje je, jeśli brakuje decyzji pole-po-polu

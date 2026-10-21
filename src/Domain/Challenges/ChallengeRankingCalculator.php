@@ -52,7 +52,7 @@ final class ChallengeRankingCalculator
      * @return array{
      *   hasPoints: bool,
      *   entries: list<array{
-     *     rank: int, userId: string, name: string, isAnonymized: bool,
+     *     rank: int, userId: ?string, competitorId: ?string, name: string, isAnonymized: bool,
      *     points: int, isCompleted: bool
      *   }>
      * }
@@ -72,14 +72,19 @@ final class ChallengeRankingCalculator
             }
         }
 
-        /** @var array<string, array{userId: string, userName: string, isCompleted: bool}> $participants */
+        // R-06: one row per Zawodnik (key = competitor id); a participation the migration could not map
+        // to a Zawodnik is keyed by the Konto and read by user_id, as before.
+        /** @var array<string, array{userId: string, competitorId: ?string, userName: string, isCompleted: bool}> $participants */
         $participants = [];
         foreach ($challengeIds as $challengeId) {
             foreach ($this->challenges->participations($challengeId) as $participation) {
                 $userId = (string) $participation['userId'];
-                $existing = $participants[$userId] ?? null;
-                $participants[$userId] = [
+                $competitorId = ($participation['competitorId'] ?? null) !== null ? (string) $participation['competitorId'] : null;
+                $key = $competitorId ?? 'user:' . $userId;
+                $existing = $participants[$key] ?? null;
+                $participants[$key] = [
                     'userId' => $userId,
+                    'competitorId' => $competitorId,
                     'userName' => $existing['userName'] ?? (string) $participation['userName'],
                     // A competitor with several linked Wyzwania (Series
                     // ranking) counts as "completed" if they completed ANY
@@ -91,12 +96,15 @@ final class ChallengeRankingCalculator
         }
 
         $scored = [];
-        foreach ($participants as $userId => $info) {
+        foreach ($participants as $info) {
+            $userId = $info['userId'];
             $points = $hasPoints
-                ? $this->sumPoints($pointNodesByChallenge, $userId)
+                ? $this->sumPoints($pointNodesByChallenge, $userId, $info['competitorId'])
                 : ($info['isCompleted'] ? 1 : 0);
 
-            $competitor = $this->competitors->findByUserId($userId);
+            $competitor = $info['competitorId'] !== null
+                ? $this->competitors->find($info['competitorId'])
+                : $this->competitors->findByUserId($userId);
             $isAnonymized = $competitor !== null && (bool) ($competitor['isAnonymized'] ?? false);
             $realName = $competitor !== null
                 ? trim($competitor['firstName'] . ' ' . $competitor['lastName'])
@@ -105,9 +113,16 @@ final class ChallengeRankingCalculator
                 $realName = $info['userName'];
             }
 
+            // A ward must not expose the caregiver's account id in the public ranking: show the
+            // ward's own account (if any), else none.
+            $publicUserId = $competitor !== null && ($competitor['userId'] ?? null) !== $userId
+                ? ($competitor['userId'] ?? null)
+                : $userId;
+
             $scored[] = [
-                'userId' => $userId,
-                'name' => CompetitorNamePresenter::publicName($realName, $isAnonymized),
+                'userId' => $publicUserId,
+                'competitorId' => $info['competitorId'],
+                'name' => CompetitorNamePresenter::publicName($realName, $isAnonymized, $competitor !== null ? (string) $competitor['id'] : null),
                 'isAnonymized' => $isAnonymized,
                 'points' => $points,
                 'isCompleted' => $info['isCompleted'],
@@ -130,8 +145,8 @@ final class ChallengeRankingCalculator
      * placings): two people tied for 1st means the next person is 3rd, not
      * 2nd.
      *
-     * @param list<array{points: int, userId: string, name: string, isAnonymized: bool, isCompleted: bool}> $scored
-     * @return list<array{rank: int, userId: string, name: string, isAnonymized: bool, points: int, isCompleted: bool}>
+     * @param list<array{points: int, userId: ?string, competitorId: ?string, name: string, isAnonymized: bool, isCompleted: bool}> $scored
+     * @return list<array{rank: int, userId: ?string, competitorId: ?string, name: string, isAnonymized: bool, points: int, isCompleted: bool}>
      */
     private function assignRanks(array $scored): array
     {
@@ -151,12 +166,12 @@ final class ChallengeRankingCalculator
     }
 
     /** @param array<string, array<int, array<string, mixed>>> $pointNodesByChallenge */
-    private function sumPoints(array $pointNodesByChallenge, string $userId): int
+    private function sumPoints(array $pointNodesByChallenge, string $userId, ?string $competitorId = null): int
     {
         $total = 0;
         foreach ($pointNodesByChallenge as $nodes) {
             foreach ($nodes as $node) {
-                $total += $this->scorer->score($node, $userId)['totalPoints'];
+                $total += $this->scorer->score($node, $userId, $competitorId)['totalPoints'];
             }
         }
         return $total;

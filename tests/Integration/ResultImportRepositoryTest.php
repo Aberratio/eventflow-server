@@ -415,7 +415,9 @@ PDF;
                     'name' => '10 km',
                     'length' => 10,
                     'unit' => 'km',
-                    'categories' => ['Open', 'M30', 'M40', 'K30'],
+                    // PP.79: categories are computed/validated on the server, so every category a fixture
+                    // Zapis uses must be configured here (the real DNF sample's K40 runner included).
+                    'categories' => ['Open', 'M30', 'M40', 'K30', 'K40'],
                     'ageCategories' => [],
                     'specialCategories' => [],
                     'limit' => 100,

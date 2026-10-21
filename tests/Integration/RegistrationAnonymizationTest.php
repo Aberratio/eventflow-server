@@ -82,11 +82,11 @@ final class RegistrationAnonymizationTest extends TestCase
 
         $entry = $this->findInStartList($registrationId);
 
-        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $entry['userName']);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel($competitorId), $entry['userName']);
         self::assertStringNotContainsString('Hidden', $entry['userName']);
 
         $valuesByKey = array_column($entry['formFields'], 'value', 'fieldKey');
-        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $valuesByKey['first_name']);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel($competitorId), $valuesByKey['first_name']);
         self::assertNull($valuesByKey['last_name']);
     }
 
@@ -119,9 +119,9 @@ final class RegistrationAnonymizationTest extends TestCase
         $this->competitors->setAnonymization($competitorId, true);
 
         $after = $this->findInStartList($registrationId);
-        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $after['userName']);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel($competitorId), $after['userName']);
         $valuesByKey = array_column($after['formFields'], 'value', 'fieldKey');
-        self::assertSame(CompetitorNamePresenter::ANONYMIZED_LABEL, $valuesByKey['first_name']);
+        self::assertSame(CompetitorNamePresenter::anonymousLabel($competitorId), $valuesByKey['first_name']);
     }
 
     /**

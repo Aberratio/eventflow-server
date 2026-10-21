@@ -185,13 +185,13 @@ final class CriticalMailer
      * like RegistrationRepository::bulkApproveRefundsForEvent() already
      * iterates per-registration for the refund side of a cancellation.
      */
-    public function sendEventChanged(string $eventId, string $recipientEntityId, string $email, string $eventName, string $changeSummary, string $refundStatus): ?array
+    public function sendEventChanged(string $eventId, string $recipientEntityId, string $email, string $eventName, string $changeSummary, string $refundStatus, string $keyDiscriminator = ''): ?array
     {
         return $this->send(MailCatalog::EVENT_CHANGED, $eventId . ':' . $recipientEntityId, $eventId, $email, [
             'eventName' => $eventName,
             'changeSummary' => $changeSummary,
             'refundStatus' => $refundStatus,
-        ]);
+        ], $keyDiscriminator);
     }
 
     public function sendModerationDecision(string $eventId, string $email, string $eventName, string $decision, string $reason = ''): ?array

@@ -22,6 +22,9 @@ use ZmierzymyCzas\Support\QrCode;
 
 final class RegistrationRepository extends Repository
 {
+    use RegistrationDistanceChange;
+    use RegistrationTransfer;
+
     /**
      * Trasa A (bramka) seam (E1.6/E1.7) — null in every environment without real
      * gateway credentials configured (local dev, CI, this repo's own test suite),
@@ -83,6 +86,10 @@ final class RegistrationRepository extends Repository
     public const EXPIRY_BATCH_LIMIT = 500;
     private const EXPIRY_PER_DISTANCE_LIMIT = 50;
     public const GATEWAY_IN_FLIGHT_GRACE_MINUTES = 15;
+    /** R-02: `registration_refunds.reason` of the refund request an owner's paid self-cancellation opens. */
+    public const SELF_CANCEL_REFUND_REASON = 'self_cancel';
+    /** R-02: `registration_refunds.reason` of the refund opened for the overpayment after a change to a cheaper Dystans. */
+    public const DISTANCE_CHANGE_REFUND_REASON = 'distance_change';
 
     /** PP.63: the format of the registration ids this platform generates (Uuid::v4()). */
     private const REGISTRATION_ID_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i';
@@ -354,16 +361,16 @@ SQL;
                 return $registration;
             }
 
-            $registration['userName'] = CompetitorNamePresenter::publicName((string) $registration['userName'], true);
+            $registration['userName'] = CompetitorNamePresenter::publicName((string) $registration['userName'], true, (string) $competitorId);
             // PP.3: internal marker consumed only by toPublicStartListEntry() (this
             // method's only caller, via publicStartList()) to null out `userId` —
             // never surfaces itself, since the DTO projection never copies it.
             $registration['__anonymized'] = true;
 
             if (isset($registration['formFields']) && is_array($registration['formFields'])) {
-                $registration['formFields'] = array_map(static function (array $field): array {
+                $registration['formFields'] = array_map(static function (array $field) use ($competitorId): array {
                     if ($field['fieldKey'] === 'first_name') {
-                        $field['value'] = CompetitorNamePresenter::ANONYMIZED_LABEL;
+                        $field['value'] = CompetitorNamePresenter::anonymousLabel((string) $competitorId);
                     } elseif ($field['fieldKey'] === 'last_name') {
                         // Both halves masked into one label rather than
                         // duplicating it on both fields (see this method's
@@ -873,8 +880,18 @@ SQL;
             }
 
             $answersByFieldId = [];
-            foreach ($answerRepository->forRegistration((string) $registration['id']) as $answer) {
-                $answersByFieldId[$answer['formFieldId']] = $answer['valueText'] ?? $answer['valueJson'] ?? null;
+            $answersByKey = [];
+            foreach ($answerRepository->forRegistrationWithKeys((string) $registration['id']) as $answer) {
+                $value = $answer['valueText'] ?? $answer['valueJson'] ?? null;
+                $answersByFieldId[$answer['formFieldId']] = $value;
+                $answersByKey[(string) $answer['fieldKey']] = $value;
+            }
+            // R-04: an answer given on a Dystans override is stored under the override's id, but the
+            // event-level column is what lists/exports render - match it up by the stable field key.
+            foreach ($columns as $column) {
+                if ($column['kind'] === 'custom' && !array_key_exists($column['id'], $answersByFieldId) && array_key_exists((string) $column['fieldKey'], $answersByKey)) {
+                    $answersByFieldId[$column['id']] = $answersByKey[(string) $column['fieldKey']];
+                }
             }
 
             $registration['formFields'] = array_map(
@@ -1614,6 +1631,12 @@ SQL;
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
 
+    /** R-13: bib ranges, automatic assignment and manual-override checks (see BibNumberService). */
+    public function bibNumbers(): BibNumberService
+    {
+        return new BibNumberService($this->pdo);
+    }
+
     public function find(string $id): ?array
     {
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE id = :id');
@@ -1882,8 +1905,8 @@ SQL;
      * Same input as create() (the HTTP layer prepares it identically for both), same pricing code
      * (priceRegistration()), so the total equals the one of the Zapis created from the same data.
      * Writes nothing and takes no lock: no Zapis, no answers, no counter bump, no discount use, no
-     * team. Capacity is not checked (a price is not an availability promise) and neither is the
-     * team invitation (create() does that when the Zapis is really made).
+     * team. Capacity and the team invitation ARE checked (read-only, same error codes as create()): a price for a
+     * Zapis that could not be made is refused here too.
      *
      * @param array<string, mixed> $data
      * @return array{eventName: string, distanceName: string, settlementItems: array<int, array{name: string, basis: string, amount: float}>, totalAmount: float, discountCode: ?string}
@@ -1892,10 +1915,13 @@ SQL;
     {
         $distanceRow = $this->lockDistanceForRegistration((string) $data['eventId'], (string) $data['distanceId'], false);
 
+        // Read-only twins of the checks create() makes: a full Dystans and a team the caller may not
+        // join (invitation / distance / size) are refused here as well, with the same error codes.
+        $this->enforceCapacity($distanceRow);
         $teamId = isset($data['teamId']) ? trim((string) $data['teamId']) : '';
         $isJoiningExistingTeam = $teamId !== '' && empty($data['createTeam']);
-        if ($isJoiningExistingTeam && (new TeamRepository($this->pdo))->find($teamId) === null) {
-            throw new \RuntimeException('registration_team_not_found');
+        if ($isJoiningExistingTeam) {
+            $this->assertMayJoinTeam($data, $distanceRow, new TeamRepository($this->pdo));
         }
 
         $pricing = $this->priceRegistration($data, $distanceRow, $isJoiningExistingTeam)['pricing'];
@@ -2085,31 +2111,12 @@ SQL;
      */
     private function resolveTeamForRegistration(array $data, array $distanceRow): array
     {
+        // (the join checks live in assertMayJoinTeam(), shared with quote())
         $teams = new TeamRepository($this->pdo);
 
         $teamId = isset($data['teamId']) ? trim((string) $data['teamId']) : '';
         if ($teamId !== '') {
-            $team = $teams->find($teamId);
-            if ($team === null) {
-                throw new \RuntimeException('registration_team_not_found');
-            }
-            // PP.54 (spec 23 §1): an existing Drużyna is joined only through the captain's invitation
-            // link or by the captain themself (captain consent). `actorUserId` is set by the HTTP layer
-            // from the JWT, never from the body (RegistrationCreatePolicy drops it); internal callers that
-            // omit it fall back to the invitation check only, i.e. fail closed.
-            $actorUserId = is_string($data['actorUserId'] ?? null) ? trim($data['actorUserId']) : '';
-            $presentedToken = is_string($data['teamInviteToken'] ?? null) ? trim($data['teamInviteToken']) : '';
-            if (!TeamRepository::isCaptain($team, $actorUserId)
-                && !$teams->inviteTokenMatches((string) $team['id'], $presentedToken)) {
-                throw new \RuntimeException('registration_team_invite_required');
-            }
-            if ((string) $team['eventId'] !== (string) $data['eventId'] || (string) $team['distanceId'] !== (string) $data['distanceId']) {
-                throw new \RuntimeException('registration_team_distance_mismatch');
-            }
-            $maxSize = $distanceRow['relayMaxTeamSize'] !== null ? (int) $distanceRow['relayMaxTeamSize'] : null;
-            if ($maxSize !== null && $team['memberCount'] >= $maxSize) {
-                throw new \RuntimeException('registration_team_full');
-            }
+            $team = $this->assertMayJoinTeam($data, $distanceRow, $teams);
 
             return ['teamId' => $team['id'], 'teamName' => $team['name']];
         }
@@ -2147,6 +2154,40 @@ SQL;
 
         // Legacy/general classification path — unchanged.
         return ['teamId' => null, 'teamName' => $data['teamName'] ?? null];
+    }
+
+    /**
+     * Read-only checks for JOINING an existing Drużyna (create() and quote() share them): the team
+     * exists, the joiner holds the invitation or is the captain (PP.54, spec 23 §1), the team belongs to
+     * this event+distance and is not at `relay_max_team_size`. `actorUserId` is set by the HTTP layer
+     * from the JWT, never from the body (RegistrationCreatePolicy drops it); internal callers that omit
+     * it fall back to the invitation check only, i.e. fail closed.
+     *
+     * @param array<string, mixed> $data
+     * @param array<string, mixed> $distanceRow
+     * @return array<string, mixed> the team
+     */
+    private function assertMayJoinTeam(array $data, array $distanceRow, TeamRepository $teams): array
+    {
+        $team = $teams->find(trim((string) $data['teamId']));
+        if ($team === null) {
+            throw new \RuntimeException('registration_team_not_found');
+        }
+        $actorUserId = is_string($data['actorUserId'] ?? null) ? trim($data['actorUserId']) : '';
+        $presentedToken = is_string($data['teamInviteToken'] ?? null) ? trim($data['teamInviteToken']) : '';
+        if (!TeamRepository::isCaptain($team, $actorUserId)
+            && !$teams->inviteTokenMatches((string) $team['id'], $presentedToken)) {
+            throw new \RuntimeException('registration_team_invite_required');
+        }
+        if ((string) $team['eventId'] !== (string) $data['eventId'] || (string) $team['distanceId'] !== (string) $data['distanceId']) {
+            throw new \RuntimeException('registration_team_distance_mismatch');
+        }
+        $maxSize = $distanceRow['relayMaxTeamSize'] !== null ? (int) $distanceRow['relayMaxTeamSize'] : null;
+        if ($maxSize !== null && $team['memberCount'] >= $maxSize) {
+            throw new \RuntimeException('registration_team_full');
+        }
+
+        return $team;
     }
 
     /**
@@ -2623,6 +2664,59 @@ SQL;
     }
 
     /**
+     * R-02 (spec 20 §2, zakres P2): a cancellation with its trail. Authorisation and the self-service
+     * window are decided by the caller (SelfServicePolicy) - this does the work:
+     *  - owner cancelling a paid Zapis (`confirmed`, non-zero Rozliczenie) files the refund request first
+     *    (requestRefund() needs a `confirmed` Zapis; organizer/admin approves it as usual, spec 13);
+     *    a manager's cancel keeps its old behaviour and does not open a refund by itself;
+     *  - the Zapis goes `cancelled` through cancel() (counter back to the pool, Biuro Zawodów push);
+     *  - a `registration_changes` row is written, and for the owner's own cancellation the registrant gets
+     *    the "zmiana w wydarzeniu" mail (catalog #8) through the outbox.
+     * Cancelling an already inactive Zapis changes nothing and writes no history.
+     *
+     * @param array{id: string, role: string, isManager: bool} $actor
+     * @return array{registration: array<string, mixed>, refundRequested: bool, changed: bool}|null null when the Zapis does not exist
+     */
+    public function cancelWithHistory(string $id, array $actor): ?array
+    {
+        $before = $this->find($id);
+        if ($before === null) {
+            return null;
+        }
+        $wasActive = !in_array((string) $before['status'], self::NOT_COUNTED_STATUSES, true);
+        $refundRequested = false;
+        if ($wasActive && !$actor['isManager'] && (string) $before['status'] === 'confirmed' && $this->totalAmountFor($id) > 0) {
+            $this->requestRefund($id, $actor['id'], self::SELF_CANCEL_REFUND_REASON);
+            $refundRequested = true;
+        }
+
+        $registration = $this->cancel($id) ?? $before;
+        if ($wasActive) {
+            (new RegistrationChangeRepository($this->pdo))->record(
+                $id,
+                RegistrationChangeRepository::TYPE_CANCELLED,
+                ['status' => (string) $before['status'], 'distanceId' => (string) $before['distanceId']],
+                ['status' => 'cancelled', 'refundRequested' => $refundRequested],
+                ['id' => $actor['id'], 'role' => $actor['isManager'] ? 'manager' : 'owner']
+            );
+            if (!$actor['isManager']) {
+                $this->mailer?->sendEventChanged(
+                    (string) $before['eventId'],
+                    $id,
+                    (string) $before['userEmail'],
+                    (string) $before['eventName'],
+                    'Twój zapis został anulowany na Twoją prośbę',
+                    $refundRequested
+                        ? 'Złożyliśmy wniosek o zwrot opłaty - organizator rozpatrzy go zgodnie z zasadami wydarzenia.'
+                        : 'Zapis nie wymagał zwrotu środków.'
+                );
+            }
+        }
+
+        return ['registration' => $registration, 'refundRequested' => $refundRequested, 'changed' => $wasActive];
+    }
+
+    /**
      * G-04 (spec 23 Answer §2, spec 20 "Transfer", spec 11 §4): swaps the Zawodnik on a relay
      * member's Zapis. It is a swap of the person on an existing Zapis, NOT a cancel-and-recreate:
      * the Zapis id, the Drużyna, the Rozliczenie (frozen price — spec 07 pkt 12 resets it only
@@ -2679,91 +2773,10 @@ SQL;
                 throw new \RuntimeException('team_swap_deadline_passed');
             }
 
-            $competitors = new CompetitorRepository($this->pdo);
-            $newCompetitorId = trim((string) ($input['competitorId'] ?? ''));
-            $newPerson = is_array($input['newPerson'] ?? null) ? $input['newPerson'] : null;
-            if ($newCompetitorId !== '') {
-                $competitor = $competitors->find($newCompetitorId);
-                if ($competitor === null) {
-                    throw new \RuntimeException('team_swap_competitor_not_found');
-                }
-                // The captain names only people they may register (Opieka or own profile — the
-                // capped permission of spec 10/23, no new Opieka is granted); the Event's manager
-                // is organising the start list and may name any Zawodnik.
-                if (!$isManager && !(new \ZmierzymyCzas\Domain\Care\CareRepository($this->pdo))->canRegister($actorId, $newCompetitorId)) {
-                    throw new \RuntimeException('not_authorized_to_register');
-                }
-            } elseif ($newPerson !== null) {
-                if (trim((string) ($newPerson['firstName'] ?? '')) === '' || trim((string) ($newPerson['lastName'] ?? '')) === '') {
-                    throw new \RuntimeException('team_swap_person_required');
-                }
-                $competitor = null;
-            } else {
-                throw new \RuntimeException('team_swap_person_required');
-            }
-
-            $current = $this->pdo->prepare('SELECT competitor_id, user_name, user_id, category FROM registrations WHERE id = :id');
-            $current->execute(['id' => $registrationId]);
-            $before = (array) $current->fetch();
-
-            if ($competitor !== null) {
-                if ((string) $before['competitor_id'] === (string) $competitor['id']) {
-                    throw new \RuntimeException('team_swap_same_person');
-                }
-                $dup = $this->pdo->prepare(
-                    "SELECT 1 FROM registrations WHERE event_id = :eventId AND competitor_id = :cid AND id <> :id AND status NOT IN ('cancelled', 'removed', 'expired') LIMIT 1"
-                );
-                $dup->execute(['eventId' => $locked['eventId'], 'cid' => $competitor['id'], 'id' => $registrationId]);
-                if ($dup->fetchColumn() !== false) {
-                    throw new \RuntimeException('team_swap_competitor_already_registered');
-                }
-            } else {
-                $competitor = $competitors->create([
-                    'firstName' => trim((string) $newPerson['firstName']),
-                    'lastName' => trim((string) $newPerson['lastName']),
-                    'birthDate' => $newPerson['birthDate'] ?? null,
-                    'gender' => $newPerson['gender'] ?? null,
-                    'email' => $newPerson['email'] ?? null,
-                    'phone' => $newPerson['phone'] ?? null,
-                    'club' => $newPerson['club'] ?? null,
-                ], true);
-            }
-
-            // Same derivation as POST /registrations (PP.52/PP.44): the Zapis hangs on the
-            // Zawodnik's own Konto when there is one, else on whoever stands behind them.
-            $kontoId = (string) ($competitor['userId'] ?? '');
-            $konto = null;
-            if ($kontoId !== '') {
-                $k = $this->pdo->prepare('SELECT id, name, email FROM users WHERE id = :id');
-                $k->execute(['id' => $kontoId]);
-                $konto = $k->fetch() ?: null;
-            }
-            $fullName = trim((string) $competitor['firstName'] . ' ' . (string) $competitor['lastName']);
-            $ownerId = $konto !== null ? $kontoId : $actorId;
-            $email = '';
-            foreach ([(string) ($konto['email'] ?? ''), (string) ($competitor['email'] ?? ''), (string) $actor['email']] as $candidate) {
-                if (trim($candidate) !== '') {
-                    $email = $candidate;
-                    break;
-                }
-            }
-            $category = $this->resolveRegistrationCategory(
-                ['competitorId' => (string) $competitor['id'], 'category' => (string) ($before['category'] ?? '')],
-                $distanceRow
-            );
-
-            $newCode = $this->generateStartCode();
-            $this->updateById('registrations', $registrationId, [
-                'competitor_id' => $competitor['id'],
-                'user_id' => $ownerId,
-                'user_name' => $konto !== null ? (string) $konto['name'] : $fullName,
-                'user_email' => $email,
-                'category' => $category,
-                'registered_by_id' => $ownerId === $actorId ? null : $actorId,
-                'qr_code' => $newCode,
-                'updated_at' => date(DATE_ATOM),
-            ]);
-            $this->pdo->prepare('DELETE FROM form_field_answers WHERE registration_id = :id')->execute(['id' => $registrationId]);
+            $swap = $this->swapRegistrationPerson($registrationId, $locked, $distanceRow, $input, $actor, $isManager);
+            $before = $swap['before'];
+            $competitor = $swap['competitor'];
+            $fullName = $swap['fullName'];
             $this->pdo->commit();
         } catch (\Throwable $e) {
             if ($this->pdo->inTransaction()) {
@@ -2777,6 +2790,112 @@ SQL;
             'from' => ['competitorId' => $before['competitor_id'], 'name' => (string) $before['user_name']],
             'to' => ['competitorId' => (string) $competitor['id'], 'name' => $fullName],
         ];
+    }
+
+    /**
+     * Shared core of the person swap on an existing Zapis (G-04 team swap, R-02 transfer): resolves the
+     * new Zawodnik (existing `competitorId` or created from `newPerson`), refuses the same person and a
+     * person already registered for the Event, then replaces the person, the contact data and the
+     * Kategoria (derived from the new person), rotates the start code and drops the answers to the
+     * Zapis's custom form fields. Must run inside the caller's transaction with the Zapis locked; the
+     * caller has already decided who may do it (`$isManager`: may name any Zawodnik).
+     *
+     * @param array<string, mixed> $locked the locked registrations row
+     * @param array<string, mixed> $distanceRow Dystans row with the Kategoria definitions
+     * @param array<string, mixed> $input `competitorId` or `newPerson`
+     * @param array{id: string, email: string, isManager?: bool} $actor
+     * @return array{before: array<string, mixed>, competitor: array<string, mixed>, fullName: string, startCode: string}
+     */
+    private function swapRegistrationPerson(string $registrationId, array $locked, array $distanceRow, array $input, array $actor, bool $isManager): array
+    {
+        $actorId = (string) $actor['id'];
+        $competitors = new CompetitorRepository($this->pdo);
+        $newCompetitorId = trim((string) ($input['competitorId'] ?? ''));
+        $newPerson = is_array($input['newPerson'] ?? null) ? $input['newPerson'] : null;
+        if ($newCompetitorId !== '') {
+            $competitor = $competitors->find($newCompetitorId);
+            if ($competitor === null) {
+                throw new \RuntimeException('team_swap_competitor_not_found');
+            }
+            // The captain names only people they may register (Opieka or own profile — the
+            // capped permission of spec 10/23, no new Opieka is granted); the Event's manager
+            // is organising the start list and may name any Zawodnik.
+            if (!$isManager && !(new \ZmierzymyCzas\Domain\Care\CareRepository($this->pdo))->canRegister($actorId, $newCompetitorId)) {
+                throw new \RuntimeException('not_authorized_to_register');
+            }
+        } elseif ($newPerson !== null) {
+            if (trim((string) ($newPerson['firstName'] ?? '')) === '' || trim((string) ($newPerson['lastName'] ?? '')) === '') {
+                throw new \RuntimeException('team_swap_person_required');
+            }
+            $competitor = null;
+        } else {
+            throw new \RuntimeException('team_swap_person_required');
+        }
+
+        $current = $this->pdo->prepare('SELECT competitor_id, user_name, user_id, category FROM registrations WHERE id = :id');
+        $current->execute(['id' => $registrationId]);
+        $before = (array) $current->fetch();
+
+        if ($competitor !== null) {
+            if ((string) $before['competitor_id'] === (string) $competitor['id']) {
+                throw new \RuntimeException('team_swap_same_person');
+            }
+            $dup = $this->pdo->prepare(
+                "SELECT 1 FROM registrations WHERE event_id = :eventId AND competitor_id = :cid AND id <> :id AND status NOT IN ('cancelled', 'removed', 'expired') LIMIT 1"
+            );
+            $dup->execute(['eventId' => $locked['eventId'], 'cid' => $competitor['id'], 'id' => $registrationId]);
+            if ($dup->fetchColumn() !== false) {
+                throw new \RuntimeException('team_swap_competitor_already_registered');
+            }
+        } else {
+            $competitor = $competitors->create([
+                'firstName' => trim((string) $newPerson['firstName']),
+                'lastName' => trim((string) $newPerson['lastName']),
+                'birthDate' => $newPerson['birthDate'] ?? null,
+                'gender' => $newPerson['gender'] ?? null,
+                'email' => $newPerson['email'] ?? null,
+                'phone' => $newPerson['phone'] ?? null,
+                'club' => $newPerson['club'] ?? null,
+            ], true);
+        }
+
+        // Same derivation as POST /registrations (PP.52/PP.44): the Zapis hangs on the
+        // Zawodnik's own Konto when there is one, else on whoever stands behind them.
+        $kontoId = (string) ($competitor['userId'] ?? '');
+        $konto = null;
+        if ($kontoId !== '') {
+            $k = $this->pdo->prepare('SELECT id, name, email FROM users WHERE id = :id');
+            $k->execute(['id' => $kontoId]);
+            $konto = $k->fetch() ?: null;
+        }
+        $fullName = trim((string) $competitor['firstName'] . ' ' . (string) $competitor['lastName']);
+        $ownerId = $konto !== null ? $kontoId : $actorId;
+        $email = '';
+        foreach ([(string) ($konto['email'] ?? ''), (string) ($competitor['email'] ?? ''), (string) $actor['email']] as $candidate) {
+            if (trim($candidate) !== '') {
+                $email = $candidate;
+                break;
+            }
+        }
+        $category = $this->resolveRegistrationCategory(
+            ['competitorId' => (string) $competitor['id'], 'category' => (string) ($before['category'] ?? '')],
+            $distanceRow
+        );
+
+        $newCode = $this->generateStartCode();
+        $this->updateById('registrations', $registrationId, [
+            'competitor_id' => $competitor['id'],
+            'user_id' => $ownerId,
+            'user_name' => $konto !== null ? (string) $konto['name'] : $fullName,
+            'user_email' => $email,
+            'category' => $category,
+            'registered_by_id' => $ownerId === $actorId ? null : $actorId,
+            'qr_code' => $newCode,
+            'updated_at' => date(DATE_ATOM),
+        ]);
+        $this->pdo->prepare('DELETE FROM form_field_answers WHERE registration_id = :id')->execute(['id' => $registrationId]);
+
+        return ['before' => $before, 'competitor' => $competitor, 'fullName' => $fullName, 'startCode' => $newCode];
     }
 
     /**
@@ -2918,6 +3037,11 @@ SQL;
             }
 
             $ceiling = $this->totalAmountFor($id);
+            if ((string) ($existing['reason'] ?? '') === self::DISTANCE_CHANGE_REFUND_REASON && $existing['amount'] !== null) {
+                // R-02: the overpayment of a cheaper Dystans was fixed when the change was made; it is the
+                // ceiling (and the default) here, not the - now smaller - Rozliczenie total.
+                $ceiling = (float) $existing['amount'];
+            }
             $resolvedAmount = $amount !== null ? max(0.0, min($amount, $ceiling)) : $ceiling;
             $route = $this->refundRouteForRegistration($registration);
 
@@ -3028,7 +3152,10 @@ SQL;
 
             $refundedAmount = (float) $existing['amount'];
             $ceiling = $this->totalAmountFor($id);
-            $isFullRefund = $refundedAmount >= ($ceiling - 0.005);
+            // R-02: a refund of the overpayment after a change of Dystans is partial by nature, even when it
+            // exceeds the (smaller) new total - the Zapis stays.
+            $isFullRefund = (string) ($existing['reason'] ?? '') !== self::DISTANCE_CHANGE_REFUND_REASON
+                && $refundedAmount >= ($ceiling - 0.005);
             if ($isFullRefund && $registration['status'] === 'confirmed') {
                 $cancelled = $this->pdo->prepare(
                     "UPDATE registrations SET status = 'cancelled' WHERE id = :id AND status = 'confirmed'"
@@ -3964,7 +4091,7 @@ SQL;
      * is silently lost — failed and stale `queued` rows are retried with
      * backoff by the scheduler (bz.outbox_retry, BzWebhookOutboxService::retryDue()).
      */
-    private function pushBzCriticalChange(string $eventId, string $registrationId, string $changeType): void
+    private function pushBzCriticalChange(string $eventId, string $registrationId, string $changeType, string $discriminator = ''): void
     {
         if ($this->bzWebhookOutbox === null) {
             return;
@@ -4007,7 +4134,8 @@ SQL;
                 // refund_refunded) happens at most once per Zapis — its own
                 // caller already guards against firing on a repeated/no-op
                 // transition (see the three call sites above).
-                'idempotencyKey' => sprintf('bz-push:%s:%s', $registrationId, $changeType),
+                // R-02: a change that can repeat (distance_change) adds the id of its history row.
+                'idempotencyKey' => sprintf('bz-push:%s:%s', $registrationId, $changeType) . ($discriminator !== '' ? ':' . $discriminator : ''),
                 'organizationToken' => $organizationToken,
                 'payload' => $payload,
             ]);
@@ -4113,7 +4241,8 @@ SQL;
                 $discount = $this->discountForRegistration(
                     (string) $data['eventId'],
                     (string) $data['distanceId'],
-                    $discountCode
+                    $discountCode,
+                    isset($data['changingRegistrationId']) ? (string) $data['changingRegistrationId'] : null
                 );
                 $discountValue = (float) $discount['discount_value'];
                 $discountAmount = $discount['discount_type'] === 'percent'
@@ -4402,7 +4531,7 @@ SQL;
     }
 
     /** @return array<string, mixed> */
-    private function discountForRegistration(string $eventId, string $distanceId, string $code): array
+    private function discountForRegistration(string $eventId, string $distanceId, string $code, ?string $ownRegistrationId = null): array
     {
         $stmt = $this->pdo->prepare('SELECT * FROM event_discount_codes WHERE event_id = :eventId AND UPPER(code) = UPPER(:code) LIMIT 1');
         $stmt->execute(['eventId' => $eventId, 'code' => $code]);
@@ -4421,7 +4550,9 @@ SQL;
         if (!empty($discount['valid_to']) && strtotime((string) $discount['valid_to']) < $now) {
             throw new \RuntimeException('discount_code_expired');
         }
-        if ($discount['max_uses'] !== null && (int) $discount['used_count'] >= (int) $discount['max_uses']) {
+        // R-02: re-checking the code of a Zapis that already holds one of its uses (change of Dystans).
+        if ($discount['max_uses'] !== null && (int) $discount['used_count'] >= (int) $discount['max_uses']
+            && !($ownRegistrationId !== null && $this->discountUsedBy($discount, $ownRegistrationId))) {
             throw new \RuntimeException('discount_code_used_up');
         }
 

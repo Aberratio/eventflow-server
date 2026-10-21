@@ -6,6 +6,7 @@ namespace ZmierzymyCzas\Tests\Integration\Http;
 
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
+use ZmierzymyCzas\Domain\Teams\TeamRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
@@ -81,6 +82,7 @@ final class RegistrationQuoteContractTest extends HttpTestCase
                 $this->pdo->prepare("DELETE FROM {$table} WHERE registration_id = :id")->execute(['id' => $regId]);
             }
         }
+        $this->pdo->prepare('DELETE FROM teams WHERE event_id = :id')->execute(['id' => $this->event['id']]);
         $this->pdo->prepare('DELETE FROM registrations WHERE event_id = :id')->execute(['id' => $this->event['id']]);
         $this->pdo->prepare('DELETE FROM event_discount_codes WHERE event_id = :id')->execute(['id' => $this->event['id']]);
         $this->pdo->prepare('DELETE FROM form_fields WHERE event_id = :id')->execute(['id' => $this->event['id']]);
@@ -159,6 +161,38 @@ final class RegistrationQuoteContractTest extends HttpTestCase
 
         self::assertSame(422, $response->getStatusCode());
         self::assertSame('discount_code_invalid', $this->json($response)['error']['code']);
+    }
+
+    public function testQuoteRefusesAFullDistanceLikeCreate(): void
+    {
+        $this->pdo->prepare('UPDATE event_distances SET participant_limit = 1, registered_count = 1 WHERE id = :d')
+            ->execute(['d' => $this->distanceId]);
+
+        $response = $this->quote([]);
+
+        self::assertSame(409, $response->getStatusCode());
+        self::assertSame('registration_capacity_exceeded', $this->json($response)['error']['code']);
+        self::assertSame(409, $this->create([])->getStatusCode(), 'create() refuses the same payload');
+    }
+
+    public function testQuoteChecksTheTeamInvitationLikeCreate(): void
+    {
+        $teams = new TeamRepository($this->pdo);
+        $team = $teams->create(['eventId' => $this->event['id'], 'distanceId' => $this->distanceId, 'name' => 'Quote Team']);
+
+        $noToken = $this->quote(['teamId' => $team['id']]);
+        self::assertSame(403, $noToken->getStatusCode());
+        self::assertSame('registration_team_invite_required', $this->json($noToken)['error']['code']);
+
+        $wrongToken = $this->quote(['teamId' => $team['id'], 'teamInviteToken' => 'nope']);
+        self::assertSame(403, $wrongToken->getStatusCode());
+
+        $ok = $this->quote(['teamId' => $team['id'], 'teamInviteToken' => (string) $teams->inviteToken($team['id'])]);
+        self::assertSame(200, $ok->getStatusCode());
+
+        $missing = $this->quote(['teamId' => 'no-such-team']);
+        self::assertSame(404, $missing->getStatusCode());
+        self::assertSame('registration_team_not_found', $this->json($missing)['error']['code']);
     }
 
     public function testQuoteRequiresAuthentication(): void

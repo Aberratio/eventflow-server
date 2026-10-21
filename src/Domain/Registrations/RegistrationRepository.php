@@ -83,6 +83,8 @@ final class RegistrationRepository extends Repository
     public const EXPIRY_BATCH_LIMIT = 500;
     private const EXPIRY_PER_DISTANCE_LIMIT = 50;
     public const GATEWAY_IN_FLIGHT_GRACE_MINUTES = 15;
+    /** R-02: `registration_refunds.reason` of the refund request an owner's paid self-cancellation opens. */
+    public const SELF_CANCEL_REFUND_REASON = 'self_cancel';
 
     /** PP.63: the format of the registration ids this platform generates (Uuid::v4()). */
     private const REGISTRATION_ID_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i';
@@ -2654,6 +2656,59 @@ SQL;
     public function cancel(string $id): ?array
     {
         return $this->update($id, ['status' => 'cancelled']);
+    }
+
+    /**
+     * R-02 (spec 20 §2, zakres P2): a cancellation with its trail. Authorisation and the self-service
+     * window are decided by the caller (SelfServicePolicy) - this does the work:
+     *  - owner cancelling a paid Zapis (`confirmed`, non-zero Rozliczenie) files the refund request first
+     *    (requestRefund() needs a `confirmed` Zapis; organizer/admin approves it as usual, spec 13);
+     *    a manager's cancel keeps its old behaviour and does not open a refund by itself;
+     *  - the Zapis goes `cancelled` through cancel() (counter back to the pool, Biuro Zawodów push);
+     *  - a `registration_changes` row is written, and for the owner's own cancellation the registrant gets
+     *    the "zmiana w wydarzeniu" mail (catalog #8) through the outbox.
+     * Cancelling an already inactive Zapis changes nothing and writes no history.
+     *
+     * @param array{id: string, role: string, isManager: bool} $actor
+     * @return array{registration: array<string, mixed>, refundRequested: bool, changed: bool}|null null when the Zapis does not exist
+     */
+    public function cancelWithHistory(string $id, array $actor): ?array
+    {
+        $before = $this->find($id);
+        if ($before === null) {
+            return null;
+        }
+        $wasActive = !in_array((string) $before['status'], self::NOT_COUNTED_STATUSES, true);
+        $refundRequested = false;
+        if ($wasActive && !$actor['isManager'] && (string) $before['status'] === 'confirmed' && $this->totalAmountFor($id) > 0) {
+            $this->requestRefund($id, $actor['id'], self::SELF_CANCEL_REFUND_REASON);
+            $refundRequested = true;
+        }
+
+        $registration = $this->cancel($id) ?? $before;
+        if ($wasActive) {
+            (new RegistrationChangeRepository($this->pdo))->record(
+                $id,
+                RegistrationChangeRepository::TYPE_CANCELLED,
+                ['status' => (string) $before['status'], 'distanceId' => (string) $before['distanceId']],
+                ['status' => 'cancelled', 'refundRequested' => $refundRequested],
+                ['id' => $actor['id'], 'role' => $actor['isManager'] ? 'manager' : 'owner']
+            );
+            if (!$actor['isManager']) {
+                $this->mailer?->sendEventChanged(
+                    (string) $before['eventId'],
+                    $id,
+                    (string) $before['userEmail'],
+                    (string) $before['eventName'],
+                    'Twój zapis został anulowany na Twoją prośbę',
+                    $refundRequested
+                        ? 'Złożyliśmy wniosek o zwrot opłaty - organizator rozpatrzy go zgodnie z zasadami wydarzenia.'
+                        : 'Zapis nie wymagał zwrotu środków.'
+                );
+            }
+        }
+
+        return ['registration' => $registration, 'refundRequested' => $refundRequested, 'changed' => $wasActive];
     }
 
     /**

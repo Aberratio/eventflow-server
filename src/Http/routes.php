@@ -81,7 +81,6 @@ use ZmierzymyCzas\Domain\Care\CareRepository;
 use ZmierzymyCzas\Domain\Competitors\CompetitorMergeService;
 use ZmierzymyCzas\Domain\Competitors\CompetitorDuplicatePresenter;
 use ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository;
-use ZmierzymyCzas\Http\Controller\CompetitorDuplicateController;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Users\NewAccountInput;
 use ZmierzymyCzas\Domain\Users\UserRepository;
@@ -92,6 +91,11 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationPatchPolicy;
 use ZmierzymyCzas\Http\Access\EventAccess;
 use ZmierzymyCzas\Http\Access\RegistrationAccess;
 use ZmierzymyCzas\Http\Access\Roles;
+use ZmierzymyCzas\Http\Controller\BibNumberController;
+use ZmierzymyCzas\Http\Controller\CompetitorDuplicateController;
+use ZmierzymyCzas\Http\Controller\DiscountCodeBatchController;
+use ZmierzymyCzas\Http\Controller\EventTeamController;
+use ZmierzymyCzas\Http\Controller\RegistrationChangeController;
 use ZmierzymyCzas\Http\DomainErrorCode;
 use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
@@ -372,6 +376,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     };
     $activityLogger = new ActivityLogger($admin);
     $logActivity = $activityLogger->log(...);
+    $eventTeamController = new EventTeamController($events, $users, $eventTeam, $eventAccess, $activityLogger, $mailer, $logger);
+    $registrationChangeController = new RegistrationChangeController($registrations, $events, $registrationAccess, $activityLogger);
+    $bibNumberController = new BibNumberController($events, $registrations, $eventAccess);
+    $discountCodeBatchController = new DiscountCodeBatchController($events, $discountBatches, $eventAccess, $activityLogger);
     $competitorDuplicateController = new CompetitorDuplicateController($competitors, $care, new CompetitorDuplicateReportRepository($pdo));
 
     $publicUploadBase = '/' . trim((string) Env::get('APP_UPLOAD_PUBLIC_BASE', '/uploads'), '/');
@@ -392,7 +400,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
     // Convention: routes behind a plain `AuthMiddleware($jwt)` only require a valid session. Authorization that depends on
     // the resource (event Team, registration owner, ...) is decided per request inside the handler.
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($competitorDuplicateController, $pdo, $jwt, $discountBatches, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync, $registrationChangeController, $discountCodeBatchController, $bibNumberController, $competitorDuplicateController): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // A cheap round trip on the connection index.php already opened.
             try {
@@ -1589,175 +1597,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // The Event Team. Roster, invitations and
         // revocations are Owner-level only: $canManageEvent(..., true) = the Owner and admin/superadmin; a
         // Co-manager and a moderator never see or change the roster.
-        $sendTeamInvitation = static function (array $event, array $member, string $token, string $inviterName) use ($mailer, $logger): string {
-            $acceptLink = rtrim((string) Env::get('APP_URL', ''), '/') . '/team-invitations/' . $token;
-            // 'sent' = Central Mailer accepted it; 'pending' = a retry is scheduled; 'lost' = nothing will be sent.
-            $state = 'lost';
-            try {
-                $row = $mailer->sendEventTeamInvitation(
-                    (string) $member['id'] . ':' . substr($token, 0, 12),
-                    (string) $event['id'],
-                    (string) $member['email'],
-                    (string) ($event['name'] ?? ''),
-                    $inviterName,
-                    $acceptLink,
-                    EventTeamRepository::INVITE_TTL_DAYS
-                );
-                if ($row !== null) {
-                    if (($row['centralMailerEmailId'] ?? null) !== null) {
-                        $state = 'sent';
-                    } elseif (($row['nextAttemptAt'] ?? null) !== null) {
-                        $state = 'pending';
-                    }
-                }
-            } catch (Throwable $e) {
-                // Ids and the error class only, never the link, the token or the address.
-                $logger->error('Event team invitation mail could not be queued', ['eventId' => (string) $event['id'], 'memberId' => (string) $member['id'], 'errorClass' => $e::class]);
-            }
-
-            return $state;
-        };
-        $api->get('/events/{id}/team', function (Request $request, Response $response, array $args) use ($events, $users, $canManageEvent, $pdo) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find($args['id']);
-            if (!$canManageEvent($event, $auth, true)) {
-                return JsonResponder::forbidden($response);
-            }
-            $owner = $users->find((string) $event['organizerId']);
-
-            return JsonResponder::ok($response, [
-                'owner' => $owner === null ? null : ['id' => $owner['id'], 'name' => $owner['name'], 'email' => $owner['email']],
-                'members' => (new EventTeamRepository($pdo))->listForEvent((string) $args['id']),
-            ]);
-        })->add(new AuthMiddleware($jwt));
-        $api->post('/events/{id}/team/invitations', function (Request $request, Response $response, array $args) use ($events, $users, $body, $canManageEvent, $pdo, $logActivity, $sendTeamInvitation) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find($args['id']);
-            if (!$canManageEvent($event, $auth, true)) {
-                return JsonResponder::forbidden($response);
-            }
-            $email = strtolower(trim((string) ($body($request)['email'] ?? '')));
-            if ($email === '' || strlen($email) > 255 || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
-                return JsonResponder::error($response, 'validation_error', 'Podaj poprawny adres e-mail.', 422, ['field' => 'email']);
-            }
-            $owner = $users->find((string) $event['organizerId']);
-            if ($owner !== null && strtolower((string) $owner['email']) === $email) {
-                return JsonResponder::error($response, 'team_member_owner', 'Właściciel wydarzenia jest już w zespole.', 409);
-            }
-            $team = new EventTeamRepository($pdo);
-            try {
-                $issued = $team->invite((string) $event['id'], $email, (string) ($auth['sub'] ?? ''));
-            } catch (RuntimeException $e) {
-                if ($e->getMessage() === 'team_member_active') {
-                    return JsonResponder::error($response, 'team_member_active', 'Ta osoba jest już współzarządzającym tego wydarzenia.', 409);
-                }
-                throw $e;
-            }
-            $inviter = $users->find((string) ($auth['sub'] ?? ''));
-            $mailState = $sendTeamInvitation($event, $issued['member'], $issued['token'], (string) ($inviter['name'] ?? ''));
-            $logActivity($auth, 'event_team_invited', 'Zaproszono współzarządzającego do wydarzenia', 'event', (string) $event['id'], (string) ($event['name'] ?? ''), ['recipient' => MailRecipientMask::mask($email)]);
-
-            return JsonResponder::ok($response, $issued['member'] + ['mailState' => $mailState], 'Zaproszenie zostało utworzone.', 201);
-        })->add(new AuthMiddleware($jwt));
-        $api->post('/events/{id}/team/{memberId}/resend', function (Request $request, Response $response, array $args) use ($events, $users, $canManageEvent, $pdo, $logActivity, $sendTeamInvitation) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find($args['id']);
-            if (!$canManageEvent($event, $auth, true)) {
-                return JsonResponder::forbidden($response);
-            }
-            $team = new EventTeamRepository($pdo);
-            $member = $team->find((string) $args['memberId']);
-            if ($member === null || (string) $member['eventId'] !== (string) $event['id']) {
-                return JsonResponder::error($response, 'not_found', 'Nie znaleziono członka zespołu.', 404);
-            }
-            if ($member['status'] !== 'invited') {
-                return JsonResponder::error($response, 'invalid_status_transition', 'Zaproszenie można wysłać ponownie tylko do osoby, która go jeszcze nie przyjęła.', 409);
-            }
-            $issued = $team->invite((string) $event['id'], (string) $member['email'], (string) ($auth['sub'] ?? ''));
-            $inviter = $users->find((string) ($auth['sub'] ?? ''));
-            $mailState = $sendTeamInvitation($event, $issued['member'], $issued['token'], (string) ($inviter['name'] ?? ''));
-            $logActivity($auth, 'event_team_invitation_resent', 'Wysłano ponownie zaproszenie do zespołu wydarzenia', 'event', (string) $event['id'], (string) ($event['name'] ?? ''), ['recipient' => MailRecipientMask::mask((string) $member['email'])]);
-
-            return JsonResponder::ok($response, $issued['member'] + ['mailState' => $mailState], 'Zaproszenie zostało wysłane ponownie.');
-        })->add(new AuthMiddleware($jwt));
-        $api->delete('/events/{id}/team/{memberId}', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $pdo, $logActivity, $mailer, $logger) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find($args['id']);
-            if (!$canManageEvent($event, $auth, true)) {
-                return JsonResponder::forbidden($response);
-            }
-            $team = new EventTeamRepository($pdo);
-            $member = $team->find((string) $args['memberId']);
-            if ($member === null || (string) $member['eventId'] !== (string) $event['id']) {
-                return JsonResponder::error($response, 'not_found', 'Nie znaleziono członka zespołu.', 404);
-            }
-            if ($member['status'] !== 'revoked') {
-                $team->revoke((string) $member['id']);
-                $logActivity($auth, 'event_team_revoked', 'Odebrano dostęp współzarządzającemu wydarzenia', 'event', (string) $event['id'], (string) ($event['name'] ?? ''), ['recipient' => MailRecipientMask::mask((string) $member['email'])]);
-                if ($member['status'] === 'active') {
-                    try {
-                        $mailer->sendEventTeamRevoked((string) $member['id'] . ':' . time(), (string) $event['id'], (string) $member['email'], (string) ($event['name'] ?? ''));
-                    } catch (Throwable $e) {
-                        $logger->error('Event team revocation mail could not be queued', ['eventId' => (string) $event['id'], 'memberId' => (string) $member['id'], 'errorClass' => $e::class]);
-                    }
-                }
-            }
-
-            return JsonResponder::ok($response, $team->find((string) $member['id']));
-        })->add(new AuthMiddleware($jwt));
-        // Public preview: the token is the credential; it shows the Event and the inviter, never the Team.
-        $api->get('/team-invitations/{token}', function (Request $request, Response $response, array $args) use ($pdo) {
-            $invitation = (new EventTeamRepository($pdo))->findInvitation((string) $args['token']);
-            if ($invitation === null || ($invitation['eventDeletedAt'] ?? null) !== null) {
-                return JsonResponder::error($response, 'invitation_not_found', 'To zaproszenie nie istnieje albo zostało odwołane.', 404);
-            }
-            if ($invitation['expired']) {
-                return JsonResponder::error($response, 'invitation_expired', 'To zaproszenie wygasło. Poproś organizatora o nowe.', 410);
-            }
-
-            return JsonResponder::ok($response, [
-                'eventName' => $invitation['eventName'],
-                'inviterName' => $invitation['inviterName'] ?? '',
-                'email' => MailRecipientMask::mask((string) $invitation['email']),
-                'status' => $invitation['status'],
-                'expiresAt' => $invitation['inviteExpiresAt'],
-            ]);
-        });
-        $api->post('/team-invitations/{token}/accept', function (Request $request, Response $response, array $args) use ($users, $pdo, $logActivity) {
-            $auth = (array) $request->getAttribute('auth');
-            $user = $users->find((string) ($auth['sub'] ?? ''));
-            if ($user === null) {
-                return JsonResponder::error($response, 'unauthorized', 'Sesja wygasła. Zaloguj się ponownie.', 401);
-            }
-            $team = new EventTeamRepository($pdo);
-            $invitation = $team->findInvitation((string) $args['token']);
-            try {
-                $member = $team->accept((string) $args['token'], (string) $user['id'], (string) $user['email']);
-            } catch (RuntimeException $e) {
-                $errors = [
-                    'invitation_not_found' => [404, 'To zaproszenie nie istnieje albo zostało odwołane.'],
-                    'invitation_expired' => [410, 'To zaproszenie wygasło. Poproś organizatora o nowe.'],
-                    'invitation_email_mismatch' => [403, 'To zaproszenie wysłano na inny adres e-mail. Zaloguj się na właściwe konto.'],
-                    'team_member_owner' => [409, 'Jesteś właścicielem tego wydarzenia.'],
-                    'team_member_active' => [409, 'Jesteś już współzarządzającym tego wydarzenia.'],
-                ];
-                if (isset($errors[$e->getMessage()])) {
-                    return JsonResponder::error($response, $e->getMessage(), $errors[$e->getMessage()][1], $errors[$e->getMessage()][0]);
-                }
-                throw $e;
-            }
-            // Only the first acceptance is news for the activity register (a repeat call is a no-op).
-            if (($invitation['status'] ?? '') === 'invited') {
-                $logActivity($auth, 'event_team_joined', 'Przyjęto zaproszenie do zespołu wydarzenia', 'event', (string) $member['eventId'], (string) ($invitation['eventName'] ?? ''));
-            }
-
-            return JsonResponder::ok($response, [
-                'eventId' => $member['eventId'],
-                'eventName' => $invitation['eventName'] ?? '',
-                'teamRole' => 'co_manager',
-                'status' => $member['status'],
-            ], 'Zaproszenie zostało przyjęte.');
-        })->add(new AuthMiddleware($jwt));
+        $api->get('/events/{id}/team', [$eventTeamController, 'list'])->add(new AuthMiddleware($jwt));
+        $api->post('/events/{id}/team/invitations', [$eventTeamController, 'invite'])->add(new AuthMiddleware($jwt));
+        $api->post('/events/{id}/team/{memberId}/resend', [$eventTeamController, 'resend'])->add(new AuthMiddleware($jwt));
+        $api->delete('/events/{id}/team/{memberId}', [$eventTeamController, 'revoke'])->add(new AuthMiddleware($jwt));
+        $api->get('/team-invitations/{token}', [$eventTeamController, 'previewInvitation']);
+        $api->post('/team-invitations/{token}/accept', [$eventTeamController, 'acceptInvitation'])->add(new AuthMiddleware($jwt));
         $api->get('/organizers/{organizerId}/event-limit', function (Request $request, Response $response, array $args) use ($events, $isStaffRole) {
             $auth = (array) $request->getAttribute('auth');
             $role = (string) ($auth['role'] ?? '');
@@ -2357,71 +2202,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 ->withHeader('Content-Type', 'text/csv; charset=windows-1250')
                 ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.csv"');
         })->add(new AuthMiddleware($jwt));
-        // Discount code batches (a generator over event_discount_codes, not a second
-        // mechanism). Same $canManageEvent gate as the rest of the event-manager group (owner + admin roles;
-        // a foreign organizer gets 403, a foreign/unknown batch id 404). The CSV hands out live codes, so a
-        // successful export is activity-logged like the start-list export.
-        $api->post('/events/{eventId}/discount-code-batches', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent, $logActivity, $body) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find((string) $args['eventId']);
-            if (!$canManageEvent($event, $auth)) {
-                return JsonResponder::forbidden($response);
-            }
-            $batch = $discountBatches->generate((string) $args['eventId'], $body($request), (string) ($auth['sub'] ?? ''));
-            $logActivity(
-                $auth,
-                'discount_batch_generated',
-                sprintf('Wygenerowano partię kodów rabatowych "%s" (%d szt.)', $batch['label'], $batch['count']),
-                'event',
-                (string) $args['eventId'],
-                (string) ($event['name'] ?? '')
-            );
-            return JsonResponder::ok($response, $batch, 'Partia kodów została wygenerowana.', 201);
-        })->add(new AuthMiddleware($jwt));
-        $api->get('/events/{eventId}/discount-code-batches', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent) {
-            $event = $events->find((string) $args['eventId']);
-            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
-                return JsonResponder::forbidden($response);
-            }
-            return JsonResponder::ok($response, $discountBatches->listForEvent((string) $args['eventId']));
-        })->add(new AuthMiddleware($jwt));
-        $api->get('/events/{eventId}/discount-code-batches/{batchId}', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent) {
-            $event = $events->find((string) $args['eventId']);
-            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
-                return JsonResponder::forbidden($response);
-            }
-            $batch = $discountBatches->find((string) $args['eventId'], (string) $args['batchId']);
-            if ($batch === null) {
-                return JsonResponder::error($response, 'not_found', 'Nie znaleziono partii kodów.', 404);
-            }
-            return JsonResponder::ok($response, $batch);
-        })->add(new AuthMiddleware($jwt));
-        $api->get('/events/{eventId}/discount-code-batches/{batchId}/export', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent, $logActivity) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find((string) $args['eventId']);
-            if (!$canManageEvent($event, $auth)) {
-                return JsonResponder::forbidden($response);
-            }
-            $batch = $discountBatches->find((string) $args['eventId'], (string) $args['batchId']);
-            if ($batch === null) {
-                return JsonResponder::error($response, 'not_found', 'Nie znaleziono partii kodów.', 404);
-            }
-            $export = DiscountCodeBatchRepository::exportRows($batch);
-            $fileContent = StartListExportFormatter::toCsv($export['columns'], $export['rows']);
-            $filenameBase = 'kody-rabatowe-' . trim((string) preg_replace('/[^a-z0-9]+/i', '-', (string) ($batch['prefix'] !== '' ? $batch['prefix'] : 'partia')), '-');
-            $logActivity(
-                $auth,
-                'discount_batch_exported',
-                sprintf('Eksport partii kodów rabatowych "%s" (CSV)', $batch['label']),
-                'event',
-                (string) $args['eventId'],
-                (string) ($event['name'] ?? '')
-            );
-            $response->getBody()->write($fileContent);
-            return $response
-                ->withHeader('Content-Type', 'text/csv; charset=windows-1250')
-                ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.csv"');
-        })->add(new AuthMiddleware($jwt));
+        $api->post('/events/{eventId}/discount-code-batches', [$discountCodeBatchController, 'create'])->add(new AuthMiddleware($jwt));
+        $api->get('/events/{eventId}/discount-code-batches', [$discountCodeBatchController, 'list'])->add(new AuthMiddleware($jwt));
+        $api->get('/events/{eventId}/discount-code-batches/{batchId}', [$discountCodeBatchController, 'show'])->add(new AuthMiddleware($jwt));
+        $api->get('/events/{eventId}/discount-code-batches/{batchId}/export', [$discountCodeBatchController, 'export'])->add(new AuthMiddleware($jwt));
         $api->put('/events/{eventId}/form-fields/reorder', function (Request $request, Response $response, array $args) use ($events, $formFields, $canManageEvent, $body) {
             $event = $events->find((string) $args['eventId']);
             if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
@@ -2690,64 +2474,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $registrations->update((string) $args['id'], $policyResult['allowed']));
         })
             ->add(new AuthMiddleware($jwt));
-        // Bulk "assign start numbers" — next free number inside each distance's range.
-        $api->post('/events/{eventId}/bib-numbers/assign', function (Request $request, Response $response, array $args) use ($events, $registrations, $canManageEvent, $body) {
-            $auth = (array) $request->getAttribute('auth');
-            $eventId = (string) $args['eventId'];
-            if (!$canManageEvent($events->find($eventId), $auth)) {
-                return JsonResponder::forbidden($response);
-            }
-            $payload = $body($request);
-            $distanceIds = $payload['distanceIds'] ?? null;
-            if ($distanceIds !== null && (!is_array($distanceIds) || !array_is_list($distanceIds) || array_filter($distanceIds, static fn ($id): bool => !is_string($id)) !== [])) {
-                return JsonResponder::error($response, 'validation_error', 'Pole distanceIds musi być listą identyfikatorów dystansów.', 422, ['field' => 'distanceIds']);
-            }
-            $order = (string) ($payload['order'] ?? 'registered');
-            if (!in_array($order, ['registered', 'name'], true)) {
-                return JsonResponder::error($response, 'validation_error', 'Pole order musi mieć wartość registered albo name.', 422, ['field' => 'order']);
-            }
-            $paidOnly = (bool) ($payload['paidOnly'] ?? true);
-            return JsonResponder::ok($response, $registrations->bibNumbers()->assign($eventId, $distanceIds, $order, $paidOnly));
-        })->add(new AuthMiddleware($jwt));
-        // The Event's manager cancels whenever (as always); the owner only through
-        // SelfServicePolicy - switch on, before the cut-off date. A paid Zapis cancelled by its owner opens
-        // a refund request (organizer/admin approves); the change lands in the Zapis history.
-        $api->post('/registrations/{id}/cancel', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations, $events, $logActivity) {
-            $auth = (array) $request->getAttribute('auth');
-            $gate = $authorizeRegistration($response, (string) $args['id'], $auth);
-            if ($gate instanceof Response) {
-                return $gate;
-            }
-            $verdict = (new SelfServicePolicy())->evaluate((array) $events->find((string) $gate['registration']['eventId']), $gate['registration'], $gate['isManager']);
-            if (!$verdict['allowed']) {
-                $messages = [
-                    SelfServicePolicy::REASON_DISABLED => 'Organizator wyłączył samodzielną rezygnację z tego wydarzenia.',
-                    SelfServicePolicy::REASON_CLOSED => 'Termin samodzielnej rezygnacji minął.',
-                    SelfServicePolicy::REASON_EVENT_OVER => 'Wydarzenie jest już zamknięte dla zmian.',
-                    SelfServicePolicy::REASON_REGISTRATION_INACTIVE => 'Ten zapis nie jest już aktywny.',
-                ];
-                $reason = (string) $verdict['reason'];
-                return JsonResponder::error($response, $reason, $messages[$reason] ?? 'Rezygnacja jest niedostępna.', 409, ['deadline' => $verdict['deadline']]);
-            }
-            $result = $registrations->cancelWithHistory((string) $args['id'], [
-                'id' => (string) ($auth['sub'] ?? ''),
-                'role' => (string) ($auth['role'] ?? ''),
-                'isManager' => $gate['isManager'],
-            ]);
-            if ($result !== null && $result['changed']) {
-                $logActivity(
-                    $auth,
-                    'registration_cancelled',
-                    $gate['isManager'] ? 'Anulowano zapis' : 'Rezygnacja z zapisu',
-                    'registration',
-                    (string) $args['id'],
-                    (string) ($gate['registration']['eventName'] ?? ''),
-                    ['refundRequested' => $result['refundRequested']]
-                );
-            }
-            return JsonResponder::ok($response, $result['registration'] ?? null);
-        })
-            ->add(new AuthMiddleware($jwt));
+        $api->post('/events/{eventId}/bib-numbers/assign', [$bibNumberController, 'assign'])->add(new AuthMiddleware($jwt));
+        $api->post('/registrations/{id}/cancel', [$registrationChangeController, 'cancel'])->add(new AuthMiddleware($jwt));
         // The history of one Zapis (what changed, when, by whom) - for its owner and the Event's manager.
         $api->get('/registrations/{id}/changes', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $pdo) {
             $gate = $authorizeRegistration($response, (string) $args['id'], (array) $request->getAttribute('auth'));
@@ -2757,132 +2485,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, (new RegistrationChangeRepository($pdo))->listForRegistration((string) $args['id']));
         })
             ->add(new AuthMiddleware($jwt));
-        // Change of Dystans / Wariant opłaty of a Zapis. The quote
-        // and the change share one gate (SelfServicePolicy for the owner, the Event's manager always) and one
-        // calculation; the quote writes nothing. Owner + dearer Dystans -> 409 balance_due_requires_organizer.
-        $distanceChangeRoute = static function (bool $commit) use ($authorizeRegistration, $registrations, $events, $logActivity, $body): callable {
-            return static function (Request $request, Response $response, array $args) use ($commit, $authorizeRegistration, $registrations, $events, $logActivity, $body): Response {
-                $auth = (array) $request->getAttribute('auth');
-                $gate = $authorizeRegistration($response, (string) $args['id'], $auth);
-                if ($gate instanceof Response) {
-                    return $gate;
-                }
-                $payload = $body($request);
-                $distanceId = is_string($payload['distanceId'] ?? null) ? trim($payload['distanceId']) : '';
-                if ($distanceId === '') {
-                    return JsonResponder::error($response, 'validation_error', 'distanceId is required', 422, ['field' => 'distanceId']);
-                }
-                foreach (['pricingVariantId', 'category'] as $optional) {
-                    if (isset($payload[$optional]) && !is_string($payload[$optional])) {
-                        return JsonResponder::error($response, 'validation_error', $optional . ' must be a string', 422, ['field' => $optional]);
-                    }
-                }
-                $verdict = (new SelfServicePolicy())->evaluate((array) $events->find((string) $gate['registration']['eventId']), $gate['registration'], $gate['isManager']);
-                if (!$verdict['allowed']) {
-                    $messages = [
-                        SelfServicePolicy::REASON_DISABLED => 'Organizator wyłączył samodzielną zmianę zapisów w tym wydarzeniu.',
-                        SelfServicePolicy::REASON_CLOSED => 'Termin samodzielnej zmiany dystansu minął.',
-                        SelfServicePolicy::REASON_EVENT_OVER => 'Wydarzenie jest już zamknięte dla zmian.',
-                        SelfServicePolicy::REASON_REGISTRATION_INACTIVE => 'Ten zapis nie jest już aktywny.',
-                    ];
-                    $reason = (string) $verdict['reason'];
-                    return JsonResponder::error($response, $reason, $messages[$reason] ?? 'Zmiana dystansu jest niedostępna.', 409, ['deadline' => $verdict['deadline']]);
-                }
-                $actor = ['id' => (string) ($auth['sub'] ?? ''), 'role' => (string) ($auth['role'] ?? ''), 'isManager' => $gate['isManager']];
-                $variantId = isset($payload['pricingVariantId']) ? (string) $payload['pricingVariantId'] : null;
-                $category = isset($payload['category']) ? (string) $payload['category'] : null;
-                try {
-                    if (!$commit) {
-                        return JsonResponder::ok($response, $registrations->quoteDistanceChange((string) $args['id'], $distanceId, $variantId, $category, $actor));
-                    }
-                    $result = $registrations->changeDistance((string) $args['id'], $distanceId, $variantId, $category, $actor);
-                } catch (\ZmierzymyCzas\Domain\Registrations\DistanceChangeRejected $e) {
-                    return JsonResponder::error($response, $e->reason, $e->getMessage(), $e->status, $e->details);
-                } catch (RuntimeException $e) {
-                    if ($e->getMessage() === 'registration_capacity_exceeded') {
-                        return JsonResponder::error($response, 'registration_capacity_exceeded', 'Wybrany dystans osiągnął limit uczestników.', 409);
-                    }
-                    if ($e->getMessage() === 'registration_distance_invalid') {
-                        return JsonResponder::error($response, 'registration_distance_invalid', 'Wybrany dystans nie istnieje w tym wydarzeniu.', 422);
-                    }
-                    throw $e;
-                }
-                $change = $result['change'];
-                $logActivity(
-                    $auth,
-                    'registration_distance_changed',
-                    $gate['isManager'] ? 'Zmieniono dystans zapisu' : 'Zmiana dystansu zapisu',
-                    'registration',
-                    (string) $args['id'],
-                    (string) ($gate['registration']['eventName'] ?? ''),
-                    ['from' => $change['from'], 'to' => $change['to'], 'balanceDueMinor' => $change['balanceDueMinor'], 'refundDueMinor' => $change['refundDueMinor']]
-                );
-                return JsonResponder::ok($response, [
-                    ...$result['registration'],
-                    'balanceDueMinor' => $change['balanceDueMinor'],
-                    'refundDueMinor' => $change['refundDueMinor'],
-                    'refundRequested' => $result['refundRequested'],
-                    'change' => $change,
-                ]);
-            };
-        };
-        $api->post('/registrations/{id}/distance-change/quote', $distanceChangeRoute(false))
-            ->add(new AuthMiddleware($jwt));
-        $api->post('/registrations/{id}/distance-change', $distanceChangeRoute(true))
-            ->add(new AuthMiddleware($jwt));
-        // The Event's manager moves a Zapis to another
-        // Zawodnik (existing `competitorId` or `newPerson`). Manager only - the owner gets 403. Shares the
-        // person-swap core with the relay swap; a relay member is refused and pointed to that swap.
-        // No money moves: balanceDueMinor / overpaymentMinor in the answer are informational.
-        $api->post('/registrations/{id}/transfer', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $registrations, $logActivity, $body) {
-            $auth = (array) $request->getAttribute('auth');
-            $gate = $authorizeRegistration($response, (string) $args['id'], $auth, true);
-            if ($gate instanceof Response) {
-                return $gate;
-            }
-            try {
-                $result = $registrations->transferRegistration(
-                    (string) $args['id'],
-                    $body($request),
-                    ['id' => (string) ($auth['sub'] ?? ''), 'email' => (string) ($auth['email'] ?? ''), 'role' => (string) ($auth['role'] ?? '')]
-                );
-            } catch (RuntimeException $e) {
-                $errors = [
-                    'registration_not_found' => ['Nie znaleziono zapisu.', 404],
-                    'transfer_registration_inactive' => ['Ten zapis nie jest już aktywny - nie można go przenieść.', 409],
-                    'transfer_team_registration' => ['Zapisu w drużynie (sztafecie) nie przenosi się tym działaniem - zmień zawodnika w składzie drużyny (wymiana zawodnika).', 409],
-                    'team_swap_competitor_already_registered' => ['Ta osoba jest już zapisana na to wydarzenie.', 409],
-                    'team_swap_same_person' => ['To ten sam zawodnik, który jest już na tym zapisie.', 422],
-                    'team_swap_person_required' => ['Podaj istniejącego zawodnika (competitorId) albo dane nowej osoby (newPerson: imię i nazwisko).', 422],
-                    'team_swap_competitor_not_found' => ['Nie znaleziono zawodnika.', 404],
-                    'transfer_insurance_birth_date_missing' => ['Zapis ma ubezpieczenie NNW - nowa osoba musi mieć pełną datę urodzenia (birthDate), by przeliczyć składkę.', 422],
-                    'transfer_insurance_invalid' => ['Nie można przeliczyć ubezpieczenia NNW dla nowej osoby.', 422],
-                    'registration_distance_invalid' => ['Selected distance is invalid.', 422],
-                ];
-                if (isset($errors[$e->getMessage()])) {
-                    [$message, $status] = $errors[$e->getMessage()];
-                    return JsonResponder::error($response, $e->getMessage(), $message, $status);
-                }
-                throw $e;
-            }
-            $logActivity(
-                $auth,
-                'registration_transferred',
-                sprintf('Przeniesiono zapis: %s -> %s', $result['from']['name'], $result['to']['name']),
-                'registration',
-                (string) $args['id'],
-                (string) $result['to']['name'],
-                ['from' => $result['from'], 'to' => $result['to'], 'balanceDueMinor' => $result['balanceDueMinor'], 'overpaymentMinor' => $result['overpaymentMinor']]
-            );
-
-            return JsonResponder::ok($response, [
-                ...$result['registration'],
-                'balanceDueMinor' => $result['balanceDueMinor'],
-                'overpaymentMinor' => $result['overpaymentMinor'],
-                'transfer' => ['from' => $result['from'], 'to' => $result['to'], 'changeId' => $result['changeId']],
-            ]);
-        })
-            ->add(new AuthMiddleware($jwt));
+        $api->post('/registrations/{id}/distance-change/quote', [$registrationChangeController, 'quoteDistanceChange'])->add(new AuthMiddleware($jwt));
+        $api->post('/registrations/{id}/distance-change', [$registrationChangeController, 'changeDistance'])->add(new AuthMiddleware($jwt));
+        $api->post('/registrations/{id}/transfer', [$registrationChangeController, 'transfer'])->add(new AuthMiddleware($jwt));
         // $eventManagerRoles alone only checked global role — an organizer of a
         // different event could mark another organizer's Zapis paid. managerOnly:
         // true rejects the owner too (payment-details is manager-only by design).

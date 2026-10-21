@@ -159,15 +159,8 @@ final class EventTeamAccessContractTest extends HttpTestCase
 
     public function testInvitedButNotAcceptedMemberGetsNothing(): void
     {
+        // The fixture world already holds a pending (invited, not accepted) invitation for `participant`.
         $pdo = self::$sharedPdo;
-        $pdo->prepare(
-            "INSERT INTO event_team_members (id, event_id, user_id, status, invited_email) VALUES (:id, :eventId, :userId, 'invited', :email)"
-        )->execute([
-            'id' => self::$fx->prefix . '-inv',
-            'eventId' => self::$fx->values['event'],
-            'userId' => self::$fx->values['participant'],
-            'email' => self::$fx->actors['participant']['email'],
-        ]);
 
         self::assertSame(403, $this->call('participant', 'PATCH', $this->eventPath(), ['name' => 'nope'])['status']);
         self::assertSame(404, $this->call('participant', 'GET', '/api/v1/events/' . self::$fx->values['eventDraft'])['status']);

@@ -15,9 +15,9 @@ use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailCatalog;
  */
 final class MailCatalogTest extends TestCase
 {
-    public function testCatalogHasExactlyFifteenMailTypes(): void
+    public function testCatalogHasTheFifteenCatalogMailsPlusTheTwoEventTeamMails(): void
     {
-        self::assertCount(15, MailCatalog::all());
+        self::assertCount(17, MailCatalog::all());
     }
 
     public function testOnlyAuthenticationMailsUseTheTechnicalQueue(): void
@@ -46,6 +46,8 @@ final class MailCatalogTest extends TestCase
             MailCatalog::ACCOUNT_LOCKED,
             MailCatalog::ACCOUNT_SETUP,
             MailCatalog::SHOP_ORDER_STATUS,
+            MailCatalog::EVENT_TEAM_INVITATION,
+            MailCatalog::EVENT_TEAM_REVOKED,
         ];
 
         foreach (MailCatalog::all() as $mailType => $definition) {

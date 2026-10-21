@@ -13,6 +13,9 @@ use ZmierzymyCzas\Domain\Repository;
  */
 final class EventTeamRepository extends Repository
 {
+    /** How long an invitation link stays valid. */
+    public const INVITE_TTL_DAYS = 7;
+
     /** True only for an `active` Co-manager row of this Event. */
     public function isActiveCoManager(string $eventId, string $userId): bool
     {
@@ -110,6 +113,128 @@ final class EventTeamRepository extends Repository
         }
 
         return $this->find((string) $id) ?? [];
+    }
+
+    /**
+     * R-01 S2: issues (or re-issues) an invitation for an e-mail address. The raw token is returned once, for
+     * the mail; only its SHA-256 is stored. A revoked or still-pending row of the same address is reused (a
+     * resend), an active member of the same address is a conflict.
+     *
+     * @return array{member: array<string, mixed>, token: string}
+     * @throws \RuntimeException `team_member_active` when the address already is an active Co-manager
+     */
+    public function invite(string $eventId, string $email, string $invitedBy): array
+    {
+        $email = strtolower(trim($email));
+        $token = bin2hex(random_bytes(32));
+        $hash = self::hashToken($token);
+        $expires = (new \DateTimeImmutable('+' . self::INVITE_TTL_DAYS . ' days'))->format('Y-m-d H:i:s');
+
+        $existing = $this->pdo->prepare('SELECT id, status FROM event_team_members WHERE event_id = :eventId AND invited_email = :email');
+        $existing->execute(['eventId' => $eventId, 'email' => $email]);
+        $row = $existing->fetch();
+        if ($row !== false && $row['status'] === 'active') {
+            throw new \RuntimeException('team_member_active');
+        }
+        if ($row === false) {
+            $id = $this->id();
+            $this->pdo->prepare(
+                "INSERT INTO event_team_members (id, event_id, user_id, role, status, invited_email, invite_token_hash, invite_expires_at, invited_by)"
+                . " VALUES (:id, :eventId, NULL, 'co_manager', 'invited', :email, :hash, :expires, :invitedBy)"
+            )->execute(['id' => $id, 'eventId' => $eventId, 'email' => $email, 'hash' => $hash, 'expires' => $expires, 'invitedBy' => $invitedBy]);
+        } else {
+            $id = (string) $row['id'];
+            $this->pdo->prepare(
+                "UPDATE event_team_members SET status = 'invited', user_id = NULL, invite_token_hash = :hash, invite_expires_at = :expires,"
+                . ' invited_by = :invitedBy, revoked_at = NULL, accepted_at = NULL WHERE id = :id'
+            )->execute(['id' => $id, 'hash' => $hash, 'expires' => $expires, 'invitedBy' => $invitedBy]);
+        }
+
+        return ['member' => $this->find($id) ?? [], 'token' => $token];
+    }
+
+    /**
+     * The invitation behind a raw token, with just enough context for the public preview. Null for an unknown
+     * token or one whose invitation was revoked.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findInvitation(string $token): ?array
+    {
+        if (!preg_match('/^[a-f0-9]{64}$/', $token)) {
+            return null;
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT m.id AS memberId, m.event_id AS eventId, m.user_id AS userId, m.status, m.invited_email AS email,'
+            . ' m.invite_expires_at AS inviteExpiresAt, e.name AS eventName, e.organizer_id AS organizerId,'
+            . ' e.deleted_at AS eventDeletedAt, inviter.name AS inviterName'
+            . ' FROM event_team_members m'
+            . ' INNER JOIN events e ON e.id = m.event_id'
+            . ' LEFT JOIN users inviter ON inviter.id = m.invited_by'
+            . " WHERE m.invite_token_hash = :hash AND m.status IN ('invited', 'active')"
+        );
+        $stmt->execute(['hash' => self::hashToken($token)]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+        $row['expired'] = $row['status'] === 'invited'
+            && $row['inviteExpiresAt'] !== null
+            && strtotime((string) $row['inviteExpiresAt']) < time();
+
+        return $row;
+    }
+
+    /**
+     * Binds a pending invitation to the accepting Account and activates it. Idempotent for the same Account.
+     *
+     * @return array<string, mixed> the member row
+     * @throws \RuntimeException `invitation_not_found`, `invitation_expired`, `invitation_email_mismatch`,
+     *                           `team_member_owner` (the Owner needs no invitation), `team_member_active`
+     */
+    public function accept(string $token, string $userId, string $userEmail): array
+    {
+        $invitation = $this->findInvitation($token);
+        if ($invitation === null || ($invitation['eventDeletedAt'] ?? null) !== null) {
+            throw new \RuntimeException('invitation_not_found');
+        }
+        if (strtolower(trim($userEmail)) !== strtolower((string) $invitation['email'])) {
+            throw new \RuntimeException('invitation_email_mismatch');
+        }
+        if ($invitation['status'] === 'active') {
+            if ((string) $invitation['userId'] !== $userId) {
+                throw new \RuntimeException('invitation_email_mismatch');
+            }
+
+            return $this->find((string) $invitation['memberId']) ?? [];
+        }
+        if ($invitation['expired']) {
+            throw new \RuntimeException('invitation_expired');
+        }
+        if ((string) $invitation['organizerId'] === $userId) {
+            throw new \RuntimeException('team_member_owner');
+        }
+        // A leftover row of this Account for the Event (an old invitation under another address) must not
+        // collide with the unique (event, user) key: an active one wins, any other is dropped.
+        $other = $this->pdo->prepare('SELECT id, status FROM event_team_members WHERE event_id = :eventId AND user_id = :userId AND id <> :id');
+        $other->execute(['eventId' => $invitation['eventId'], 'userId' => $userId, 'id' => $invitation['memberId']]);
+        foreach ($other->fetchAll() as $stale) {
+            if ($stale['status'] === 'active') {
+                throw new \RuntimeException('team_member_active');
+            }
+            $this->pdo->prepare('DELETE FROM event_team_members WHERE id = :id')->execute(['id' => $stale['id']]);
+        }
+        $this->pdo->prepare(
+            "UPDATE event_team_members SET status = 'active', user_id = :userId, accepted_at = NOW(), invite_expires_at = NULL"
+            . " WHERE id = :id AND status = 'invited'"
+        )->execute(['id' => $invitation['memberId'], 'userId' => $userId]);
+
+        return $this->find((string) $invitation['memberId']) ?? [];
+    }
+
+    public static function hashToken(string $token): string
+    {
+        return hash('sha256', $token);
     }
 
     /** Takes the access away (status `revoked`); the row stays for the audit trail. */

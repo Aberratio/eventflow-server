@@ -254,6 +254,28 @@ final class CriticalMailer
     }
 
     /**
+     * R-01: the Event Team invitation. $sourceEntityId must be unique per issued token (member id + token
+     * prefix), so a resend is a new mail instead of an idempotent no-op.
+     */
+    public function sendEventTeamInvitation(string $sourceEntityId, string $eventId, string $email, string $eventName, string $inviterName, string $acceptLink, int $expiresInDays): ?array
+    {
+        return $this->send(MailCatalog::EVENT_TEAM_INVITATION, $sourceEntityId, $eventId, $email, [
+            'eventName' => $eventName,
+            'inviterName' => $inviterName,
+            'acceptLink' => $acceptLink,
+            'expiresInDays' => (string) $expiresInDays,
+        ]);
+    }
+
+    /** R-01: informs a Co-manager that access was taken away. $sourceEntityId must be unique per revocation. */
+    public function sendEventTeamRevoked(string $sourceEntityId, string $eventId, string $email, string $eventName): ?array
+    {
+        return $this->send(MailCatalog::EVENT_TEAM_REVOKED, $sourceEntityId, $eventId, $email, [
+            'eventName' => $eventName,
+        ]);
+    }
+
+    /**
      * @param array<string, string> $variables
      * @param bool $deferred write the outbox row only; mail.outbox_retry sends it
      * @param array{code: string, contentId: string, filename: string, label: string}|null $qr inline QR image

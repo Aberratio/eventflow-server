@@ -35,6 +35,7 @@ final class RbacGrid
     public const ROLE_EVENT_MANAGER = 'ROLE_EVENT_MANAGER';
     public const EVENT_MANAGER = 'EVENT_MANAGER';
     public const EVENT_OWNER_OR_ADMIN = 'EVENT_OWNER_OR_ADMIN';
+    public const INVITEE_ONLY = 'INVITEE_ONLY';
     public const REG_OWNER_OR_MANAGER = 'REG_OWNER_OR_MANAGER';
     public const REG_MANAGER = 'REG_MANAGER';
     public const REG_MONEY = 'REG_MONEY';
@@ -71,6 +72,8 @@ final class RbacGrid
             self::ROLE_EVENT_MANAGER => [401, 403, 403, $P, $P, $P, $P, $P],
             self::EVENT_MANAGER => [401, 403, 403, 403, $P, $P, $P, $P],
             self::EVENT_OWNER_OR_ADMIN => [401, 403, 403, 403, $P, 403, $P, $P],
+            // R-01 S2: accepting an invitation - only the Account whose address was invited (the `participant` actor).
+            self::INVITEE_ONLY => [401, $P, 403, 403, 403, 403, 403, 403],
             self::REG_OWNER_OR_MANAGER => [401, 403, $P, 403, $P, $P, $P, $P],
             self::REG_MANAGER => [401, 403, 403, 403, $P, $P, $P, $P],
             self::REG_MONEY => [401, 403, 403, 403, $P, 403, $P, $P],
@@ -108,6 +111,7 @@ final class RbacGrid
             self::ROLE_EVENT_MANAGER => [403, $P, 403],
             self::EVENT_MANAGER => [$P, $P, 403],
             self::EVENT_OWNER_OR_ADMIN => [403, 403, 403],
+            self::INVITEE_ONLY => [403, 403, 403],
             self::REG_OWNER_OR_MANAGER => [$P, $P, 403],
             self::REG_MANAGER => [$P, $P, 403],
             self::REG_MONEY => [403, 403, 403],
@@ -224,6 +228,12 @@ final class RbacGrid
         'POST /api/v1/events/external' => ['policy' => self::STAFF, 'basis' => 'E6.4 (§3.6) (plan line 932)'],
         'PATCH /api/v1/events/{id}' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'event'], 'basis' => 'Zespół + Moderator (Współzarządzający) + Admin; H5 in targeted test (plan line 948)'],
         'DELETE /api/v1/events/{id}' => ['policy' => self::EVENT_OWNER_OR_ADMIN, 'params' => ['id' => 'event'], 'basis' => 'H4 (plan line 1049)'],
+        'GET /api/v1/events/{id}/team' => ['policy' => self::EVENT_OWNER_OR_ADMIN, 'params' => ['id' => 'event'], 'basis' => 'R-01: Team roster is Owner-level (macierz §2: skład Zespołu zastrzeżony dla Właściciela); Co-manager and moderator denied'],
+        'POST /api/v1/events/{id}/team/invitations' => ['policy' => self::EVENT_OWNER_OR_ADMIN, 'params' => ['id' => 'event'], 'body' => ['email' => 'rbac-invitee@example.test'], 'basis' => 'R-01: inviting is Owner-level (macierz §2)'],
+        'POST /api/v1/events/{id}/team/{memberId}/resend' => ['policy' => self::EVENT_OWNER_OR_ADMIN, 'params' => ['id' => 'event', 'memberId' => 'teamMemberRow'], 'basis' => 'R-01: Owner-level (macierz §2)'],
+        'DELETE /api/v1/events/{id}/team/{memberId}' => ['policy' => self::EVENT_OWNER_OR_ADMIN, 'params' => ['id' => 'event', 'memberId' => 'teamMemberRow'], 'basis' => 'R-01: revoking is Owner-level (macierz §2)'],
+        'GET /api/v1/team-invitations/{token}' => ['policy' => self::PUBLIC, 'params' => ['token' => 'inviteToken'], 'override' => self::allActors(self::OK), 'basis' => 'R-01: public preview, the token is the credential'],
+        'POST /api/v1/team-invitations/{token}/accept' => ['policy' => self::INVITEE_ONLY, 'params' => ['token' => 'inviteToken'], 'basis' => 'R-01: any signed-in Account, but only the invited address may accept (403 otherwise)'],
         'POST /api/v1/events/{id}/submit' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'event'], 'basis' => 'event manager (owner, moderator, admin) (no extra per-row rule) (plan line 1069)'],
         'POST /api/v1/events/{id}/approve' => ['policy' => self::STAFF, 'params' => ['id' => 'event'], 'basis' => 'macierz: moderacja — Moderator ✔ (plan line 1092)'],
         'POST /api/v1/events/{id}/reject' => ['policy' => self::STAFF, 'params' => ['id' => 'event'], 'basis' => 'idem (plan line 1111)'],

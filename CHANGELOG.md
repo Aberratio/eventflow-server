@@ -120,7 +120,7 @@ as the first version.
   `POST /events/{eventId}/bib-numbers/assign` gives the next free number within
   each range, and a manual number must be unique in the event (409) and fall
   inside the distance range (422).
-- Event Team: besides its Owner an event can have Co-managers, any account
+- Event Team: besides its Owner an event can have Co-managers, any account
   whatever its global role (zakres P2, do potwierdzenia przez Zamawiającego).
   A Co-manager edits the event and manages registrations, results, form
   fields and mail templates; the Team roster, the event's payment
@@ -129,6 +129,15 @@ as the first version.
   invited member has no access. The organizer panel list
   (`GET /organizers/{id}/events`) includes co-managed events with a
   `teamRole` of `owner` or `co_manager`. Migration `140_r01_event_team.sql`.
+- Event Team invitations: the Owner (or an admin) invites a Co-manager by
+  e-mail (`POST /events/{id}/team/invitations`, link valid 7 days, only its
+  hash is stored), lists the Team (`GET /events/{id}/team`), resends an
+  invitation and takes access away (`DELETE /events/{id}/team/{memberId}`,
+  the person is told by mail). The invited account accepts at
+  `POST /team-invitations/{token}/accept` (its e-mail must match the
+  invitation); `GET /team-invitations/{token}` is a public preview. Invites,
+  acceptances and revocations are recorded in the activity register
+  (zakres P2, do potwierdzenia przez Zamawiającego).
 
 ### Fixed
 

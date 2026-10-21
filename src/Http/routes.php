@@ -4861,10 +4861,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
             $reports = new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo);
             // Opiekun - swoi podopieczni; organizator - tylko zawodnik z Zapisem na jego wydarzenie
-            // (canManageEvent opiera się na organizerId); Moderator/Admin - każdy.
+            // (canManageEvent opiera się na organizerId) albo aktywny Współzarządzający takiego wydarzenia
+            // (R-01, dowolna rola globalna); Moderator/Admin - każdy.
             $allowed = in_array($role, $staffRoles, true)
                 || $care->canRegister($kontoId, $id)
-                || ($role === 'organizer' && $reports->competitorRegisteredOnOrganizersEvent($id, $kontoId));
+                || ($role === 'organizer' && $reports->competitorRegisteredOnOrganizersEvent($id, $kontoId))
+                || $reports->competitorRegisteredOnCoManagedEvent($id, $kontoId);
             if (!$allowed) {
                 return JsonResponder::error($response, 'forbidden', 'Nie masz Opieki nad tym Zawodnikiem ani Zapisu na Twoim wydarzeniu.', 403);
             }

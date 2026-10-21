@@ -116,6 +116,8 @@ final class RbacGrid
             self::CARE_HOLDER => [403, 403, 403],
             self::CARE_OR_STAFF => [403, 403, 403],
             self::CARE_REVOKE => [404, 404, 404],
+            // R-08 + R-01: an active Co-manager of an Event the Competitor is registered on may report, like its Owner.
+            self::CARE_OR_MANAGER_ROLE => [$P, $P, 403],
             self::CAPTAIN_ONLY => [403, 403, 403],
             self::CAPTAIN_OR_MANAGER => [$P, $P, 403],
             self::SELF_ONLY => [404, 404, 404],

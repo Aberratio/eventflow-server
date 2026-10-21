@@ -83,10 +83,10 @@ final class ChallengeConditionTreeEvaluator
      *
      * @param array<string, bool> $memo keyed "challengeId|userId"
      */
-    public function isChallengeCompletedBy(string $challengeId, string $userId, array &$memo = [], int $depth = 0): bool
+    public function isChallengeCompletedBy(string $challengeId, string $userId, array &$memo = [], int $depth = 0, ?string $competitorId = null): bool
     {
         $this->guardDepth($depth);
-        $key = $challengeId . '|' . $userId;
+        $key = $challengeId . '|' . $userId . ($competitorId !== null ? '|' . $competitorId : '');
         if (array_key_exists($key, $memo)) {
             return $memo[$key];
         }
@@ -95,7 +95,7 @@ final class ChallengeConditionTreeEvaluator
         // here resolves to false on the repeat visit instead of looping.
         $memo[$key] = false;
         $tree = $this->challenges->getConditionTree($challengeId);
-        $result = $tree === null ? false : $this->evaluateNode($tree, $userId, $memo, $depth, $challengeId);
+        $result = $tree === null ? false : $this->evaluateNode($tree, $userId, $memo, $depth, $challengeId, $competitorId);
         $memo[$key] = $result;
         return $result;
     }
@@ -120,18 +120,22 @@ final class ChallengeConditionTreeEvaluator
      * that truly doesn't know its own challenge context has no narrower
      * question to ask.
      *
+     * R-06: $competitorId, when given, makes the evaluation per Zawodnik (results attributed
+     * by ChallengeResultOwnership, manual entries by `challenge_entries.competitor_id`);
+     * `null` keeps the legacy per-Konto behaviour (`user_id`) for rows with no Zawodnik.
+     *
      * @param array<string, mixed> $node
      * @param array<string, bool> $memo
      */
-    public function evaluateNode(array $node, string $userId, array &$memo, int $depth = 0, ?string $challengeId = null): bool
+    public function evaluateNode(array $node, string $userId, array &$memo, int $depth = 0, ?string $challengeId = null, ?string $competitorId = null): bool
     {
         $this->guardDepth($depth);
 
         return match ($node['type'] ?? null) {
-            'event_threshold' => $this->evaluateEventThreshold($node, $userId, $challengeId),
-            'point_threshold' => $this->pointScorer->score($node, $userId)['satisfied'],
-            'sub_challenge_threshold' => $this->evaluateSubChallengeThreshold($node, $userId, $memo, $depth),
-            'group' => $this->evaluateGroup($node, $userId, $memo, $depth, $challengeId),
+            'event_threshold' => $this->evaluateEventThreshold($node, $userId, $challengeId, $competitorId),
+            'point_threshold' => $this->pointScorer->score($node, $userId, $competitorId)['satisfied'],
+            'sub_challenge_threshold' => $this->evaluateSubChallengeThreshold($node, $userId, $memo, $depth, $competitorId),
+            'group' => $this->evaluateGroup($node, $userId, $memo, $depth, $challengeId, $competitorId),
             default => false,
         };
     }
@@ -174,7 +178,7 @@ final class ChallengeConditionTreeEvaluator
      *
      * @param array<string, mixed> $node
      */
-    private function evaluateEventThreshold(array $node, string $userId, ?string $challengeId): bool
+    private function evaluateEventThreshold(array $node, string $userId, ?string $challengeId, ?string $competitorId): bool
     {
         $required = max(0, (int) ($node['requiredCount'] ?? 0));
         $eventIds = array_values(array_unique(array_map(
@@ -201,16 +205,29 @@ final class ChallengeConditionTreeEvaluator
 
         $challengeSql = $challengeId !== null ? ' AND ce.challenge_id = ?' : '';
         $challengeParam = $challengeId !== null ? [$challengeId] : [];
+        if ($competitorId !== null) {
+            $resultJoins = ChallengeResultOwnership::JOINS;
+            $resultWho = ChallengeResultOwnership::COMPETITOR_EXPR . ' = ?';
+            $entryWho = '(ce.competitor_id = ? OR (ce.competitor_id IS NULL AND ce.user_id = ?))';
+            $resultWhoParams = [$competitorId];
+            $entryWhoParams = [$competitorId, $userId];
+        } else {
+            $resultJoins = '';
+            $resultWho = 'r.user_id = ?';
+            $entryWho = 'ce.user_id = ?';
+            $resultWhoParams = [$userId];
+            $entryWhoParams = [$userId];
+        }
         $sql = "SELECT COUNT(DISTINCT event_id) FROM (
-                    SELECT r.event_id AS event_id FROM results r
+                    SELECT r.event_id AS event_id FROM results r{$resultJoins}
                     INNER JOIN events e ON e.id = r.event_id
-                    WHERE r.user_id = ? AND r.status = 'finished' AND r.event_id IN ({$placeholders}){$windowSql}
+                    WHERE {$resultWho} AND r.status = 'finished' AND r.event_id IN ({$placeholders}){$windowSql}
                     UNION
                     SELECT ce.event_id AS event_id FROM challenge_entries ce
                     INNER JOIN events e ON e.id = ce.event_id
-                    WHERE ce.user_id = ? AND ce.status = 'approved' AND ce.source = 'manual' AND ce.event_id IN ({$placeholders}){$windowSql}{$challengeSql}
+                    WHERE {$entryWho} AND ce.status = 'approved' AND ce.source = 'manual' AND ce.event_id IN ({$placeholders}){$windowSql}{$challengeSql}
                 ) completed_events";
-        $params = [$userId, ...$eventIds, ...$windowParams, $userId, ...$eventIds, ...$windowParams, ...$challengeParam];
+        $params = [...$resultWhoParams, ...$eventIds, ...$windowParams, ...$entryWhoParams, ...$eventIds, ...$windowParams, ...$challengeParam];
 
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
@@ -223,7 +240,7 @@ final class ChallengeConditionTreeEvaluator
      * @param array<string, mixed> $node
      * @param array<string, bool> $memo
      */
-    private function evaluateGroup(array $node, string $userId, array &$memo, int $depth, ?string $challengeId): bool
+    private function evaluateGroup(array $node, string $userId, array &$memo, int $depth, ?string $challengeId, ?string $competitorId): bool
     {
         $children = array_values(array_filter((array) ($node['children'] ?? []), 'is_array'));
         if ($children === []) {
@@ -235,7 +252,7 @@ final class ChallengeConditionTreeEvaluator
 
         $satisfiedCount = 0;
         foreach ($children as $child) {
-            if ($this->evaluateNode($child, $userId, $memo, $depth + 1, $challengeId)) {
+            if ($this->evaluateNode($child, $userId, $memo, $depth + 1, $challengeId, $competitorId)) {
                 $satisfiedCount++;
             }
         }
@@ -267,7 +284,7 @@ final class ChallengeConditionTreeEvaluator
      * window is set. Without a window, timing doesn't matter and it's simply
      * counted once isChallengeCompletedBy() says true.
      */
-    private function evaluateSubChallengeThreshold(array $node, string $userId, array &$memo, int $depth): bool
+    private function evaluateSubChallengeThreshold(array $node, string $userId, array &$memo, int $depth, ?string $competitorId): bool
     {
         $required = max(0, (int) ($node['requiredCount'] ?? 0));
         $subs = array_values(array_filter((array) ($node['subChallenges'] ?? []), 'is_array'));
@@ -285,11 +302,11 @@ final class ChallengeConditionTreeEvaluator
             if ($subId === '') {
                 continue;
             }
-            if (!$this->isChallengeCompletedBy($subId, $userId, $memo, $depth + 1)) {
+            if (!$this->isChallengeCompletedBy($subId, $userId, $memo, $depth + 1, $competitorId)) {
                 continue;
             }
             if ($hasWindow) {
-                $completedAt = $this->subChallengeCompletionTimestamp($subId, $userId);
+                $completedAt = $this->subChallengeCompletionTimestamp($subId, $userId, $competitorId);
                 if ($completedAt === null) {
                     continue; // can't verify timing -> conservatively not counted
                 }
@@ -306,12 +323,14 @@ final class ChallengeConditionTreeEvaluator
         return $count >= $required;
     }
 
-    private function subChallengeCompletionTimestamp(string $subChallengeId, string $userId): ?int
+    private function subChallengeCompletionTimestamp(string $subChallengeId, string $userId, ?string $competitorId = null): ?int
     {
         $stmt = $this->pdo->prepare(
-            'SELECT completion_notified_at FROM challenge_participations WHERE challenge_id = ? AND user_id = ?'
+            $competitorId !== null
+                ? 'SELECT completion_notified_at FROM challenge_participations WHERE challenge_id = ? AND competitor_id = ?'
+                : 'SELECT completion_notified_at FROM challenge_participations WHERE challenge_id = ? AND user_id = ?'
         );
-        $stmt->execute([$subChallengeId, $userId]);
+        $stmt->execute([$subChallengeId, $competitorId ?? $userId]);
         $notifiedAt = $stmt->fetchColumn();
         if ($notifiedAt) {
             $ts = strtotime((string) $notifiedAt);
@@ -322,9 +341,9 @@ final class ChallengeConditionTreeEvaluator
 
         $stmt = $this->pdo->prepare(
             "SELECT MAX(COALESCE(reviewed_at, submitted_at)) FROM challenge_entries
-             WHERE challenge_id = ? AND user_id = ? AND status = 'approved'"
+             WHERE challenge_id = ? AND " . ($competitorId !== null ? '(competitor_id = ? OR (competitor_id IS NULL AND user_id = ?))' : 'user_id = ?') . " AND status = 'approved'"
         );
-        $stmt->execute([$subChallengeId, $userId]);
+        $stmt->execute($competitorId !== null ? [$subChallengeId, $competitorId, $userId] : [$subChallengeId, $userId]);
         $fallback = $stmt->fetchColumn();
         if ($fallback) {
             $ts = strtotime((string) $fallback);

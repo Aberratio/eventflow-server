@@ -203,6 +203,45 @@ final class GoogleCalendarAutoSyncTest extends TestCase
         self::assertSame([['delete', 'failed']], $this->outbox());
     }
 
+    public function testSwitchingToPrivateQueuesDeleteAndWorkerRemovesTheEntry(): void
+    {
+        $sync = $this->service();
+        $before = $this->events->find($this->eventId);
+        $after = $this->events->update($this->eventId, ['isPrivate' => true]);
+        self::assertTrue((bool) $after['isPrivate']);
+
+        self::assertNotNull($sync->enqueueUpdateOnChange($before, $after));
+        self::assertSame([['delete', 'queued']], $this->outbox());
+
+        $result = (new GoogleCalendarOutboxRetryJob($sync))->run(new \DateTimeImmutable('2026-06-01 10:00:00'));
+
+        self::assertSame(1, $result['sent']);
+        self::assertSame([['delete', 'g-1']], $this->client->calls);
+        self::assertNull($this->pdo->query("SELECT google_calendar_event_id FROM events WHERE id = '{$this->eventId}'")->fetchColumn());
+    }
+
+    public function testEditingAnAlreadyPrivateEventQueuesNothing(): void
+    {
+        $this->pdo->prepare('UPDATE events SET is_private = 1 WHERE id = :id')->execute(['id' => $this->eventId]);
+        $before = $this->events->find($this->eventId);
+        $after = $this->events->update($this->eventId, ['date' => '2027-10-01']);
+
+        self::assertNull($this->service()->enqueueUpdateOnChange($before, $after));
+        self::assertSame([], $this->outbox());
+    }
+
+    public function testPendingUpsertOfAnEventMadePrivateIsNeverSent(): void
+    {
+        $sync = $this->service();
+        $sync->enqueue($this->eventId);
+        $this->events->update($this->eventId, ['isPrivate' => true]);
+
+        $result = (new GoogleCalendarOutboxRetryJob($sync))->run(new \DateTimeImmutable('2026-06-01 10:00:00'));
+
+        self::assertSame(1, $result['abandoned']);
+        self::assertSame([], $this->client->calls);
+    }
+
     public function testWorkerUpdateTaskUpdatesExistingEntry(): void
     {
         $sync = $this->service();

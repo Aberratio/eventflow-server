@@ -27,6 +27,7 @@ final class PublicEventPresenter
         'insuranceOption', 'insuranceVariants', 'bzIntegrationEnabled', 'enableMerchandiseInRegistration',
         'registrationEmbed', 'registrationFormConfig', 'embedEnabled', 'embedAllowedOrigins',
         'displayOptions', 'logisticsInfo',
+        'selfServiceEnabled', 'selfServiceDeadline', 'selfServiceEffectiveDeadline',
         'distances', 'paymentMethods', 'merchandise', 'discountCodes', 'galleryAlbums', 'resultDocuments', 'documents',
     ];
 

@@ -235,6 +235,94 @@ final class ResultCorrectionTrailContractTest extends HttpTestCase
         self::assertSame(0, (int) $this->json($patch)['data']['position']);
     }
 
+    public function testAutomaticPlacesMoveAroundAManualOneSoNothingCollides(): void
+    {
+        $fast = $this->addResult('Szybki', 2400);
+        $slow = $this->addResult('Wolny', 3000);
+
+        $patch = $this->patch(['position' => 2, 'categoryPosition' => 2]);
+        self::assertSame(200, $patch->getStatusCode());
+
+        $places = $this->placesOf([$fast, $this->resultId, $slow]);
+        self::assertSame([1, 2, 3], array_column($places, 'position'), 'fast 1, manual 2, slow 3');
+        self::assertSame([1, 2, 3], array_column($places, 'categoryPosition'));
+
+        $this->patch(['position' => 1]);
+        $places = $this->placesOf([$fast, $this->resultId, $slow]);
+        self::assertSame([2, 1, 3], array_column($places, 'position'), 'automatic places skip the manual 1');
+        self::assertCount(3, array_unique(array_column($places, 'position')));
+    }
+
+    public function testTwoManualPlacesCannotCoincide(): void
+    {
+        $other = $this->addResult('Drugi', 2400);
+        $this->request('PATCH', '/api/v1/results/' . $other, ['position' => 2, 'categoryPosition' => 2], $this->auth($this->organizer));
+
+        $open = $this->patch(['position' => 2]);
+        self::assertSame(422, $open->getStatusCode());
+        self::assertSame('result_place_taken', $this->json($open)['error']['code']);
+
+        $category = $this->patch(['categoryPosition' => 2]);
+        self::assertSame(422, $category->getStatusCode());
+        self::assertSame('result_place_taken', $this->json($category)['error']['code']);
+
+        self::assertSame(200, $this->patch(['position' => 3])->getStatusCode());
+        $again = $this->request('PATCH', '/api/v1/results/' . $other, ['position' => 2], $this->auth($this->organizer));
+        self::assertSame(200, $again->getStatusCode(), 'a result may keep its own manual place');
+    }
+
+    public function testCategoryPlaceMayRepeatInAnotherCategory(): void
+    {
+        $other = $this->addResult('Inna kategoria', 2400, null, 'M30');
+        $this->request('PATCH', '/api/v1/results/' . $other, ['categoryPosition' => 2], $this->auth($this->organizer));
+
+        self::assertSame(200, $this->patch(['categoryPosition' => 2])->getStatusCode());
+    }
+
+    public function testGenderPlaceIsComputedPerGenderAndReturned(): void
+    {
+        $m1 = $this->addResult('M szybki', 2400, 'M');
+        $k1 = $this->addResult('K szybka', 2500, 'K');
+        $m2 = $this->addResult('M wolny', 2600, 'M');
+        $dnf = $this->addResult('M dnf', 0, 'M', 'Open', 'dnf');
+
+        $places = $this->placesOf([$m1, $k1, $m2, $dnf, $this->resultId]);
+        self::assertSame([1, 1, 2, 0, 0], array_column($places, 'genderPosition'), 'no gender => 0, dnf => 0');
+
+        $patch = $this->patch(['gender' => 'K']);
+        self::assertSame(200, $patch->getStatusCode());
+        self::assertSame(2, (int) $this->json($patch)['data']['genderPosition'], 'K: 2500 then 2700');
+
+        $list = $this->json($this->request('GET', '/api/v1/events/' . $this->event['id'] . '/results', [], $this->auth($this->organizer)))['data'];
+        self::assertArrayHasKey('genderPosition', $list[0]);
+    }
+
+    /** @param array<int, string> $ids @return array<int, array<string, mixed>> in the order of $ids */
+    private function placesOf(array $ids): array
+    {
+        $stmt = $this->pdo->prepare('SELECT position, category_position AS categoryPosition, gender_position AS genderPosition FROM results WHERE id = :id');
+        $out = [];
+        foreach ($ids as $id) {
+            $stmt->execute(['id' => $id]);
+            $out[] = $stmt->fetch();
+        }
+
+        return $out;
+    }
+
+    private function addResult(string $name, int $seconds, ?string $gender = null, string $category = 'Open', string $status = 'finished'): string
+    {
+        $payload = [
+            'eventId' => $this->event['id'], 'distanceId' => $this->distanceId, 'userName' => $name,
+            'category' => $category, 'time' => gmdate('H:i:s', $seconds), 'timeInSeconds' => $seconds, 'status' => $status,
+        ];
+        if ($gender !== null) {
+            $payload['gender'] = $gender;
+        }
+
+        return (string) $this->json($this->request('POST', '/api/v1/results', $payload, $this->auth($this->organizer)))['data']['id'];
+    }
+
     /** @return array<string, mixed> */
     private function stored(): array
     {

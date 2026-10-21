@@ -20,7 +20,7 @@ use ZmierzymyCzas\Support\Env;
  * AND the service-account key is configured on the server; otherwise nothing is queued and nothing is sent.
  * The Google event id is stored on the Event (`events.google_calendar_event_id`): a later send for the same
  * Event updates that calendar entry instead of duplicating it (manual "send to calendar").
- * Automatic follow-up: a changed title/date/time/place of a published Event queues an update, and a cancelled /
+ * Automatic follow-up: switching an Event to private removes its entry (a private Event is never sent); a changed title/date/time/place of a published Event queues an update, and a cancelled /
  * deleted Event queues a delete (action 'delete' in the same outbox; only when the integration is active and the
  * Event already has an entry). Google answering 404/410 to a delete counts as success.
  */
@@ -108,6 +108,10 @@ final class GoogleCalendarSyncService
             if ((string) ($after['googleCalendarEventId'] ?? '') === '') {
                 return null;
             }
+            // Visibility switched to private: the entry (public by nature) is removed.
+            if (!empty($after['isPrivate'])) {
+                return empty($before['isPrivate']) ? $this->enqueueDeleteForEvent((string) $after['id']) : null;
+            }
             $changed = false;
             foreach (self::SYNCED_FIELDS as $field) {
                 if ((string) ($before[$field] ?? '') !== (string) ($after[$field] ?? '')) {
@@ -139,7 +143,7 @@ final class GoogleCalendarSyncService
             if ($event === null || $googleId === '') {
                 return null;
             }
-            if ((string) $event['publicationStatus'] === 'published' && $event['deletedAt'] === null) {
+            if ((string) $event['publicationStatus'] === 'published' && $event['deletedAt'] === null && empty($event['isPrivate'])) {
                 return null;
             }
             $this->pdo->prepare("UPDATE google_calendar_outbox SET status = 'abandoned', last_error = 'superseded_by_delete', next_attempt_at = NULL WHERE event_id = :e AND action = 'upsert' AND status IN ('queued','failed')")
@@ -228,7 +232,7 @@ final class GoogleCalendarSyncService
             return $this->attemptDelete($row, $s['calendarId'], $now);
         }
         $event = $this->events->find((string) $row['event_id']);
-        if ($event === null || ($event['publicationStatus'] ?? '') !== 'published' || $event['deletedAt'] !== null) {
+        if ($event === null || ($event['publicationStatus'] ?? '') !== 'published' || $event['deletedAt'] !== null || !empty($event['isPrivate'])) {
             $this->finish($id, 'abandoned', 'event_not_published', null, (int) $row['attempts']);
 
             return null;

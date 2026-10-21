@@ -173,7 +173,7 @@ accounts.
 
 ### CI (`.github/workflows/e2e-bz.yml`)
 
-Runs on pull requests, pushes to main/master, nightly (catches BZ-side drift) and manually
+Runs on pushes to main/master, weekly on Monday night (catches BZ-side drift) and manually
 (`bz_ref` input; default is the repository variable `BZ_API_REF`, else `master`). The BZ
 repository is private, so the job needs a read-only deploy key. **Owner setup, once:**
 

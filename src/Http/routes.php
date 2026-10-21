@@ -4334,6 +4334,43 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, CompetitorDuplicatePresenter::present($competitors->findDuplicates($firstName, $lastName, $birthDate)));
         })->add(new AuthMiddleware($jwt));
 
+        // R-08 (spec 22): opiekun (Opieka / własny profil) albo organizator/staff zgłasza, że profil
+        // {id} jest duplikatem innego. Samo zgłoszenie niczego nie scala - Moderator/Admin widzi je
+        // w kolejce GET /admin/competitors/duplicate-reports obok scalania profili.
+        $api->post('/competitors/{id}/duplicate-reports', function (Request $request, Response $response, array $args) use ($pdo, $competitors, $care, $body, $staffRoles): Response {
+            $auth = (array) $request->getAttribute('auth');
+            $kontoId = (string) ($auth['sub'] ?? '');
+            $role = (string) ($auth['role'] ?? '');
+            $id = (string) ($args['id'] ?? '');
+
+            if ($competitors->find($id) === null) {
+                return JsonResponder::error($response, 'not_found', 'Zawodnik nie istnieje.', 404);
+            }
+            $reports = new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo);
+            // Opiekun - swoi podopieczni; organizator - tylko zawodnik z Zapisem na jego wydarzenie
+            // (canManageEvent opiera się na organizerId); Moderator/Admin - każdy.
+            $allowed = in_array($role, $staffRoles, true)
+                || $care->canRegister($kontoId, $id)
+                || ($role === 'organizer' && $reports->competitorRegisteredOnOrganizersEvent($id, $kontoId));
+            if (!$allowed) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz Opieki nad tym Zawodnikiem ani Zapisu na Twoim wydarzeniu.', 403);
+            }
+
+            $data = $body($request);
+            $duplicateOfId = trim((string) ($data['duplicateOfId'] ?? ''));
+            if ($duplicateOfId === '' || $duplicateOfId === $id) {
+                return JsonResponder::error($response, 'validation_error', 'Wskaż inny profil Zawodnika jako duplikat (duplicateOfId).', 422);
+            }
+            if ($competitors->find($duplicateOfId) === null) {
+                return JsonResponder::error($response, 'not_found', 'Wskazany profil Zawodnika nie istnieje.', 404);
+            }
+
+            $report = $reports
+                ->create($id, $duplicateOfId, $kontoId, $role, (string) ($data['note'] ?? ''));
+
+            return JsonResponder::ok($response, $report, 'Zgłoszenie duplikatu zostało przekazane do weryfikacji.', 201);
+        })->add(new AuthMiddleware($jwt));
+
         // Pobierz: Zawodnicy pod moją opieką (myCompetitors) + Konta, które mają opiekę nade mną (caregivers).
         $api->get('/care', function (Request $request, Response $response) use ($competitors, $care): Response {
             $auth = (array) $request->getAttribute('auth');
@@ -4513,6 +4550,36 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
                 return JsonResponder::error($response, 'not_found', 'Jeden z profili Zawodnika nie istnieje.', 404);
             }
+        })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
+
+        // R-08: kolejka otwartych zgłoszeń duplikatów - tylko Moderator/Admin, jak scalanie.
+        $api->get('/admin/competitors/duplicate-reports', function (Request $request, Response $response) use ($pdo, $query): Response {
+            $status = (string) ($query($request)['status'] ?? 'open');
+            if (!in_array($status, ['open', 'rejected', 'merged', 'all'], true)) {
+                return JsonResponder::error($response, 'validation_error', 'status: open, rejected, merged lub all.', 422);
+            }
+
+            return JsonResponder::ok($response, (new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo))->list($status));
+        })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
+
+        // R-08: odrzucenie zgłoszenia (status merged ustawia wyłącznie scalenie profili).
+        $api->patch('/admin/competitors/duplicate-reports/{id}', function (Request $request, Response $response, array $args) use ($pdo, $body): Response {
+            $auth = (array) $request->getAttribute('auth');
+            $data = $body($request);
+            if ((string) ($data['status'] ?? '') !== 'rejected') {
+                return JsonResponder::error($response, 'validation_error', 'Dozwolona zmiana: status = rejected.', 422);
+            }
+            try {
+                $report = (new \ZmierzymyCzas\Domain\Competitors\CompetitorDuplicateReportRepository($pdo))
+                    ->reject((string) ($args['id'] ?? ''), (string) ($auth['sub'] ?? ''), (string) ($data['reason'] ?? ''));
+            } catch (\DomainException $e) {
+                return JsonResponder::error($response, 'report_already_resolved', 'Zgłoszenie zostało już rozstrzygnięte.', 409);
+            }
+            if ($report === null) {
+                return JsonResponder::error($response, 'not_found', 'Zgłoszenie nie istnieje.', 404);
+            }
+
+            return JsonResponder::ok($response, $report);
         })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
 
         // Wykonuje scalenie — albo wstrzymuje je, jeśli brakuje decyzji pole-po-polu

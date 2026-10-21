@@ -86,6 +86,21 @@ final class FormFieldAnswerRepository extends Repository
         return array_map(fn (array $row): array => $this->decodeRow($row) ?? [], $rows);
     }
 
+    /**
+     * R-04: like forRegistration() plus the stable `fieldKey` of the answered field.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function forRegistrationWithKeys(string $registrationId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT a.id, a.form_field_id AS formFieldId, a.value_text AS valueText, a.value_json AS valueJson, f.field_key AS fieldKey '
+            . 'FROM form_field_answers a INNER JOIN form_fields f ON f.id = a.form_field_id WHERE a.registration_id = :registrationId'
+        );
+        $stmt->execute(['registrationId' => $registrationId]);
+        return array_map(fn (array $row): array => $this->decodeRow($row) ?? [], $stmt->fetchAll());
+    }
+
     private function encodeJson(mixed $value): ?string
     {
         return $value === null ? null : json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

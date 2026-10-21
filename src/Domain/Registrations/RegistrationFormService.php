@@ -54,7 +54,8 @@ final class RegistrationFormService extends Repository
         $fieldsRepo = new FormFieldRepository($this->pdo);
         $eventId = (string) $data['eventId'];
         $distanceId = (string) ($data['distanceId'] ?? '');
-        $fields = $fieldsRepo->ensureSystemCatalog($eventId);
+        // R-04: the form of the chosen Dystans (event form + its overrides + its own fields).
+        $fields = $fieldsRepo->effectiveForDistance($eventId, $distanceId);
         $errors = [];
 
         // ── custom fields ────────────────────────────────────────────────

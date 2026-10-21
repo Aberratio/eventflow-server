@@ -4,17 +4,19 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Challenges;
 
+use Psr\Log\LoggerInterface;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Domain\Shop\OrderRepository;
 use ZmierzymyCzas\Support\InputRules;
+use ZmierzymyCzas\Support\Log\LoggerFactory;
 
 final class ChallengeRepository extends Repository
 {
     private const COLUMNS = 'id, name, slug, description, image_url AS imageUrl, series_id AS seriesId, min_completed AS minCompleted, max_time AS maxTime, start_date AS startDate, end_date AS endDate, status, created_by AS createdBy';
     private const STATUSES = ['active', 'completed', 'upcoming', 'archived'];
 
-    /** PP.76: request-body rules for POST/PATCH /challenges (see InputRules). */
+    /** Request-body rules for POST/PATCH /challenges (see InputRules). */
     private const INPUT_RULES = [
         'name' => [InputRules::TEXT_REQUIRED, 'Nazwa wyzwania'],
         'slug' => [InputRules::TEXT_REQUIRED, 'Adres URL (slug) wyzwania'],
@@ -30,12 +32,12 @@ final class ChallengeRepository extends Repository
         'rewards' => [InputRules::LIST_NULLABLE, 'Nagrody wyzwania'],
     ];
     private const ENTRY_STATUSES = ['pending', 'approved', 'rejected'];
-    /** E6.1 condition-tree node types (issue 15 §1). */
+    /** Condition-tree node types. */
     private const NODE_TYPES = ['group', 'event_threshold', 'point_threshold', 'sub_challenge_threshold'];
     private const LEAF_EVENT_NODE_TYPES = ['event_threshold', 'point_threshold'];
 
     /**
-     * E6.3 lazily-built collaborator (issue 15 §3): the full recursive tree
+     * Lazily-built collaborator: the full recursive tree
      * evaluator. Built on first use rather than taken as a constructor
      * argument so every existing call site (`new ChallengeRepository($pdo)`,
      * all over routes.php and the test suite) keeps working unchanged.
@@ -43,7 +45,7 @@ final class ChallengeRepository extends Repository
     private ?ChallengeConditionTreeEvaluator $treeEvaluator = null;
 
     /**
-     * E6.5 (issue 15 §4): lazily-built collaborator, same shape/rationale as
+     * Lazily-built collaborator, same shape/rationale as
      * $treeEvaluator above — claimReward() needs OrderRepository::create() to
      * actually place the reward order, but adding it as a constructor
      * argument would break every existing `new ChallengeRepository($pdo)`
@@ -51,14 +53,21 @@ final class ChallengeRepository extends Repository
      */
     private ?OrderRepository $orders = null;
 
+    /** PSR-3 logger for condition-tree diagnostics; defaults to the error_log-backed fallback. */
+    private readonly LoggerInterface $logger;
+
     /**
-     * G-06b: whether an online gateway (Tpay/PayNow) is configured. Passed on to the
+     * Whether an online gateway (Tpay/PayNow) is configured. Passed on to the
      * OrderRepository used for reward orders so they apply the same payment-method
      * rule as POST /shop/orders (card/BLIK only with a gateway).
      */
-    public function __construct(\PDO $pdo, private readonly bool $onlineGatewayConfigured = true)
-    {
+    public function __construct(
+        \PDO $pdo,
+        private readonly bool $onlineGatewayConfigured = true,
+        ?LoggerInterface $logger = null
+    ) {
         parent::__construct($pdo);
+        $this->logger = $logger ?? LoggerFactory::fallback();
     }
 
     /** @param array<string, mixed> $filters @return array<int, array<string, mixed>> */
@@ -126,11 +135,11 @@ final class ChallengeRepository extends Repository
     /**
      * @param array<string, mixed> $data
      *
-     * E6.2 resync-gap fix (issue 15 §2, gap flagged by E6.1's own
-     * verification): editing a challenge's legacy flat `events` list through
-     * this method used to leave the condition tree (E6.1) untouched unless
+     * Resync-gap fix (a gap found when the condition tree was introduced):
+     * editing a challenge's legacy flat `events` list through
+     * this method used to leave the condition tree untouched unless
      * the caller also sent an explicit `conditionTree` - silently stale once
-     * E6.2 makes the tree's `point_threshold`/`event_threshold` nodes drive
+     * scoring makes the tree's `point_threshold`/`event_threshold` nodes drive
      * real scoring decisions.
      *
      * Chosen fix, scoped deliberately: auto-resync ONLY the unambiguous
@@ -145,7 +154,7 @@ final class ChallengeRepository extends Repository
      * an admin-customized tree "should" follow a flat-list edit would be
      * wrong more often than right. Instead, `hydrate()` always exposes
      * `conditionTreeMatchesEvents` (see below), a plain descriptive flag (not
-     * an alarm) so callers - including E6.3's future full-tree evaluator and
+     * an alarm) so callers - including the full-tree evaluator and
      * the admin UI - can see at a glance whether the tree currently mirrors
      * the flat list, and treat a customized tree's "false" as expected rather
      * than stale.
@@ -218,7 +227,7 @@ final class ChallengeRepository extends Repository
     }
 
     /**
-     * E6.1: reads a challenge's condition tree back as nested JSON (see
+     * Reads a challenge's condition tree back as nested JSON (see
      * hydrateNode() for the exact shape). Returns null only if the challenge
      * has no root node at all, which should not happen for any challenge
      * created after this migration (create() always seeds one) — a legacy
@@ -250,7 +259,7 @@ final class ChallengeRepository extends Repository
     }
 
     /**
-     * E6.1: replaces a challenge's entire condition tree. Public entry point
+     * Replaces a challenge's entire condition tree. Public entry point
      * used by the dedicated tree endpoint; create()/update() go through the
      * *Internal variant below because they already hold the transaction and
      * (for update()) already ran assertValidTree() before starting it.
@@ -404,7 +413,7 @@ final class ChallengeRepository extends Repository
 
     /**
      * Default tree for create(): a single root event_threshold node mirroring
-     * the flat `events` list ("ukończ wszystkie"), exactly the shape the
+     * the flat `events` list ("complete all"), exactly the shape the
      * 054 migration backfills onto pre-existing challenges — keeps the flat
      * creation path (no `conditionTree` in the payload, still what the
      * existing admin UI/tests send) producing a valid, equivalent tree.
@@ -491,7 +500,7 @@ final class ChallengeRepository extends Repository
     private const PARTICIPATION_SELECT = "SELECT cp.id, cp.challenge_id AS challengeId, cp.user_id AS userId, cp.competitor_id AS competitorId, TRIM(CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, ''))) AS competitorName, cp.user_name AS userName, cp.joined_at AS joinedAt, cp.reward_granted AS rewardGranted, cp.reward_granted_at AS rewardGrantedAt, cp.selected_rewards AS selectedRewards, cp.assigned_number AS assignedNumber FROM challenge_participations cp LEFT JOIN competitors c ON c.id = cp.competitor_id";
 
     /**
-     * R-06 (zakres P2): participations are per Zawodnik (`competitor_id`); rows the migration
+     * Participations are per Zawodnik (`competitor_id`); rows the migration
      * could not map keep `competitor_id` NULL and are read by `user_id` (fallback).
      *
      * $userId filters the Konto's own participations (own Zawodnik, or rows with no Zawodnik);
@@ -649,25 +658,25 @@ final class ChallengeRepository extends Repository
         return $this->participationById($id);
     }
     /**
-     * E6.5 (issue 15 §4-5): claims this challenge's reward Product for
-     * $userId — "Uczestnictwo odblokowuje możliwość zakupu powiązanego
-     * Produktu". Gated on the SAME completion check
+     * Claims this challenge's reward Product for
+     * $userId — "participation unlocks the option to buy the linked
+     * Product". Gated on the SAME completion check
      * hydrateParticipation()/checkCompletion() use
-     * (isChallengeCompletedForUser(), E6.3's real condition-tree evaluator —
-     * never a flat rule). Reuses OrderRepository::create() (E5.2/E5.6) for
+     * (isChallengeCompletedForUser(), the real condition-tree evaluator —
+     * never a flat rule). Reuses OrderRepository::create() for
      * the actual order: price, stock/variant-limit enforcement, delivery and
      * payment validation, and the zero-price path (a free reward is simply a
      * Product with price 0 — same order flow, no special case here) all stay
      * the shop's responsibility, not duplicated here.
      *
-     * Double-claim guard (§4-5 leaves the mechanism unspecified — judgment
+     * Double-claim guard (the mechanism is not prescribed — judgment
      * call, documented here): `reward_granted` is flipped 0->1 with a single
      * conditional UPDATE ("claim lock") BEFORE the shop order is created.
      * ChallengeRepository and OrderRepository/ShopRepository don't share one
      * transaction here — OrderRepository::create() opens and manages its own,
      * and nesting a second beginTransaction() on the same PDO connection
      * isn't supported — so true single-transaction atomicity across both
-     * domains would need a larger refactor outside this ticket's scope.
+     * domains would need a larger refactor outside this method's scope.
      * Instead: the conditional UPDATE's affected-row count acts as an atomic
      * compare-and-set lock (two concurrent claims can never both flip 0->1),
      * and if OrderRepository::create() then throws for ANY reason (out of
@@ -677,7 +686,7 @@ final class ChallengeRepository extends Repository
      * challenge's own completion status — computed separately by
      * isChallengeCompletedForUser(), never written by this method — is
      * completely unaffected by a failed or successful claim either way, per
-     * issue 15 §5 ("ukończenie Wyzwania nie znika").
+     * the requirement that completing a Wyzwanie is never undone.
      *
      * @param array<string, mixed> $item deliveryMethod/paymentMethod/shippingAddress/invoiceData/size/color, same shape OrderRepository::create() expects for a single-item cart
      * @return array<string, mixed> the updated participation (see hydrateParticipation())
@@ -755,7 +764,7 @@ final class ChallengeRepository extends Repository
         return $this->participationById($participationId);
     }
 
-    /** Lazily builds the E6.5 order-creation collaborator — see its property doc comment. */
+    /** Lazily builds the reward order-creation collaborator — see its property doc comment. */
     private function orders(): OrderRepository
     {
         if ($this->orders === null) {
@@ -770,7 +779,7 @@ final class ChallengeRepository extends Repository
         $challengeId = (string) ($data['challengeId'] ?? '');
         $userId = (string) ($data['userId'] ?? $actor['sub'] ?? '');
         $eventId = (string) ($data['eventId'] ?? '');
-        // R-06: a manual entry belongs to a Zawodnik - the caller's own, or a ward (the route checks Opieka).
+        // A manual entry belongs to a Zawodnik - the caller's own, or a ward (the route checks Opieka).
         $competitorId = isset($data['competitorId']) && $data['competitorId'] !== '' ? (string) $data['competitorId'] : $this->selfCompetitorId($userId);
         $existing = $this->entryFor($challengeId, $userId, $competitorId, $eventId);
         $payload = [
@@ -809,7 +818,7 @@ final class ChallengeRepository extends Repository
     }
 
     /**
-     * E1.10 mail #13 ("Ukończenie Wyzwania", 17 §1 row 13). Challenge completion
+     * "Challenge completed" mail (Ukończenie Wyzwania). Challenge completion
      * has no discrete write of its own anywhere in this codebase —
      * hydrateParticipation() only *computes* isCompleted on every read (see
      * isChallengeCompletedForUser() below, shared by both). This is the one
@@ -821,7 +830,7 @@ final class ChallengeRepository extends Repository
      * is responsible for actually sending the mail with whatever it gets
      * back here.
      *
-     * E6.3 (issue 15 §3): "completed" is now determined by the real
+     * "completed" is now determined by the real
      * condition tree (ChallengeConditionTreeEvaluator) when the challenge has
      * one, not the legacy flat `rule.minCompleted` count — see
      * isChallengeCompletedForUser()'s doc comment for the fallback rule and
@@ -854,7 +863,7 @@ final class ChallengeRepository extends Repository
     }
 
     /**
-     * E6.3 (issue 15 §3): the single source of truth for "has $userId
+     * The single source of truth for "has $userId
      * completed $challenge", shared by checkCompletion() (the mail-gate) and
      * hydrateParticipation() (the `isCompleted` field returned on every
      * participation read).
@@ -862,7 +871,7 @@ final class ChallengeRepository extends Repository
      * Uses the full recursive condition-tree evaluation
      * (ChallengeConditionTreeEvaluator) when the challenge HAS a tree — which
      * is every challenge created/updated through ChallengeRepository::create()
-     * (it always seeds a default tree) and every pre-E6.1 challenge touched
+     * (it always seeds a default tree) and every pre-condition-tree challenge touched
      * by migration 054's backfill. Falls back to the legacy flat
      * `completedCount >= rule.minCompleted` check ONLY when
      * `getConditionTree()` returns null — a genuinely tree-less row, which in
@@ -871,11 +880,11 @@ final class ChallengeRepository extends Repository
      * do). This fallback is deliberate, not a workaround: a challenge with no
      * tree at all has nothing for the evaluator to walk, and refusing to
      * ever mark it complete would be a silent regression for that legacy
-     * shape rather than the ticket's intended "the tree becomes the real
+     * shape rather than the intended "the tree becomes the real
      * rule".
      *
-     * Stale-tree handling (E6.2's `conditionTreeMatchesEvents` flag, issue 15
-     * §3 point 3): a `false` flag does NOT block automatic evaluation here —
+     * Stale-tree handling (the `conditionTreeMatchesEvents` flag):
+     * a `false` flag does NOT block automatic evaluation here —
      * most of the time it correctly means "deliberately customized tree"
      * (a `group`/`point_threshold`/`sub_challenge_threshold` root, or an
      * event_threshold root with a time window), which is completely expected
@@ -905,7 +914,7 @@ final class ChallengeRepository extends Repository
             && ($tree['windowStart'] ?? null) === null
             && ($tree['windowEnd'] ?? null) === null
         ) {
-            error_log(sprintf(
+            $this->logger->warning(sprintf(
                 '[ChallengeConditionTreeEvaluator] Challenge %s: condition tree looks like the plain default '
                 . '(event_threshold, no window) but no longer matches the flat events list (conditionTreeMatchesEvents=false) '
                 . '— evaluating against the tree as-is; an admin may want to re-check this challenge\'s tree.',
@@ -917,12 +926,12 @@ final class ChallengeRepository extends Repository
         try {
             return $this->treeEvaluator()->evaluateNode($tree, $userId, $memo, 0, (string) $challenge['id'], $competitorId);
         } catch (\RuntimeException $e) {
-            error_log('[ChallengeConditionTreeEvaluator] ' . $e->getMessage());
+            $this->logger->error('[ChallengeConditionTreeEvaluator] ' . $e->getMessage());
             return false;
         }
     }
 
-    /** Lazily builds the E6.3 tree evaluator — see its property doc comment. */
+    /** Lazily builds the tree evaluator — see its property doc comment. */
     private function treeEvaluator(): ChallengeConditionTreeEvaluator
     {
         if ($this->treeEvaluator === null) {
@@ -974,9 +983,9 @@ final class ChallengeRepository extends Repository
         }
         $tree = $this->getConditionTree((string) $row['id']);
         $row['conditionTree'] = $tree;
-        // E6.2 resync-gap guard (see update()'s doc comment): purely
+        // Resync-gap guard (see update()'s doc comment): purely
         // descriptive - true means the tree is still the plain
-        // "ukoncz wszystkie flat Wydarzenia" default shape, false means
+        // "finish all flat Wydarzenia" default shape, false means
         // either it was deliberately customized (expected) or it has
         // genuinely drifted from an `events` edit this repository couldn't
         // safely auto-resync (worth a human glance in the admin UI).
@@ -1000,7 +1009,7 @@ final class ChallengeRepository extends Repository
         $row['entries'] = $entries;
         $row['completedCount'] = count(array_filter($entries, static fn (array $entry): bool => $entry['status'] === 'approved'));
         $challenge = $this->find((string) $row['challengeId']);
-        // E6.3: real tree-based completion (falls back to the flat
+        // Real tree-based completion (falls back to the flat
         // completedCount >= minCompleted rule for tree-less legacy rows —
         // see isChallengeCompletedForUser()'s doc comment).
         $row['isCompleted'] = $challenge !== null && $this->isChallengeCompletedForUser($challenge, (string) $row['userId'], $competitorId);
@@ -1032,14 +1041,14 @@ final class ChallengeRepository extends Repository
     }
 
     /**
-     * G-02 (spec 15 §3): result-derived progress follows the results. Called by the write paths
+     * Result-derived progress follows the results. Called by the write paths
      * that publish or change results of an Event (new result, correction, delete, preliminary /
      * official publication, import commit). Recomputes - for every participant of every Wyzwanie
      * that contains the Event and has a result there (or a result-derived entry left from one) -
      * the result-sourced entries, and returns those participations so the caller can run the
      * idempotent completion check (checkCompletion() + mail #13).
      *
-     * R-06: a participation with a Zawodnik is matched through ChallengeResultOwnership (so a ward's
+     * A participation with a Zawodnik is matched through ChallengeResultOwnership (so a ward's
      * result touches the ward's row, not the caregiver's own); a row without one by `user_id`.
      *
      * @return array<int, array{challengeId: string, userId: string, competitorId: ?string}>
@@ -1083,7 +1092,7 @@ final class ChallengeRepository extends Repository
     }
 
     /**
-     * E1.10 note: this auto-approval path can also cross a challenge's
+     * Note: this auto-approval path can also cross a challenge's
      * completion threshold, but checkCompletion() is deliberately not called
      * from *this* method — it also runs from participations(), a GET
      * endpoint, and a mail send should never be a side effect of a read.
@@ -1096,7 +1105,7 @@ final class ChallengeRepository extends Repository
      */
     private function syncResultEntries(string $challengeId, string $userId, ?string $competitorId = null): void
     {
-        // R-06: with a Zawodnik, progress comes from that Zawodnik's results (ChallengeResultOwnership);
+        // With a Zawodnik, progress comes from that Zawodnik's results (ChallengeResultOwnership);
         // without one (Konto with no profile) from the Konto's own results, as before.
         if ($competitorId !== null) {
             $stmt = $this->pdo->prepare("SELECT r.event_id AS eventId, r.time, r.position FROM results r" . ChallengeResultOwnership::JOINS . " INNER JOIN challenge_events ce ON ce.event_id = r.event_id WHERE ce.challenge_id = :challengeId AND " . ChallengeResultOwnership::COMPETITOR_EXPR . " = :competitorId AND r.status = 'finished'");
@@ -1126,7 +1135,7 @@ final class ChallengeRepository extends Repository
                 'source' => 'result',
             ]);
         }
-        // G-02: a correction (or deletion) can take a result out of "finished"; the entry it
+        // A correction (or deletion) can take a result out of "finished"; the entry it
         // produced must go with it. Only system-derived entries are touched - a manual entry
         // approved by a reviewer stays.
         if ($competitorId !== null) {

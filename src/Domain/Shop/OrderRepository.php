@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Repository;
 
 final class OrderRepository extends Repository
 {
-    /** PP.17: column list shared by the buyer-scoped reads (same as find()). */
+    /** Column list shared by the buyer-scoped reads (same as find()). */
     private const ORDER_COLUMNS = "o.id, o.order_number AS orderNumber, o.user_id AS userId, o.status,
         o.product_total AS productTotal, o.delivery_price AS deliveryPrice,
         o.payment_surcharge AS paymentSurcharge, o.price_adjustment AS priceAdjustment,
@@ -22,12 +22,12 @@ final class OrderRepository extends Repository
     private const JSON_FIELDS = ['deliveryMethod', 'paymentMethod', 'shippingAddress', 'invoiceData', 'history'];
 
     /**
-     * E5.2: authoritative delivery-method catalog, mirrored from the hardcoded
+     * Authoritative delivery-method catalog, mirrored from the hardcoded
      * list the GET /shop/delivery-methods route returns (routes.php, ~line
      * 2080) — kept as a second copy on purpose rather than reaching into
-     * routes.php from a Domain class; the TODO above that route already
-     * documents the real fix (move both catalogs into the database), at which
-     * point this becomes a repository call instead of a constant. A checkout
+     * routes.php from a Domain class. Design note: both catalogs belong in the
+     * database eventually, at which point this becomes a repository call
+     * instead of a constant. A checkout
      * request's client-submitted price for its chosen method is never trusted
      * — only the `id` is read; the price always comes from here.
      */
@@ -38,11 +38,11 @@ final class OrderRepository extends Repository
     ];
 
     /**
-     * E5.3: the two delivery methods that ship to a physical shipping
-     * address (spec issue 16 §5 — "kurier/paczkomat (adres z koszyka)").
-     * `pickup` (odbior osobisty w Biurze Zawodow, ticket E5.4) never needs
-     * one, and an organizer-package purchase (a digital product — spec §5,
-     * "nie przechodzi przez zadna z nich") isn't wired to a delivery method
+     * The two delivery methods that ship to a physical shipping
+     * address ("kurier/paczkomat", address taken from the cart).
+     * `pickup` (personal pickup at the Biuro Zawodów) never needs
+     * one, and an organizer-package purchase (a digital product that
+     * goes through none of them) isn't wired to a delivery method
      * at all yet, so this check is deliberately keyed off the *selected
      * delivery method*, not the product type: it only ever fires for an
      * order that actually chose courier/paczkomat, never unconditionally.
@@ -57,21 +57,21 @@ final class OrderRepository extends Repository
     ];
 
     /**
-     * E5.6 (issue 16 §2): the "pakiet organizatora" digital product is a real
-     * `shop_products` catalog row (ShopRepository, E5.1) flagged via the
+     * The "pakiet organizatora" digital product is a real
+     * `shop_products` catalog row (ShopRepository) flagged via the
      * pre-existing `service_kind` column (001_init.sql, previously unused by
      * any application logic) rather than a new column — a service-shaped
      * product ("no stock, no shipping") already fit the concept exactly.
      * Ordering one grants `quantity` credits on the buyer's
      * `users.organizer_package_credits` counter (migration 053) instead of/
      * alongside a physical line item; it never carries a delivery method
-     * (§5, "nie przechodzi przez zadna z nich" — see isDigitalOnlyCart()
+     * (it goes through no delivery method — see isDigitalOnlyCart()
      * below).
      */
     private const SERVICE_KIND_ORGANIZER_PACKAGE = 'organizer_package';
 
     /**
-     * PP.105 (owner decision Q3): an organizer-package order line may hold at most this many
+     * An organizer-package order line may hold at most this many
      * packages. The raw request value is validated, so 1000 can never be clamped into a grant.
      */
     private const MAX_ORGANIZER_PACKAGES_PER_LINE = 10;
@@ -80,7 +80,7 @@ final class OrderRepository extends Repository
     private const ORDER_STATUSES = ['pending', 'paid', 'shipped', 'delivered', 'cancelled', 'refunded'];
 
     /**
-     * PP.105: the server-side truth for shop order status moves (matches the moderator UI
+     * The server-side truth for shop order status moves (matches the moderator UI
      * pending -> paid -> shipped -> delivered, plus cancel/refund). `cancelled` and `refunded`
      * are terminal. A digital-only order may go paid -> delivered directly.
      */
@@ -98,7 +98,7 @@ final class OrderRepository extends Repository
     private ShopRepository $shop;
 
     /**
-     * @param bool $onlineGatewayConfigured G-06b: whether Tpay or PayNow is configured; when false,
+     * @param bool $onlineGatewayConfigured Whether Tpay or PayNow is configured; when false,
      *        create() refuses card/BLIK exactly as GET /shop/payment-methods hides them. Defaults to
      *        true so internal callers that build their own repository (the challenge-reward order)
      *        keep the whole catalog; the HTTP wiring in routes.php passes the real value.
@@ -139,7 +139,7 @@ final class OrderRepository extends Repository
         $stmt->execute($params);
         $orders = array_map(fn (array $row): array => $this->hydrateOrder($row), $stmt->fetchAll());
 
-        // PP.105: the staff list (the only UI path to mark an order paid) needs items[] like every other
+        // The staff list (the only UI path to mark an order paid) needs items[] like every other
         // order read; one query for the whole page instead of one per order.
         if ($orders !== []) {
             $ids = array_map(static fn (array $order): string => (string) $order['id'], $orders);
@@ -182,7 +182,7 @@ final class OrderRepository extends Repository
         return $row ? $this->withItems($this->hydrateOrder($row)) : null;
     }
 
-    /** PP.17: the caller's own orders, newest first, each with items[]. $userId MUST be auth.sub. */
+    /** The caller's own orders, newest first, each with items[]. $userId MUST be auth.sub. */
     public function listForUser(string $userId): array
     {
         if ($userId === '') {
@@ -196,7 +196,7 @@ final class OrderRepository extends Repository
         return array_map(fn (array $row): array => $this->withItems($this->hydrateOrder($row)), $stmt->fetchAll());
     }
 
-    /** PP.17: one order iff it belongs to $userId; a foreign id and a missing id are both null (no oracle). */
+    /** One order iff it belongs to $userId; a foreign id and a missing id are both null (no oracle). */
     public function findForUser(string $id, string $userId): ?array
     {
         if ($userId === '') {
@@ -212,14 +212,14 @@ final class OrderRepository extends Repository
     }
 
     /**
-     * E5.2: closes the "client controls its own order" bug — `$userId` must
+     * Closes the "client controls its own order" bug — `$userId` must
      * come from the caller's JWT (routes.php passes `auth.sub`, never
      * anything the request body says under `userId`), and every price in the
      * persisted order is recomputed here from the authoritative catalog:
      * `items[].price` from ShopRepository, delivery/payment prices from the
      * hardcoded catalogs above, `priceAdjustment` always 0 (staff-only, set
      * later via update() — a customer checkout never gets one). Mirrors
-     * RegistrationRepository::create() (E1.3) for the same
+     * RegistrationRepository::create() for the same
      * lock-check-decrement-inside-one-transaction shape, just with a shop
      * product's stock_count standing in for a Dystans's registeredCount.
      *
@@ -233,9 +233,9 @@ final class OrderRepository extends Repository
 
         $requestedItems = array_map(static fn ($item): array => (array) $item, (array) ($data['items'] ?? []));
 
-        // E5.6: a cart made up entirely of digital (isService) products — e.g. the
+        // A cart made up entirely of digital (isService) products — e.g. the
         // "pakiet organizatora" — never goes through a delivery method at all
-        // (issue 16 §2/§5), so the usual "delivery method is required" check
+        //, so the usual "delivery method is required" check
         // (below) doesn't apply to it. This is an unlocked pre-check purely to
         // decide *whether* a delivery method is required; the authoritative
         // product data used for pricing/stock/credit-granting is always the
@@ -244,7 +244,7 @@ final class OrderRepository extends Repository
 
         $deliveryMethod = null;
         $deliveryPrice = 0.0;
-        // G-06b: only a method the shop really offers (availablePaymentMethods()), not the whole catalog.
+        // Only a method the shop really offers (availablePaymentMethods()), not the whole catalog.
         $offered = array_column($this->availablePaymentMethods($this->onlineGatewayConfigured), 'id');
         $paymentMethod = $this->resolveMethod(
             (array) ($data['paymentMethod'] ?? []),
@@ -262,11 +262,11 @@ final class OrderRepository extends Repository
             }
         }
 
-        // E5.5: "chce fakture" is signalled by sending invoiceData at all —
+        // "chce fakture" is signalled by sending invoiceData at all —
         // same pattern as shippingAddress, no separate boolean column. An
-        // order that omits it entirely (the pre-E5.5 default: plain
+        // order that omits it entirely (the default: plain
         // receipt) never touches this and stays byte-for-byte backward
-        // compatible with E5.2/E5.3/E5.4.
+        // compatible.
         if (isset($data['invoiceData'])) {
             $this->validateInvoiceData((array) $data['invoiceData']);
         }
@@ -280,7 +280,7 @@ final class OrderRepository extends Repository
                 $rawQuantity = $item['quantity'] ?? 1;
                 $quantity = max(1, (int) $rawQuantity);
 
-                // E1.3-style row lock: locks this shop_products row for the rest of
+                // Row lock (same pattern as registrations): locks this shop_products row for the rest of
                 // this transaction so a concurrent order against the same product
                 // can never race the stock check/decrement below.
                 $product = $this->shop->lockProductForOrder($productId);
@@ -294,7 +294,7 @@ final class OrderRepository extends Repository
                 if (!$product['inStock']) {
                     throw new \RuntimeException('order_out_of_stock');
                 }
-                // PP.105: an organizer package line is capped on the RAW request value (before the
+                // An organizer package line is capped on the RAW request value (before the
                 // max(1, ...) clamp above), so 0 / -5 / 1000 / "abc" never turn into a grant.
                 $isPackage = ($product['serviceKind'] ?? null) === self::SERVICE_KIND_ORGANIZER_PACKAGE;
                 if ($isPackage && !$this->isValidPackageQuantity($rawQuantity)) {
@@ -307,7 +307,7 @@ final class OrderRepository extends Repository
                     $this->decrementStock($productId, $quantity);
                 }
 
-                // PP.105: nothing is granted here. An organizer package grants credits, the role and an
+                // Nothing is granted here. An organizer package grants credits, the role and an
                 // event slot only when the order becomes `paid` (changeStatus()).
 
                 $price = (float) $product['price'];
@@ -330,12 +330,12 @@ final class OrderRepository extends Repository
                 'product_total' => $productTotal,
                 'delivery_price' => $deliveryPrice,
                 'payment_surcharge' => $paymentSurcharge,
-                // Customers don't set price adjustments at checkout (E5.2 scope) —
+                // Customers don't set price adjustments at checkout —
                 // that lever stays staff-only, applied afterwards via update().
                 'price_adjustment' => 0.0,
                 'total_price' => $productTotal + $deliveryPrice + $paymentSurcharge,
                 // `delivery_method` is NOT NULL (019_shop_orders.sql, default '{}')
-                // — a digital-only order (no delivery method at all, E5.6) persists
+                // — a digital-only order (no delivery method at all) persists
                 // the same empty-object sentinel the column already defaults to,
                 // rather than widening the column to nullable.
                 'delivery_method' => json_encode($deliveryMethod ?? (object) [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
@@ -364,7 +364,7 @@ final class OrderRepository extends Repository
     }
 
     /**
-     * E5.6: true only when every requested item resolves to an active,
+     * True only when every requested item resolves to an active,
      * `isService` product (an unlocked read — see create()'s call site for why
      * that's fine here). An empty/all-invalid cart is never treated as
      * "digital-only" by this method; create()'s caller already guards that
@@ -406,7 +406,7 @@ final class OrderRepository extends Repository
      * @return array<string, mixed>
      */
     /**
-     * G-06: the payment methods the shop can really take, as `{id, name}` rows.
+     * The payment methods the shop can really take, as `{id, name}` rows.
      * Card and BLIK are online-gateway methods, so they are offered only when a
      * gateway (Tpay or PayNow) is configured; bank transfer needs no gateway.
      * Same catalog as create() accepts (PAYMENT_METHODS).
@@ -437,7 +437,7 @@ final class OrderRepository extends Repository
     }
 
     /**
-     * E5.3: courier/paczkomat require a shipping address in the same shape
+     * Courier/paczkomat require a shipping address in the same shape
      * as the client's `ShopOrderAddress` (fullName/street/city/postalCode,
      * optional phone; paczkomatId in place of street/city for a paczkomat
      * pickup point). Mirrors the client's own mirrored validation — this is
@@ -462,20 +462,20 @@ final class OrderRepository extends Repository
     }
 
     /**
-     * E5.5: invoice data (spec issue 16 pkt 1 — "dane adresowe, faktura z
-     * NIP"; SS6 — "dane do faktury" is part of the minimal required shop
+     * Invoice data ("dane adresowe, faktura z
+     * NIP"; "dane do faktury" is part of the minimal required shop
      * scope). Data capture only, no document is generated here (explicitly
-     * out of scope, see issue 16). Required whenever the client sends
+     * out of scope). Required whenever the client sends
      * invoiceData at all — companyName, a well-formed NIP, and a billing
      * address in the same street/city/postalCode shape as
      * validateShippingAddress() above, for the same reason: one address
      * shape across the order, not two independently-evolving ones.
      *
-     * NIP format gets its own error code (order_invalid_nip) per the
-     * ticket's request for "a clear error code on malformed NIP" — every
+     * NIP format gets its own error code (order_invalid_nip) as a
+     * clear error code on malformed NIP — every
      * other missing/invalid invoice field falls under order_invalid_invoice_data,
      * mirroring how order_invalid_address covers the whole shipping-address
-     * shape in E5.3.
+     * shape.
      *
      * @param array<string, mixed> $invoice
      */
@@ -528,8 +528,8 @@ final class OrderRepository extends Repository
      * the transactional stock check (the read side is
      * ShopRepository::lockProductForOrder() + the stockCount comparison in
      * create()). The WHERE clause is redundant with the row lock already held
-     * by the caller under normal operation, but matches E1.3's
-     * incrementRegisteredCount() belt-and-braces pattern.
+     * by the caller under normal operation, but matches the
+     * registrations incrementRegisteredCount() belt-and-braces pattern.
      */
     private function decrementStock(string $productId, int $quantity): void
     {
@@ -547,7 +547,7 @@ final class OrderRepository extends Repository
     }
 
     /**
-     * PP.105: THE ONLY DOOR INTO `paid` (and into cancelled/refunded) for shop orders. A future
+     * THE ONLY DOOR INTO `paid` (and into cancelled/refunded) for shop orders. A future
      * payment gateway webhook must call this method too. Until then "paid" is a staff confirmation
      * (PATCH /shop/orders/{id}/status, or the `status` key of PATCH /shop/orders/{id}).
      *
@@ -628,11 +628,11 @@ final class OrderRepository extends Repository
     }
 
     /**
-     * PP.105: what a paid organizer package gives the buyer, all inside changeStatus()'s transaction:
+     * What a paid organizer package gives the buyer, all inside changeStatus()'s transaction:
      * `quantity` credits (spent at Draft -> Submitted), the Organizator role for a plain participant
-     * (role + token_version bump in ONE statement, the PP.70 pattern: the old-role session ends and
+     * (role + token_version bump in ONE statement: the old-role session ends and
      * the buyer logs in again), and `quantity` event slots (`users.event_limit`, only meaningful for
-     * role organizer - issue 16 §2 "prawo do jednego wydarzenia", drafts are free). Staff roles and
+     * role organizer - "prawo do jednego wydarzenia", drafts are free). Staff roles and
      * existing organizers keep their role and session; staff get credits only.
      */
     private function applyOrganizerPackageGrant(string $userId, int $quantity): void
@@ -651,7 +651,7 @@ final class OrderRepository extends Repository
     }
 
     /**
-     * PP.105 (owner decision Q2): cancel/refund of a paid, granted order takes back only what is
+     * Cancel/refund of a paid, granted order takes back only what is
      * still unused - credits (a spent credit is a submitted event) and event slots (never below the
      * events the organizer already has). The role is never demoted automatically.
      */

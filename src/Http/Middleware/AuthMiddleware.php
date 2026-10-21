@@ -17,7 +17,7 @@ final class AuthMiddleware implements MiddlewareInterface
 {
     /**
      * @param array<int, string> $roles
-     * @param (\Closure(array<string, mixed>): bool)|null $alsoAllow R-01: a second way in for a caller whose role is
+     * @param (\Closure(array<string, mixed>): bool)|null $alsoAllow a second way in for a caller whose role is
      *        not listed (e.g. an Event Team member of any global role); the route still checks the concrete Event.
      */
     public function __construct(
@@ -42,7 +42,7 @@ final class AuthMiddleware implements MiddlewareInterface
 
         $role = (string) ($claims['role'] ?? '');
         if ($this->roles !== [] && !$this->isAllowed($role) && !($this->alsoAllow !== null && ($this->alsoAllow)($claims))) {
-            return JsonResponder::error(new SlimResponse(), 'forbidden', 'Nie masz uprawnień do wykonania tej operacji.', 403);
+            return JsonResponder::forbidden(new SlimResponse());
         }
 
         return $handler->handle($request->withAttribute('auth', $claims));

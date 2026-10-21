@@ -51,6 +51,12 @@ final class JsonResponder
         return self::json($response, $payload, $status);
     }
 
+    /** 403 with the standard "no permission" message unless a more specific one is given. */
+    public static function forbidden(Response $response, ?string $message = null): Response
+    {
+        return self::error($response, 'forbidden', $message ?? 'Nie masz uprawnień do wykonania tej operacji.', 403);
+    }
+
     /**
      * @param array<string, mixed> $payload
      */

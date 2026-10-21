@@ -8,6 +8,8 @@ use PDO;
 use ZmierzymyCzas\Domain\Admin\AdminRepository;
 use ZmierzymyCzas\Domain\Care\CareRepository;
 use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
+use ZmierzymyCzas\Domain\Errors\Conflict;
+use ZmierzymyCzas\Domain\Errors\NotFound;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Results\ResultRepository;
 
@@ -68,7 +70,7 @@ final class CompetitorMergeService
         $a = $this->competitors->find($idA);
         $b = $this->competitors->find($idB);
         if ($a === null || $b === null) {
-            throw new \RuntimeException('competitor_not_found');
+            throw new NotFound('competitor_not_found');
         }
 
         return [
@@ -154,10 +156,10 @@ final class CompetitorMergeService
         $survivor = $this->competitors->find($survivorId);
         $absorbed = $this->competitors->find($absorbedId);
         if ($survivor === null || $absorbed === null) {
-            throw new \RuntimeException('competitor_not_found');
+            throw new NotFound('competitor_not_found');
         }
         if (($survivor['status'] ?? 'active') !== 'active' || ($absorbed['status'] ?? 'active') !== 'active') {
-            throw new \RuntimeException('competitor_already_merged');
+            throw new Conflict('competitor_already_merged');
         }
 
         $missingDecisions = $this->missingFieldDecisions($survivor, $absorbed, $fieldDecisions);

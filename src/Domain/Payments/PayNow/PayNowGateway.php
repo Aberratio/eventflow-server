@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Payments\PayNow;
 
+use ZmierzymyCzas\Domain\Errors\Internal;
 use ZmierzymyCzas\Domain\Payments\Http\HttpClientInterface;
 use ZmierzymyCzas\Domain\Payments\Http\HttpResponse;
 use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
@@ -75,7 +76,7 @@ final class PayNowGateway implements PaymentGatewayInterface
         $transactionId = (string) ($decoded['paymentId'] ?? '');
         $redirectUrl = (string) ($decoded['redirectUrl'] ?? '');
         if ($transactionId === '' || $redirectUrl === '') {
-            throw new \RuntimeException('paynow_start_session_malformed_response');
+            throw new Internal('paynow_start_session_malformed_response');
         }
 
         return ['transactionId' => $transactionId, 'redirectUrl' => $redirectUrl];

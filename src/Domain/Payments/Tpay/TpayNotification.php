@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Payments\Tpay;
 
+use ZmierzymyCzas\Domain\Errors\InvalidInput;
 use ZmierzymyCzas\Domain\Payments\GatewayAmount;
 
 /**
@@ -30,7 +31,7 @@ final class TpayNotification
 
         $transactionId = (string) ($fields['transactionId'] ?? $fields['tr_id'] ?? '');
         if ($transactionId === '') {
-            throw new \RuntimeException('tpay_notification_missing_transaction_id');
+            throw new InvalidInput('tpay_notification_missing_transaction_id');
         }
 
         $statusValue = strtolower(trim((string) ($fields['transactionStatus'] ?? $fields['tr_status'] ?? '')));

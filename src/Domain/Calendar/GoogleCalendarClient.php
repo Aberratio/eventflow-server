@@ -6,6 +6,7 @@ namespace ZmierzymyCzas\Domain\Calendar;
 
 use Firebase\JWT\JWT;
 use ZmierzymyCzas\Domain\Bz\Http\HttpClientInterface;
+use ZmierzymyCzas\Domain\Errors\Internal;
 
 /**
  * Real HTTP client: OAuth2 JWT bearer grant for a service account (RS256), then the Calendar API.
@@ -31,7 +32,7 @@ final class GoogleCalendarClient implements GoogleCalendarClientInterface
         $response = $this->api('POST', $this->eventsUrl($calendarId), $event);
         $id = (string) ($response['id'] ?? '');
         if ($id === '') {
-            throw new \RuntimeException('google_calendar_missing_event_id');
+            throw new Internal('google_calendar_missing_event_id');
         }
 
         return $id;
@@ -101,7 +102,7 @@ final class GoogleCalendarClient implements GoogleCalendarClientInterface
         $data = json_decode($response->body, true);
         $token = is_array($data) ? (string) ($data['access_token'] ?? '') : '';
         if ($token === '') {
-            throw new \RuntimeException('google_calendar_token_missing');
+            throw new Internal('google_calendar_token_missing');
         }
         $this->accessToken = $token;
         $this->accessTokenExpiresAt = $now + (int) ($data['expires_in'] ?? 3600);

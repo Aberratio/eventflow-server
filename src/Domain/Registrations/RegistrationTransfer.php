@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Registrations;
 
+use ZmierzymyCzas\Domain\Errors\Conflict;
+use ZmierzymyCzas\Domain\Errors\InvalidInput;
+use ZmierzymyCzas\Domain\Errors\NotFound;
 use ZmierzymyCzas\Support\InputValidationException;
 
 /**
@@ -33,14 +36,14 @@ trait RegistrationTransfer
         try {
             $locked = $this->lockRegistration($id);
             if ($locked === null) {
-                throw new \RuntimeException('registration_not_found');
+                throw new NotFound('registration_not_found');
             }
             $registration = (array) $this->find($id);
             if (!in_array((string) $locked['status'], ['pending', 'confirmed'], true)) {
-                throw new \RuntimeException('transfer_registration_inactive');
+                throw new Conflict('transfer_registration_inactive');
             }
             if (($registration['teamId'] ?? null) !== null && (string) $registration['teamId'] !== '') {
-                throw new \RuntimeException('transfer_team_registration');
+                throw new Conflict('transfer_team_registration');
             }
             $info = $this->pdo->prepare(
                 'SELECT d.age_categories AS ageCategories, d.categories AS categories, d.special_categories AS specialCategories
@@ -49,7 +52,7 @@ trait RegistrationTransfer
             $info->execute(['eventId' => $locked['eventId'], 'distanceId' => $locked['distanceId']]);
             $distanceRow = $info->fetch();
             if (!$distanceRow) {
-                throw new \RuntimeException('registration_distance_invalid');
+                throw new InvalidInput('registration_distance_invalid');
             }
 
             $oldItems = $this->settlementItems($id);

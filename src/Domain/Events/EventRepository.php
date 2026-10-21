@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Events;
 
 use Psr\Log\LoggerInterface;
+use ZmierzymyCzas\Domain\Errors\Conflict;
 use ZmierzymyCzas\Domain\Registrations\BibNumberService;
 use ZmierzymyCzas\Domain\Registrations\SelfServicePolicy;
 use ZmierzymyCzas\Domain\Repository;
@@ -436,7 +437,7 @@ SQL;
             return null;
         }
 
-        throw new \RuntimeException('invalid_status_transition');
+        throw new Conflict('invalid_status_transition');
     }
 
     /**
@@ -641,7 +642,7 @@ SQL;
     {
         $used = $this->activeEventCount($organizerId);
         if ($limit < $used) {
-            throw new \RuntimeException('event_limit_below_usage');
+            throw new Conflict('event_limit_below_usage');
         }
 
         $this->pdo->prepare('UPDATE users SET event_limit = :limit WHERE id = :organizerId AND role = :role')
@@ -1020,7 +1021,7 @@ SQL;
         $stmt->execute(['organizerId' => $organizerId, 'kind' => $kind, 'now' => date(DATE_ATOM)]);
         $batch = $stmt->fetch();
         if (!$batch) {
-            throw new \RuntimeException('no_event_credits');
+            throw new Conflict('no_event_credits');
         }
 
         $this->pdo->prepare('UPDATE organizer_event_credit_batches SET used_count = used_count + 1 WHERE id = :id')->execute(['id' => $batch['id']]);
@@ -1100,7 +1101,7 @@ SQL;
     {
         $limit = $this->eventLimit($organizerId);
         if ($limit['used'] >= $limit['limit']) {
-            throw new \RuntimeException('event_limit_exceeded');
+            throw new Conflict('event_limit_exceeded');
         }
     }
 
@@ -1121,7 +1122,7 @@ SQL;
         );
         $stmt->execute(['organizerId' => $organizerId]);
         if ($stmt->rowCount() !== 1) {
-            throw new \RuntimeException('event_submit_no_organizer_credit');
+            throw new Conflict('event_submit_no_organizer_credit');
         }
     }
 

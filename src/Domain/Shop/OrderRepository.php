@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Shop;
 
+use ZmierzymyCzas\Domain\Errors\Conflict;
+use ZmierzymyCzas\Domain\Errors\InvalidInput;
+use ZmierzymyCzas\Domain\Errors\NotFound;
 use ZmierzymyCzas\Domain\Repository;
 
 final class OrderRepository extends Repository
@@ -285,24 +288,24 @@ final class OrderRepository extends Repository
                 // can never race the stock check/decrement below.
                 $product = $this->shop->lockProductForOrder($productId);
                 if ($product === null || ($product['status'] ?? 'active') !== 'active') {
-                    throw new \RuntimeException('order_invalid_product');
+                    throw new InvalidInput('order_invalid_product');
                 }
                 // inStock=false is a hard stop regardless of stockCount — distinct
                 // code from the stockCount check below so the client can tell "this
                 // item is off the shelf entirely" from "you asked for more than we
                 // have left".
                 if (!$product['inStock']) {
-                    throw new \RuntimeException('order_out_of_stock');
+                    throw new Conflict('order_out_of_stock');
                 }
                 // An organizer package line is capped on the RAW request value (before the
                 // max(1, ...) clamp above), so 0 / -5 / 1000 / "abc" never turn into a grant.
                 $isPackage = ($product['serviceKind'] ?? null) === self::SERVICE_KIND_ORGANIZER_PACKAGE;
                 if ($isPackage && !$this->isValidPackageQuantity($rawQuantity)) {
-                    throw new \RuntimeException('order_invalid_quantity');
+                    throw new InvalidInput('order_invalid_quantity');
                 }
                 if ($product['stockCount'] !== null) {
                     if ($quantity > (int) $product['stockCount']) {
-                        throw new \RuntimeException('order_insufficient_stock');
+                        throw new Conflict('order_insufficient_stock');
                     }
                     $this->decrementStock($productId, $quantity);
                 }
@@ -450,14 +453,14 @@ final class OrderRepository extends Repository
         $required = ['fullName', 'street', 'city', 'postalCode'];
         foreach ($required as $field) {
             if (trim((string) ($address[$field] ?? '')) === '') {
-                throw new \RuntimeException('order_invalid_address');
+                throw new InvalidInput('order_invalid_address');
             }
         }
         if (!preg_match('/^\d{2}-\d{3}$/', (string) $address['postalCode'])) {
-            throw new \RuntimeException('order_invalid_address');
+            throw new InvalidInput('order_invalid_address');
         }
         if ($deliveryMethodId === 'paczkomat' && trim((string) ($address['paczkomatId'] ?? '')) === '') {
-            throw new \RuntimeException('order_invalid_address');
+            throw new InvalidInput('order_invalid_address');
         }
     }
 
@@ -482,17 +485,17 @@ final class OrderRepository extends Repository
     private function validateInvoiceData(array $invoice): void
     {
         if (trim((string) ($invoice['companyName'] ?? '')) === '') {
-            throw new \RuntimeException('order_invalid_invoice_data');
+            throw new InvalidInput('order_invalid_invoice_data');
         }
 
         $required = ['street', 'city', 'postalCode'];
         foreach ($required as $field) {
             if (trim((string) ($invoice[$field] ?? '')) === '') {
-                throw new \RuntimeException('order_invalid_invoice_data');
+                throw new InvalidInput('order_invalid_invoice_data');
             }
         }
         if (!preg_match('/^\d{2}-\d{3}$/', (string) $invoice['postalCode'])) {
-            throw new \RuntimeException('order_invalid_invoice_data');
+            throw new InvalidInput('order_invalid_invoice_data');
         }
 
         $this->validateNip((string) ($invoice['nip'] ?? ''));
@@ -509,7 +512,7 @@ final class OrderRepository extends Repository
     {
         $digits = preg_replace('/[\s-]/', '', $nip) ?? '';
         if (!preg_match('/^\d{10}$/', $digits)) {
-            throw new \RuntimeException('order_invalid_nip');
+            throw new InvalidInput('order_invalid_nip');
         }
 
         $weights = [6, 5, 7, 2, 3, 4, 5, 6, 7];
@@ -519,7 +522,7 @@ final class OrderRepository extends Repository
         }
         $checksum = $sum % 11;
         if ($checksum === 10 || $checksum !== (int) $digits[9]) {
-            throw new \RuntimeException('order_invalid_nip');
+            throw new InvalidInput('order_invalid_nip');
         }
     }
 
@@ -542,7 +545,7 @@ final class OrderRepository extends Repository
         );
         $stmt->execute(['qty1' => $quantity, 'id' => $productId, 'qty2' => $quantity]);
         if ($stmt->rowCount() !== 1) {
-            throw new \RuntimeException('order_insufficient_stock');
+            throw new Conflict('order_insufficient_stock');
         }
     }
 
@@ -561,7 +564,7 @@ final class OrderRepository extends Repository
     public function changeStatus(string $id, string $newStatus, ?string $trackingNumber = null): array
     {
         if (!in_array($newStatus, self::ORDER_STATUSES, true)) {
-            throw new \RuntimeException('order_invalid_status');
+            throw new InvalidInput('order_invalid_status');
         }
 
         $this->pdo->beginTransaction();
@@ -572,7 +575,7 @@ final class OrderRepository extends Repository
             $stmt->execute(['id' => $id]);
             $row = $stmt->fetch();
             if (!is_array($row)) {
-                throw new \RuntimeException('order_not_found');
+                throw new NotFound('order_not_found');
             }
 
             $current = (string) $row['status'];
@@ -580,7 +583,7 @@ final class OrderRepository extends Repository
                 // shipped -> shipped keeps the "numer przesyłki" correction flow working.
                 || ($current === 'shipped' && $newStatus === 'shipped' && $trackingNumber !== null);
             if (!$allowed) {
-                throw new \RuntimeException('order_invalid_transition');
+                throw new Conflict('order_invalid_transition');
             }
 
             $fields = 'status = :status';

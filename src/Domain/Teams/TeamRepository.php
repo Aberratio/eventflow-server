@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Teams;
 
+use ZmierzymyCzas\Domain\Errors\Conflict;
+use ZmierzymyCzas\Domain\Errors\Forbidden;
+use ZmierzymyCzas\Domain\Errors\InvalidInput;
+use ZmierzymyCzas\Domain\Errors\NotFound;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
@@ -166,13 +170,13 @@ final class TeamRepository extends Repository
     {
         $team = $this->find($teamId);
         if ($team === null) {
-            throw new \RuntimeException('team_not_found');
+            throw new NotFound('team_not_found');
         }
         if (!self::isCaptain($team, $requestingUserId)) {
-            throw new \RuntimeException('team_not_captain');
+            throw new Forbidden('team_not_captain');
         }
         if ($this->eventHasStarted((string) $team['eventId'])) {
-            throw new \RuntimeException('team_special_category_locked');
+            throw new Conflict('team_special_category_locked');
         }
 
         $value = $specialCategory !== null && trim($specialCategory) !== '' ? trim($specialCategory) : null;
@@ -242,7 +246,7 @@ final class TeamRepository extends Repository
         }
         $names = array_map(static fn (array $c): string => (string) ($c['name'] ?? ''), $configured);
         if (!in_array($value, $names, true)) {
-            throw new \RuntimeException('team_special_category_invalid');
+            throw new InvalidInput('team_special_category_invalid');
         }
     }
 

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Support;
 
 use Psr\Http\Message\UploadedFileInterface;
-use RuntimeException;
+use ZmierzymyCzas\Domain\Errors\InvalidInput;
 
 final class UploadedFileStorage
 {
@@ -55,12 +55,12 @@ final class UploadedFileStorage
     public function storeImage(UploadedFileInterface $file, string $folder = 'events'): array
     {
         if ($file->getError() !== UPLOAD_ERR_OK) {
-            throw new RuntimeException('upload_failed');
+            throw new InvalidInput('upload_failed');
         }
 
         $size = $file->getSize() ?? 0;
         if ($size <= 0 || $size > $this->maxBytes) {
-            throw new RuntimeException('file_too_large');
+            throw new InvalidInput('file_too_large');
         }
 
         $clientMimeType = strtolower((string) $file->getClientMediaType());
@@ -69,14 +69,14 @@ final class UploadedFileStorage
             && $clientMimeType !== 'application/octet-stream'
             && !array_key_exists($clientMimeType, self::EXTENSIONS)
         ) {
-            throw new RuntimeException('unsupported_file_type');
+            throw new InvalidInput('unsupported_file_type');
         }
 
         $folder = trim(preg_replace('/[^a-z0-9_-]+/i', '-', $folder) ?? 'events', '-');
         $folder = $folder === '' ? 'events' : $folder;
         $targetDir = rtrim($this->storageDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $folder;
         if (!is_dir($targetDir) && !mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
-            throw new RuntimeException('upload_dir_unavailable');
+            throw new InvalidInput('upload_dir_unavailable');
         }
 
         $basename = bin2hex(random_bytes(16));
@@ -86,37 +86,37 @@ final class UploadedFileStorage
         $storedSize = filesize($tempPath) ?: $size;
         if ($storedSize <= 0 || $storedSize > $this->maxBytes) {
             @unlink($tempPath);
-            throw new RuntimeException('file_too_large');
+            throw new InvalidInput('file_too_large');
         }
 
         $imageInfo = @getimagesize($tempPath);
         if ($imageInfo === false) {
             @unlink($tempPath);
-            throw new RuntimeException('unsupported_file_type');
+            throw new InvalidInput('unsupported_file_type');
         }
 
         $mimeType = strtolower((string) ($imageInfo['mime'] ?? ''));
         if (!array_key_exists($mimeType, self::EXTENSIONS)) {
             @unlink($tempPath);
-            throw new RuntimeException('unsupported_file_type');
+            throw new InvalidInput('unsupported_file_type');
         }
 
         $width = (int) ($imageInfo[0] ?? 0);
         $height = (int) ($imageInfo[1] ?? 0);
         if ($width <= 0 || $height <= 0) {
             @unlink($tempPath);
-            throw new RuntimeException('invalid_image_dimensions');
+            throw new InvalidInput('invalid_image_dimensions');
         }
         if ($width * $height > self::MAX_IMAGE_PIXELS) {
             @unlink($tempPath);
-            throw new RuntimeException('image_dimensions_too_large');
+            throw new InvalidInput('image_dimensions_too_large');
         }
 
         $filename = $basename . '.' . self::EXTENSIONS[$mimeType];
         $targetPath = $targetDir . DIRECTORY_SEPARATOR . $filename;
         if (!rename($tempPath, $targetPath)) {
             @unlink($tempPath);
-            throw new RuntimeException('upload_failed');
+            throw new InvalidInput('upload_failed');
         }
 
         $relativePath = $folder . '/' . $filename;
@@ -136,24 +136,24 @@ final class UploadedFileStorage
     public function storeDocument(UploadedFileInterface $file, string $folder = 'event-docs'): array
     {
         if ($file->getError() !== UPLOAD_ERR_OK) {
-            throw new RuntimeException('upload_failed');
+            throw new InvalidInput('upload_failed');
         }
 
         $size = $file->getSize() ?? 0;
         if ($size <= 0 || $size > $this->maxBytes) {
-            throw new RuntimeException('file_too_large');
+            throw new InvalidInput('file_too_large');
         }
 
         $mimeType = strtolower((string) $file->getClientMediaType());
         if (!array_key_exists($mimeType, self::DOCUMENT_EXTENSIONS)) {
-            throw new RuntimeException('unsupported_file_type');
+            throw new InvalidInput('unsupported_file_type');
         }
 
         $folder = trim(preg_replace('/[^a-z0-9_-]+/i', '-', $folder) ?? 'event-docs', '-');
         $folder = $folder === '' ? 'event-docs' : $folder;
         $targetDir = rtrim($this->storageDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $folder;
         if (!is_dir($targetDir) && !mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
-            throw new RuntimeException('upload_dir_unavailable');
+            throw new InvalidInput('upload_dir_unavailable');
         }
 
         $ext = self::DOCUMENT_EXTENSIONS[$mimeType];
@@ -174,11 +174,11 @@ final class UploadedFileStorage
                 || $height <= 0
             ) {
                 @unlink($targetPath);
-                throw new RuntimeException('unsupported_file_type');
+                throw new InvalidInput('unsupported_file_type');
             }
             if ($width * $height > self::MAX_IMAGE_PIXELS) {
                 @unlink($targetPath);
-                throw new RuntimeException('image_dimensions_too_large');
+                throw new InvalidInput('image_dimensions_too_large');
             }
         }
 
@@ -201,12 +201,12 @@ final class UploadedFileStorage
     public function storeResultImport(UploadedFileInterface $file, string $folder = 'result-imports'): array
     {
         if ($file->getError() !== UPLOAD_ERR_OK) {
-            throw new RuntimeException('upload_failed');
+            throw new InvalidInput('upload_failed');
         }
 
         $size = $file->getSize() ?? 0;
         if ($size <= 0 || $size > $this->maxBytes) {
-            throw new RuntimeException('file_too_large');
+            throw new InvalidInput('file_too_large');
         }
 
         $originalName = (string) $file->getClientFilename();
@@ -214,7 +214,7 @@ final class UploadedFileStorage
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
         $allowedByExtension = in_array($extension, ['csv', 'xlsx', 'pdf'], true);
         if (!$allowedByExtension && !array_key_exists($clientMimeType, self::RESULT_IMPORT_EXTENSIONS)) {
-            throw new RuntimeException('unsupported_file_type');
+            throw new InvalidInput('unsupported_file_type');
         }
 
         $ext = $extension === 'xlsx' ? 'xlsx' : ($extension === 'pdf' ? 'pdf' : 'csv');
@@ -228,7 +228,7 @@ final class UploadedFileStorage
         $folder = $folder === '' ? 'result-imports' : $folder;
         $targetDir = rtrim($this->storageDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $folder;
         if (!is_dir($targetDir) && !mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
-            throw new RuntimeException('upload_dir_unavailable');
+            throw new InvalidInput('upload_dir_unavailable');
         }
 
         $filename = bin2hex(random_bytes(16)) . '.' . $ext;

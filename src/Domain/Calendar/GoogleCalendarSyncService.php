@@ -8,6 +8,7 @@ use PDO;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use ZmierzymyCzas\Domain\Bz\Http\CurlHttpClient;
+use ZmierzymyCzas\Domain\Errors\Internal;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Support\Env;
 
@@ -184,7 +185,7 @@ final class GoogleCalendarSyncService
         $stmt->execute(['id' => $id]);
         $row = $stmt->fetch();
         if ($row === false) {
-            throw new \RuntimeException('google_calendar_outbox_missing');
+            throw new Internal('google_calendar_outbox_missing');
         }
         $error = $this->attempt($row, $now);
         if ($error !== null) {

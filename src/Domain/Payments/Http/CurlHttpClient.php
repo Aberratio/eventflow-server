@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Payments\Http;
 
+use ZmierzymyCzas\Domain\Errors\Internal;
+
 /**
  * The one real implementation of HttpClientInterface used outside tests — a thin
  * curl wrapper. No PSR-18/Guzzle dependency exists in this repo (composer.json),
@@ -22,7 +24,7 @@ final class CurlHttpClient implements HttpClientInterface
     {
         $ch = curl_init($url);
         if ($ch === false) {
-            throw new \RuntimeException('tpay_http_init_failed');
+            throw new Internal('tpay_http_init_failed');
         }
 
         $headerLines = [];

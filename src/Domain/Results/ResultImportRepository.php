@@ -9,6 +9,8 @@ use RuntimeException;
 use SimpleXMLElement;
 use ZipArchive;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
+use ZmierzymyCzas\Domain\Errors\InvalidInput;
+use ZmierzymyCzas\Domain\Errors\NotFound;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Repository;
 
@@ -41,7 +43,7 @@ SQL;
     public function create(string $eventId, string $distanceId, string $mode, array $file, string $actorId): array
     {
         if (!in_array($mode, ['replace', 'upsert'], true)) {
-            throw new RuntimeException('validation_error');
+            throw new InvalidInput('validation_error');
         }
 
         $parsed = $this->parseFile((string) $file['absolutePath'], (string) $file['mimeType']);
@@ -125,7 +127,7 @@ SQL;
     {
         $batch = $this->findBatchOnly($batchId);
         if (!$batch) {
-            throw new RuntimeException('not_found');
+            throw new NotFound('not_found');
         }
 
         if ($sheetName !== null && $sheetName !== '' && $sheetName !== ($batch['sheetName'] ?? null)) {
@@ -163,11 +165,11 @@ SQL;
     {
         $row = $this->row($rowId);
         if (!$row) {
-            throw new RuntimeException('not_found');
+            throw new NotFound('not_found');
         }
         $batch = $this->findBatchOnly((string) $row['batchId']);
         if (!$batch) {
-            throw new RuntimeException('not_found');
+            throw new NotFound('not_found');
         }
 
         $mapping = is_array($batch['mapping']) ? $batch['mapping'] : [];
@@ -208,19 +210,19 @@ SQL;
     {
         $batch = $this->findBatchOnly($batchId);
         if (!$batch) {
-            throw new RuntimeException('not_found');
+            throw new NotFound('not_found');
         }
 
         $rows = array_values(array_filter($this->rows($batchId), static fn (array $row): bool => !((bool) $row['ignoreRow'])));
         $blocking = array_values(array_filter($rows, static fn (array $row): bool => $row['status'] !== 'ready'));
         if ($blocking !== []) {
-            throw new RuntimeException('result_import_unresolved_rows');
+            throw new InvalidInput('result_import_unresolved_rows');
         }
 
         $event = $this->event((string) $batch['eventId']);
         $distance = $this->distance((string) $batch['distanceId']);
         if (!$event || !$distance) {
-            throw new RuntimeException('validation_error');
+            throw new InvalidInput('validation_error');
         }
 
         $this->pdo->beginTransaction();
@@ -236,7 +238,7 @@ SQL;
                 $mapped = $row['mappedData'];
                 $registration = $this->registrationById((string) $row['selectedRegistrationId']);
                 if (!$registration) {
-                    throw new RuntimeException('result_import_unresolved_rows');
+                    throw new InvalidInput('result_import_unresolved_rows');
                 }
 
                 if ($batch['mode'] === 'upsert') {
@@ -367,7 +369,7 @@ SQL);
     {
         $content = (string) file_get_contents($path);
         if (!str_starts_with($content, '%PDF')) {
-            throw new RuntimeException('unsupported_file_type');
+            throw new InvalidInput('unsupported_file_type');
         }
 
         $text = $this->extractPdfText($content);
@@ -399,11 +401,11 @@ SQL);
     private function parseXlsx(string $path, ?string $wantedSheetName = null): array
     {
         if (!class_exists(ZipArchive::class)) {
-            throw new RuntimeException('xlsx_not_supported');
+            throw new InvalidInput('xlsx_not_supported');
         }
         $zip = new ZipArchive();
         if ($zip->open($path) !== true) {
-            throw new RuntimeException('unsupported_file_type');
+            throw new InvalidInput('unsupported_file_type');
         }
 
         $sharedStrings = $this->xlsxSharedStrings($zip);
@@ -418,12 +420,12 @@ SQL);
             }
         }
         if (!$sheet) {
-            throw new RuntimeException('empty_import_file');
+            throw new InvalidInput('empty_import_file');
         }
 
         $xml = $zip->getFromName($sheet['path']);
         if ($xml === false) {
-            throw new RuntimeException('empty_import_file');
+            throw new InvalidInput('empty_import_file');
         }
         $doc = new SimpleXMLElement($xml);
         $grid = [];
@@ -447,7 +449,7 @@ SQL);
         $zip->close();
 
         if ($grid === []) {
-            throw new RuntimeException('empty_import_file');
+            throw new InvalidInput('empty_import_file');
         }
         ksort($grid);
         $headerRow = array_shift($grid) ?: [];
@@ -1082,33 +1084,33 @@ SQL);
     public function createRegistrationForRow(string $rowId, string $actorId): array
     {
         if ($this->registrationRepository === null || $this->competitorRepository === null) {
-            throw new RuntimeException('result_import_registration_creation_unsupported');
+            throw new InvalidInput('result_import_registration_creation_unsupported');
         }
 
         $row = $this->row($rowId);
         if (!$row) {
-            throw new RuntimeException('not_found');
+            throw new NotFound('not_found');
         }
         $batch = $this->findBatchOnly((string) $row['batchId']);
         if (!$batch) {
-            throw new RuntimeException('not_found');
+            throw new NotFound('not_found');
         }
 
         $mapping = is_array($batch['mapping']) ? $batch['mapping'] : [];
         $mapped = is_array($row['mappedData']) ? $row['mappedData'] : $this->mapRaw($row['rawData'], $mapping);
         $fullName = trim((string) ($mapped['fullName'] ?? ''));
         if ($fullName === '') {
-            throw new RuntimeException('result_import_row_missing_name');
+            throw new InvalidInput('result_import_row_missing_name');
         }
 
         $variant = $this->officePricingVariant((string) $batch['distanceId']);
         if ($variant === null) {
-            throw new RuntimeException('result_import_office_variant_missing');
+            throw new InvalidInput('result_import_office_variant_missing');
         }
 
         $distance = $this->distance((string) $batch['distanceId']);
         if (!$distance) {
-            throw new RuntimeException('validation_error');
+            throw new InvalidInput('validation_error');
         }
 
         [$firstName, $lastName] = $this->splitName($fullName);

@@ -12,6 +12,7 @@ use ZmierzymyCzas\Domain\Registrations\DistanceChangeRejected;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Registrations\SelfServicePolicy;
 use ZmierzymyCzas\Http\Access\RegistrationAccess;
+use ZmierzymyCzas\Http\DomainErrorResponder;
 use ZmierzymyCzas\Http\Support\ActivityLogger;
 use ZmierzymyCzas\Http\Support\RequestInput;
 use ZmierzymyCzas\Support\JsonResponder;
@@ -136,13 +137,10 @@ final class RegistrationChangeController
         } catch (DistanceChangeRejected $e) {
             return JsonResponder::error($response, $e->reason, $e->getMessage(), $e->status, $e->details);
         } catch (RuntimeException $e) {
-            if ($e->getMessage() === 'registration_capacity_exceeded') {
-                return JsonResponder::error($response, 'registration_capacity_exceeded', 'Wybrany dystans osiągnął limit uczestników.', 409);
-            }
-            if ($e->getMessage() === 'registration_distance_invalid') {
-                return JsonResponder::error($response, 'registration_distance_invalid', 'Wybrany dystans nie istnieje w tym wydarzeniu.', 422);
-            }
-            throw $e;
+            return DomainErrorResponder::respond($response, $e, [
+                'registration_capacity_exceeded' => 'Wybrany dystans osiągnął limit uczestników.',
+                'registration_distance_invalid' => 'Wybrany dystans nie istnieje w tym wydarzeniu.',
+            ]);
         }
         $change = $result['change'];
         $this->activity->log(
@@ -185,23 +183,18 @@ final class RegistrationChangeController
                 ['id' => (string) ($auth['sub'] ?? ''), 'email' => (string) ($auth['email'] ?? ''), 'role' => (string) ($auth['role'] ?? '')]
             );
         } catch (RuntimeException $e) {
-            $errors = [
-                'registration_not_found' => ['Nie znaleziono zapisu.', 404],
-                'transfer_registration_inactive' => ['Ten zapis nie jest już aktywny - nie można go przenieść.', 409],
-                'transfer_team_registration' => ['Zapisu w drużynie (sztafecie) nie przenosi się tym działaniem - zmień zawodnika w składzie drużyny (wymiana zawodnika).', 409],
-                'team_swap_competitor_already_registered' => ['Ta osoba jest już zapisana na to wydarzenie.', 409],
-                'team_swap_same_person' => ['To ten sam zawodnik, który jest już na tym zapisie.', 422],
-                'team_swap_person_required' => ['Podaj istniejącego zawodnika (competitorId) albo dane nowej osoby (newPerson: imię i nazwisko).', 422],
-                'team_swap_competitor_not_found' => ['Nie znaleziono zawodnika.', 404],
-                'transfer_insurance_birth_date_missing' => ['Zapis ma ubezpieczenie NNW - nowa osoba musi mieć pełną datę urodzenia (birthDate), by przeliczyć składkę.', 422],
-                'transfer_insurance_invalid' => ['Nie można przeliczyć ubezpieczenia NNW dla nowej osoby.', 422],
-                'registration_distance_invalid' => ['Selected distance is invalid.', 422],
-            ];
-            if (isset($errors[$e->getMessage()])) {
-                [$message, $status] = $errors[$e->getMessage()];
-                return JsonResponder::error($response, $e->getMessage(), $message, $status);
-            }
-            throw $e;
+            return DomainErrorResponder::respond($response, $e, [
+                'registration_not_found',
+                'transfer_registration_inactive',
+                'transfer_team_registration',
+                'team_swap_competitor_already_registered',
+                'team_swap_same_person',
+                'team_swap_person_required',
+                'team_swap_competitor_not_found',
+                'transfer_insurance_birth_date_missing',
+                'transfer_insurance_invalid',
+                'registration_distance_invalid',
+            ]);
         }
         $this->activity->log(
             $auth,

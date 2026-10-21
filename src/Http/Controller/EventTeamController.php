@@ -15,6 +15,7 @@ use ZmierzymyCzas\Domain\Mailer\CriticalMails\CriticalMailer;
 use ZmierzymyCzas\Domain\Mailer\MailRecipientMask;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Http\Access\EventAccess;
+use ZmierzymyCzas\Http\DomainErrorResponder;
 use ZmierzymyCzas\Http\Support\ActivityLogger;
 use ZmierzymyCzas\Http\Support\RequestInput;
 use ZmierzymyCzas\Support\Env;
@@ -26,15 +27,6 @@ use ZmierzymyCzas\Support\JsonResponder;
  */
 final class EventTeamController
 {
-    /** Accept errors thrown by EventTeamRepository::accept(): code => [status, message]. */
-    private const ACCEPT_ERRORS = [
-        'invitation_not_found' => [404, 'To zaproszenie nie istnieje albo zostało odwołane.'],
-        'invitation_expired' => [410, 'To zaproszenie wygasło. Poproś organizatora o nowe.'],
-        'invitation_email_mismatch' => [403, 'To zaproszenie wysłano na inny adres e-mail. Zaloguj się na właściwe konto.'],
-        'team_member_owner' => [409, 'Jesteś właścicielem tego wydarzenia.'],
-        'team_member_active' => [409, 'Jesteś już współzarządzającym tego wydarzenia.'],
-    ];
-
     public function __construct(
         private readonly EventRepository $events,
         private readonly UserRepository $users,
@@ -80,10 +72,9 @@ final class EventTeamController
         try {
             $issued = $this->team->invite((string) $event['id'], $email, (string) ($auth['sub'] ?? ''));
         } catch (RuntimeException $e) {
-            if ($e->getMessage() === 'team_member_active') {
-                return JsonResponder::error($response, 'team_member_active', 'Ta osoba jest już współzarządzającym tego wydarzenia.', 409);
-            }
-            throw $e;
+            return DomainErrorResponder::respond($response, $e, [
+                'team_member_active' => 'Ta osoba jest już współzarządzającym tego wydarzenia.',
+            ]);
         }
         $mailState = $this->sendInvitation($event, $issued['member'], $issued['token'], $this->inviterName($auth));
         $this->activity->log($auth, 'event_team_invited', 'Zaproszono współzarządzającego do wydarzenia', 'event', (string) $event['id'], (string) ($event['name'] ?? ''), ['recipient' => MailRecipientMask::mask($email)]);
@@ -176,11 +167,13 @@ final class EventTeamController
         try {
             $member = $this->team->accept((string) $args['token'], (string) $user['id'], (string) $user['email']);
         } catch (RuntimeException $e) {
-            if (isset(self::ACCEPT_ERRORS[$e->getMessage()])) {
-                [$status, $message] = self::ACCEPT_ERRORS[$e->getMessage()];
-                return JsonResponder::error($response, $e->getMessage(), $message, $status);
-            }
-            throw $e;
+            return DomainErrorResponder::respond($response, $e, [
+                'invitation_not_found',
+                'invitation_expired',
+                'invitation_email_mismatch',
+                'team_member_owner',
+                'team_member_active',
+            ]);
         }
         // Only the first acceptance is news for the activity register (a repeat call is a no-op).
         if (($invitation['status'] ?? '') === 'invited') {

@@ -11,12 +11,16 @@ namespace ZmierzymyCzas\Domain;
  */
 abstract class DomainError extends \RuntimeException
 {
-    /** @param array<string, mixed> $details extra payload for the error response */
+    /**
+     * @param array<string, mixed> $details extra payload for the error response
+     * @param ?\Throwable $previous the lower-level failure this error translates, kept for logs
+     */
     public function __construct(
         public readonly string $errorCode,
         public readonly array $details = [],
+        ?\Throwable $previous = null,
     ) {
-        parent::__construct($errorCode);
+        parent::__construct($errorCode, 0, $previous);
     }
 
     abstract public function httpStatus(): int;

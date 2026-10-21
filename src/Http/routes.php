@@ -96,7 +96,7 @@ use ZmierzymyCzas\Http\Controller\DiscountCodeBatchController;
 use ZmierzymyCzas\Http\Controller\EventTeamController;
 use ZmierzymyCzas\Http\Controller\RegistrationChangeController;
 use ZmierzymyCzas\Http\Controller\SettlementController;
-use ZmierzymyCzas\Http\DomainErrorCode;
+use ZmierzymyCzas\Http\DomainErrorResponder;
 use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
 use ZmierzymyCzas\Http\Support\ActivityLogger;
@@ -433,16 +433,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $uploads->storeImage($file, 'avatars');
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                $messages = [
-                    'file_too_large' => 'Obraz jest za duży. Maksymalny rozmiar pliku to 5 MB.',
-                    'unsupported_file_type' => 'Nieobsługiwany format obrazu. Wgraj plik JPG, PNG albo WebP.',
-                    'invalid_image_dimensions' => 'Nie udało się odczytać wymiarów obrazu. Wybierz inny plik.',
-                    'image_dimensions_too_large' => 'Obraz ma zbyt dużą rozdzielczość. Zmniejsz go i spróbuj ponownie.',
-                    'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
-                    'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
-                ];
-                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
+                return DomainErrorResponder::respond($response, $e, [
+                    'file_too_large',
+                    'unsupported_file_type',
+                    'invalid_image_dimensions',
+                    'image_dimensions_too_large',
+                    'upload_dir_unavailable',
+                    'upload_failed',
+                ], fallback: ['message' => 'Nie udało się wgrać pliku. Spróbuj ponownie.', 'status' => 422]);
             }
 
             $auth = (array) $request->getAttribute('auth');
@@ -464,16 +462,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $uploads->storeImage($file, 'events');
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                $messages = [
-                    'file_too_large' => 'Obraz jest za duży. Maksymalny rozmiar pliku to 5 MB.',
-                    'unsupported_file_type' => 'Nieobsługiwany format obrazu. Wgraj plik JPG, PNG albo WebP.',
-                    'invalid_image_dimensions' => 'Nie udało się odczytać wymiarów obrazu. Wybierz inny plik.',
-                    'image_dimensions_too_large' => 'Obraz ma zbyt dużą rozdzielczość. Zmniejsz go i spróbuj ponownie.',
-                    'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
-                    'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
-                ];
-                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
+                return DomainErrorResponder::respond($response, $e, [
+                    'file_too_large',
+                    'unsupported_file_type',
+                    'invalid_image_dimensions',
+                    'image_dimensions_too_large',
+                    'upload_dir_unavailable',
+                    'upload_failed',
+                ], fallback: ['message' => 'Nie udało się wgrać pliku. Spróbuj ponownie.', 'status' => 422]);
             }
 
             return JsonResponder::ok($response, $result, 'Obraz został wgrany.', 201);
@@ -489,15 +485,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $uploads->storeDocument($file, 'event-docs');
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                $messages = [
+                return DomainErrorResponder::respond($response, $e, [
                     'file_too_large' => 'Plik jest za duży. Maksymalny rozmiar pliku to 5 MB.',
                     'unsupported_file_type' => 'Nieobsługiwany format pliku. Dozwolone są PDF, DOC, DOCX, XLS, XLSX, TXT oraz JPG, PNG i WebP.',
-                    'image_dimensions_too_large' => 'Obraz ma zbyt dużą rozdzielczość. Zmniejsz go i spróbuj ponownie.',
-                    'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
-                    'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
-                ];
-                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
+                    'image_dimensions_too_large',
+                    'upload_dir_unavailable',
+                    'upload_failed',
+                ], fallback: ['message' => 'Nie udało się wgrać pliku. Spróbuj ponownie.', 'status' => 422]);
             }
 
             return JsonResponder::ok($response, $result, 'Plik został wgrany.', 201);
@@ -513,16 +507,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $uploads->storeImage($file, 'partners');
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                $messages = [
+                return DomainErrorResponder::respond($response, $e, [
                     'file_too_large' => 'Logo jest za duże. Maksymalny rozmiar pliku to 5 MB.',
                     'unsupported_file_type' => 'Nieobsługiwany format logo. Wgraj plik JPG, PNG albo WebP.',
                     'invalid_image_dimensions' => 'Nie udało się odczytać wymiarów logo. Wybierz inny plik.',
                     'image_dimensions_too_large' => 'Logo ma zbyt dużą rozdzielczość. Zmniejsz je i spróbuj ponownie.',
-                    'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
-                    'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
-                ];
-                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
+                    'upload_dir_unavailable',
+                    'upload_failed',
+                ], fallback: ['message' => 'Nie udało się wgrać pliku. Spróbuj ponownie.', 'status' => 422]);
             }
 
             return JsonResponder::ok($response, $result, 'Logo zostało wgrane.', 201);
@@ -1236,10 +1228,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $logActivity($auth, 'event_created', 'Utworzono wydarzenie', 'event', (string) ($created['id'] ?? ''), (string) ($created['name'] ?? ''));
                 return JsonResponder::ok($response, $created, 'Event created', 201);
             } catch (RuntimeException $e) {
-                if ($e->getMessage() === 'event_limit_exceeded') {
-                    return JsonResponder::error($response, 'event_limit_exceeded', 'Organizer has no available event slots', 409);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, ['event_limit_exceeded']);
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         // "Wydarzenie zewnętrzne" (external Event) — a barebones Event a
@@ -1292,10 +1281,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 try {
                     $events->transferOrganizer($args['id'], $organizer);
                 } catch (RuntimeException $e) {
-                    if ($e->getMessage() === 'event_limit_exceeded') {
-                        return JsonResponder::error($response, 'event_limit_exceeded', 'Organizer has no available event slots', 409);
-                    }
-                    throw $e;
+                    return DomainErrorResponder::respond($response, $e, ['event_limit_exceeded']);
                 }
 
                 return null;
@@ -1457,10 +1443,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 // spend on this submission — a state conflict (the organizer's
                 // account, not this request), same 409 shape as event_limit_exceeded
                 // above. The event itself is left untouched in Draft.
-                if ($e->getMessage() === 'event_submit_no_organizer_credit') {
-                    return JsonResponder::error($response, 'event_submit_no_organizer_credit', 'No available organizer package credit to submit this event for moderation', 409);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, ['event_submit_no_organizer_credit']);
             }
             if (!$event) {
                 return JsonResponder::error($response, 'invalid_status_transition', 'Event cannot be submitted in its current status', 409);
@@ -1625,10 +1608,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $logActivity($auth, 'organizer_event_limit_changed', 'Zmieniono limit wydarzeń organizatora na ' . $limit, 'user', (string) $args['organizerId'], (string) ($organizer['name'] ?? ''));
                 return JsonResponder::ok($response, $updated, 'Event limit updated');
             } catch (RuntimeException $e) {
-                if ($e->getMessage() === 'event_limit_below_usage') {
-                    return JsonResponder::error($response, 'event_limit_below_usage', 'Event limit cannot be lower than organizer current event count', 409);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, ['event_limit_below_usage']);
             }
         })->add(new AuthMiddleware($jwt, $adminRoles));
 
@@ -1706,19 +1686,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 );
                 return JsonResponder::ok($response, $updated, 'Team special category updated');
             } catch (RuntimeException $e) {
-                if ($e->getMessage() === 'team_not_found') {
-                    return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
-                }
-                if ($e->getMessage() === 'team_not_captain') {
-                    return JsonResponder::error($response, 'team_not_captain', 'Only the team captain can change this team\'s special category.', 403);
-                }
-                if ($e->getMessage() === 'team_special_category_locked') {
-                    return JsonResponder::error($response, 'team_special_category_locked', 'This team\'s special category can no longer be changed once the event has started.', 409);
-                }
-                if ($e->getMessage() === 'team_special_category_invalid') {
-                    return JsonResponder::error($response, 'team_special_category_invalid', 'Selected special category is not configured for this distance.', 422);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, [
+                    'team_not_found',
+                    'team_not_captain' => 'Only the team captain can change this team\'s special category.',
+                    'team_special_category_locked',
+                    'team_special_category_invalid',
+                ]);
             }
         })->add(new AuthMiddleware($jwt));
         // the roster a captain / the Event's manager chooses the member to swap out of.
@@ -1756,24 +1729,19 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     ['id' => (string) ($auth['sub'] ?? ''), 'email' => (string) ($auth['email'] ?? ''), 'isManager' => $isManager]
                 );
             } catch (RuntimeException $e) {
-                $errors = [
-                    'team_not_found' => ['Team was not found.', 404],
-                    'registration_not_found' => ['Nie znaleziono zapisu w tej drużynie.', 404],
-                    'team_not_captain' => ['Tylko kapitan drużyny lub organizator wydarzenia może wymienić zawodnika.', 403],
-                    'not_authorized_to_register' => ['Nie masz upoważnienia (Opieki) do zapisania tego zawodnika.', 403],
-                    'team_swap_deadline_passed' => ['Termin wymiany zawodnika w drużynie minął — skontaktuj się z organizatorem.', 409],
-                    'team_swap_registration_inactive' => ['Nie można wymienić zawodnika na anulowanym zapisie.', 409],
-                    'team_swap_competitor_already_registered' => ['Ta osoba jest już zapisana na to wydarzenie.', 409],
-                    'team_swap_same_person' => ['To ten sam zawodnik, który jest już na tym zapisie.', 422],
-                    'team_swap_person_required' => ['Podaj istniejącego zawodnika (competitorId) albo dane nowej osoby (newPerson: imię i nazwisko).', 422],
-                    'team_swap_competitor_not_found' => ['Nie znaleziono zawodnika.', 404],
-                    'registration_distance_invalid' => ['Selected distance is invalid.', 422],
-                ];
-                if (isset($errors[$e->getMessage()])) {
-                    [$message, $status] = $errors[$e->getMessage()];
-                    return JsonResponder::error($response, $e->getMessage(), $message, $status);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, [
+                    'team_not_found',
+                    'registration_not_found' => 'Nie znaleziono zapisu w tej drużynie.',
+                    'team_not_captain',
+                    'not_authorized_to_register',
+                    'team_swap_deadline_passed',
+                    'team_swap_registration_inactive',
+                    'team_swap_competitor_already_registered',
+                    'team_swap_same_person',
+                    'team_swap_person_required',
+                    'team_swap_competitor_not_found',
+                    'registration_distance_invalid',
+                ]);
             }
             $logActivity(
                 $auth,
@@ -1915,10 +1883,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $registrations->applyBzFieldSync((string) $args['eventId'], (string) $args['registrationId'], $fields);
             } catch (RuntimeException $e) {
-                if ($e->getMessage() === 'registration_not_found') {
-                    return JsonResponder::error($response, 'not_found', 'Registration not found', 404);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, [
+                    'registration_not_found' => ['code' => 'not_found', 'message' => 'Registration not found'],
+                ]);
             }
 
             // Field KEYS only. old/new/incoming values are personal data.
@@ -2162,10 +2129,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     default => StartListExportFormatter::toCsv($export['columns'], $export['rows']),
                 };
             } catch (\RuntimeException $e) {
-                if ($e->getMessage() === 'xlsx_not_supported') {
-                    return JsonResponder::error($response, 'xlsx_not_supported', 'Serwer PHP nie obsluguje zapisu XLSX (brak rozszerzenia ZipArchive). Uzyj eksportu CSV.', 500);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, ['xlsx_not_supported']);
             }
 
             $matchingDistance = current(array_filter(
@@ -2375,51 +2339,26 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             if ($e instanceof RegistrationFormInvalidException) {
                 return JsonResponder::error($response, 'registration_form_invalid', 'Formularz zapisu zawiera błędy. Popraw zaznaczone pola.', 422, ['fields' => $e->errors()]);
             }
-            // Same 403 for a missing, wrong or foreign token — no oracle.
-            if ($e->getMessage() === 'registration_team_invite_required') {
-                return JsonResponder::error($response, 'registration_team_invite_required', 'Do tej drużyny można dołączyć tylko przez link zaproszenia od kapitana.', 403);
-            }
-            // The Dystans is full — a state conflict (someone else took the
-            // last slot), not a validation problem with this request, so 409
-            // rather than the 422s below.
-            if ($e->getMessage() === 'registration_capacity_exceeded') {
-                return JsonResponder::error($response, 'registration_capacity_exceeded', 'This distance has reached its participant limit.', 409);
-            }
-            // "team full" is a distinct,
-            // legitimate rejection reason from the Dystans' own capacity
-            // above — a Drużyna can be full while the Dystans still has
-            // free slots, and vice versa.
-            if ($e->getMessage() === 'registration_team_full') {
-                return JsonResponder::error($response, 'registration_team_full', 'This team already has its maximum number of members.', 409);
-            }
-            if ($e->getMessage() === 'registration_team_not_found') {
-                return JsonResponder::error($response, 'registration_team_not_found', 'Selected team was not found.', 404);
-            }
-            $teamValidationErrors = [
-                'registration_team_distance_mismatch' => 'Selected team does not belong to this event/distance.',
-                'registration_team_requires_relay_distance' => 'Teams can only be created for a relay distance.',
-                'registration_team_name_required' => 'Team name is required to create a team.',
-                // The captain's optional Kategoria
-                // specjalna, when given, must match one of the Dystans's
-                // configured special categories.
-                'team_special_category_invalid' => 'Selected special category is not configured for this distance.',
-            ];
-            if (array_key_exists($e->getMessage(), $teamValidationErrors)) {
-                return JsonResponder::error($response, $e->getMessage(), $teamValidationErrors[$e->getMessage()], 422);
-            }
-            $discountErrors = [
-                'discount_code_invalid' => 'Discount code is invalid.',
-                'discount_code_inactive' => 'Discount code is inactive.',
-                'discount_code_not_started' => 'Discount code is not active yet.',
-                'discount_code_expired' => 'Discount code has expired.',
-                'discount_code_used_up' => 'Discount code usage limit has been reached.',
-                'discount_code_distance_mismatch' => 'Discount code does not apply to the selected distance.',
-                'registration_distance_invalid' => 'Selected distance is invalid.',
-            ];
-            if (array_key_exists($e->getMessage(), $discountErrors)) {
-                return JsonResponder::error($response, $e->getMessage(), $discountErrors[$e->getMessage()], 422);
-            }
-            throw $e;
+            // 403 for a missing, wrong or foreign invite token alike (no oracle). A full Dystans or
+            // Drużyna is a state conflict (409), not a validation problem; they are distinct reasons.
+            return DomainErrorResponder::respond($response, $e, [
+                'registration_team_invite_required',
+                'registration_capacity_exceeded',
+                'registration_team_full',
+                'registration_team_not_found',
+                'registration_team_distance_mismatch',
+                'registration_team_requires_relay_distance',
+                'registration_team_name_required',
+                // The captain's optional Kategoria specjalna must match one of the Dystans's configured ones.
+                'team_special_category_invalid',
+                'discount_code_invalid',
+                'discount_code_inactive',
+                'discount_code_not_started',
+                'discount_code_expired',
+                'discount_code_used_up',
+                'discount_code_distance_mismatch',
+                'registration_distance_invalid',
+            ]);
         };
         $api->post('/registrations', function (Request $request, Response $response) use ($registrations, $prepareRegistrationRequest, $registrationFailureResponse) {
             $prepared = $prepareRegistrationRequest($request, $response);
@@ -2520,10 +2459,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 return JsonResponder::ok($response, $registrations->requestRefund($args['id'], (string) ($auth['sub'] ?? ''), $reason !== '' ? $reason : null));
             } catch (RuntimeException $e) {
-                if ($e->getMessage() === 'refund_requires_paid_registration') {
-                    return JsonResponder::error($response, 'refund_requires_paid_registration', 'Only a paid registration can request a refund.', 409);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, ['refund_requires_paid_registration']);
             }
         })->add(new AuthMiddleware($jwt));
         $api->post('/registrations/{id}/refund-approve', function (Request $request, Response $response, array $args) use ($registrations, $events, $canManageEventMoney, $body) {
@@ -2541,10 +2477,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 return JsonResponder::ok($response, $registrations->approveRefund($args['id'], (string) ($auth['sub'] ?? ''), $amount));
             } catch (RuntimeException $e) {
-                if ($e->getMessage() === 'refund_request_not_found') {
-                    return JsonResponder::error($response, 'refund_request_not_found', 'No refund request pending for this registration.', 409);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, ['refund_request_not_found']);
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->post('/registrations/{id}/refund-complete', function (Request $request, Response $response, array $args) use ($registrations, $events, $canManageEventMoney) {
@@ -2560,14 +2493,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 return JsonResponder::ok($response, $registrations->markRefunded($args['id'], (string) ($auth['sub'] ?? '')));
             } catch (RuntimeException $e) {
-                $errors = [
+                return DomainErrorResponder::respond($response, $e, [
                     'refund_request_not_found' => 'No refund cycle found for this registration.',
-                    'refund_not_approved' => 'The refund must be approved before it can be marked as completed.',
-                ];
-                if (isset($errors[$e->getMessage()])) {
-                    return JsonResponder::error($response, $e->getMessage(), $errors[$e->getMessage()], 409);
-                }
-                throw $e;
+                    'refund_not_approved',
+                ]);
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
         $api->post('/registrations/{id}/retry-payment', function (Request $request, Response $response, array $args) use ($registrations, $events, $canManageEvent, $isRegistrationOwner) {
@@ -2582,17 +2511,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 return JsonResponder::ok($response, $registrations->retryPayment($args['id']));
             } catch (RuntimeException $e) {
-                $errors = [
-                    'retry_requires_expired_registration' => ['retry_requires_expired_registration', 'Only an expired registration can be retried.', 409],
-                    'retry_not_available_for_bank_transfer' => ['retry_not_available_for_bank_transfer', 'Payment by bank transfer has no gateway link to retry.', 409],
-                    'registration_capacity_exceeded' => ['registration_capacity_exceeded', 'This distance has reached its participant limit.', 409],
-                    'registration_distance_invalid' => ['registration_distance_invalid', 'Selected distance is invalid.', 422],
-                ];
-                if (isset($errors[$e->getMessage()])) {
-                    [$code, $message, $status] = $errors[$e->getMessage()];
-                    return JsonResponder::error($response, $code, $message, $status);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, [
+                    'retry_requires_expired_registration',
+                    'retry_not_available_for_bank_transfer',
+                    'registration_capacity_exceeded',
+                    'registration_distance_invalid',
+                ]);
             }
         })->add(new AuthMiddleware($jwt));
 
@@ -2617,16 +2541,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 return JsonResponder::ok($response, $registrations->markManualPaymentPaid($args['id']));
             } catch (RuntimeException $e) {
-                $errors = [
-                    'registration_not_manual_route' => ['registration_not_manual_route', 'Ten Zapis nie jest na trasie przelewu tradycyjnego.', 409],
-                    'registration_not_pending' => ['registration_not_pending', 'Tylko oczekujący Zapis można oznaczyć jako opłacony.', 409],
-                    'registration_not_found' => ['not_found', 'Registration not found', 404],
-                ];
-                if (isset($errors[$e->getMessage()])) {
-                    [$code, $message, $status] = $errors[$e->getMessage()];
-                    return JsonResponder::error($response, $code, $message, $status);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, [
+                    'registration_not_manual_route',
+                    'registration_not_pending',
+                    'registration_not_found' => ['code' => 'not_found', 'message' => 'Registration not found'],
+                ]);
             }
         })->add(new AuthMiddleware($jwt, $eventManagerRoles));
 
@@ -2660,15 +2579,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $registrations->correctFormSnapshot($args['id'], $updates);
             } catch (RuntimeException $e) {
-                $errors = [
-                    'registration_not_found' => ['not_found', 'Registration not found', 404],
-                    'registration_form_snapshot_not_finished' => ['registration_form_snapshot_not_finished', 'Korekta snapshotu formularza jest możliwa tylko dla zakończonego Wydarzenia.', 409],
-                ];
-                if (isset($errors[$e->getMessage()])) {
-                    [$code, $message, $status] = $errors[$e->getMessage()];
-                    return JsonResponder::error($response, $code, $message, $status);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, [
+                    'registration_not_found' => ['code' => 'not_found', 'message' => 'Registration not found'],
+                    'registration_form_snapshot_not_finished',
+                ]);
             }
 
             $summary = [];
@@ -2734,7 +2648,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     // The id is attacker-controlled before lookup, so it is not logged.
                     $logWebhook('tpay', 'unknown_transaction');
 
-                    return JsonResponder::error($response, 'gateway_transaction_unknown', 'Unknown transaction.', 404);
+                    return DomainErrorResponder::respond($response, $e, ['gateway_transaction_unknown']);
                 }
                 throw $e;
             }
@@ -2798,7 +2712,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 if ($e->getMessage() === 'gateway_transaction_unknown') {
                     $logWebhook('paynow', 'unknown_transaction');
 
-                    return JsonResponder::error($response, 'gateway_transaction_unknown', 'Unknown transaction.', 404);
+                    return DomainErrorResponder::respond($response, $e, ['gateway_transaction_unknown']);
                 }
                 throw $e;
             }
@@ -2864,15 +2778,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                     201
                 );
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                $messages = [
-                    'validation_error' => 'Sprawdz poprawność danych i spróbuj ponownie.',
-                    'virtual_event_required' => 'Wynik można zgłosić tylko dla wydarzenia wirtualnego.',
-                    'virtual_result_window_closed' => 'Wynik można zgłosić tylko w aktywnym oknie startowym.',
-                    'virtual_result_registration_required' => 'Nie znaleziono aktywnej rejestracji na ten dystans.',
-                    'virtual_result_duplicate' => 'Wynik dla tego dystansu został już zgłoszony.',
-                ];
-                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się zgłosić wyniku.', 422);
+                return DomainErrorResponder::respond($response, $e, [
+                    'validation_error',
+                    'virtual_event_required',
+                    'virtual_result_window_closed',
+                    'virtual_result_registration_required',
+                    'virtual_result_duplicate',
+                ], fallback: ['message' => 'Nie udało się zgłosić wyniku.', 'status' => 422]);
             }
         })->add(new AuthMiddleware($jwt, ['participant']));
 
@@ -2910,8 +2822,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 }
                 return JsonResponder::ok($response, $reviewed);
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                return JsonResponder::error($response, $code, 'Nie udało się zweryfikować wyniku.', 422);
+                return DomainErrorResponder::respond($response, $e, fallback: ['message' => 'Nie udało się zweryfikować wyniku.', 'status' => 422]);
             }
         })->add(new AuthMiddleware($jwt));
 
@@ -3122,17 +3033,15 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 );
                 return JsonResponder::ok($response, $batch, 'Import przygotowany', 201);
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                $messages = [
+                return DomainErrorResponder::respond($response, $e, [
                     'file_too_large' => 'Plik jest za duzy. Maksymalny rozmiar to 5 MB.',
                     'unsupported_file_type' => 'Nieobslugiwany format pliku. Wgraj CSV, XLSX albo PDF.',
-                    'empty_import_file' => 'Plik nie zawiera danych do importu.',
+                    'empty_import_file',
                     'xlsx_not_supported' => 'Serwer PHP nie obsluguje odczytu XLSX. Wgraj CSV albo wlacz rozszerzenie ZipArchive.',
-                    'pdf_text_not_detected' => 'Nie udalo sie odczytac tekstu z PDF. To moze byc skan wymagajacy OCR.',
-                    'pdf_table_not_detected' => 'Odczytano tekst z PDF, ale nie wykryto wierszy wynikow. Wgraj CSV/XLSX albo popraw dane recznie po konwersji.',
-                    'validation_error' => 'Sprawdz poprawność danych i spróbuj ponownie.',
-                ];
-                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udalo sie przygotowac importu.', 422);
+                    'pdf_text_not_detected',
+                    'pdf_table_not_detected',
+                    'validation_error',
+                ], fallback: ['message' => 'Nie udalo sie przygotowac importu.', 'status' => 422]);
             }
         })->add(new AuthMiddleware($jwt));
 
@@ -3159,8 +3068,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 return JsonResponder::ok($response, $resultImports->analyze((string) $args['id'], $payload['mapping'] ?? [], $payload['sheetName'] ?? null));
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                return JsonResponder::error($response, $code, 'Nie udalo sie przeanalizowac importu.', 422);
+                return DomainErrorResponder::respond($response, $e, fallback: ['message' => 'Nie udalo sie przeanalizowac importu.', 'status' => 422]);
             }
         })->add(new AuthMiddleware($jwt));
 
@@ -3176,9 +3084,9 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $batch = $resultImports->updateRow((string) $args['id'], $body($request));
                 return JsonResponder::ok($response, $batch);
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                $status = $code === 'not_found' ? 404 : 422;
-                return JsonResponder::error($response, $code, 'Nie udalo sie zaktualizowac wiersza importu.', $status);
+                return DomainErrorResponder::respond($response, $e, [
+                    'not_found' => 'Nie udalo sie zaktualizowac wiersza importu.',
+                ], fallback: ['message' => 'Nie udalo sie zaktualizowac wiersza importu.', 'status' => 422]);
             }
         })->add(new AuthMiddleware($jwt));
 
@@ -3201,16 +3109,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $logActivity($auth, 'result_import_registration_created', 'Utworzono Zapis dla niesparowanego wiersza importu wynikow', 'result_import_row', (string) $args['id'], '');
                 return JsonResponder::ok($response, $batch, 'Zapis utworzony', 201);
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                $messages = [
+                return DomainErrorResponder::respond($response, $e, [
                     'not_found' => 'Import row not found',
-                    'result_import_row_missing_name' => 'Wiersz nie zawiera imienia i nazwiska - nie mozna utworzyc Zapisu.',
-                    'result_import_office_variant_missing' => 'Dystans nie ma Wariantu opłaty oznaczonego jako "dostępny wyłącznie przy zapisie w biurze zawodów". Dodaj go w ustawieniach Dystansu przed dopasowaniem.',
-                    'result_import_registration_creation_unsupported' => 'Ta operacja nie jest tu dostępna.',
+                    'result_import_row_missing_name',
+                    'result_import_office_variant_missing',
+                    'result_import_registration_creation_unsupported',
                     'validation_error' => 'Nie znaleziono wydarzenia albo dystansu dla importu.',
-                ];
-                $status = $code === 'not_found' ? 404 : 422;
-                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udalo sie utworzyc Zapisu.', $status);
+                ], fallback: ['message' => 'Nie udalo sie utworzyc Zapisu.', 'status' => 422]);
             }
         })->add(new AuthMiddleware($jwt));
 
@@ -3227,12 +3132,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $syncChallengesForEvent((string) $batch['eventId']);
                 return JsonResponder::ok($response, $committed, 'Wyniki zapisane');
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                $messages = [
-                    'result_import_unresolved_rows' => 'Rozwiaz wszystkie problematyczne wiersze przed zatwierdzeniem importu.',
+                return DomainErrorResponder::respond($response, $e, [
+                    'result_import_unresolved_rows',
                     'validation_error' => 'Nie znaleziono wydarzenia albo dystansu dla importu.',
-                ];
-                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udalo sie zatwierdzic importu.', 422);
+                ], fallback: ['message' => 'Nie udalo sie zatwierdzic importu.', 'status' => 422]);
             }
         })->add(new AuthMiddleware($jwt));
 
@@ -3482,26 +3385,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 // a nonexistent/archived product or an unrecognized delivery/payment
                 // method is a problem with the request itself (422), while stock
                 // running out is a state conflict with what's actually left (409).
-                $validationErrors = [
-                    'order_invalid_product' => 'One or more products in this order are invalid or no longer available.',
-                    'order_invalid_delivery_method' => 'Selected delivery method is not recognized.',
-                    'order_invalid_payment_method' => 'Selected payment method is not recognized.',
-                    'order_invalid_address' => 'A complete shipping address is required for this delivery method.',
-                    'order_invalid_invoice_data' => 'Company name and a complete billing address are required to request an invoice.',
-                    'order_invalid_nip' => 'The provided NIP (tax ID) is not a valid Polish NIP.',
-                    'order_invalid_quantity' => 'Nieprawidłowa liczba pakietów organizatora (dozwolone 1–10).',
-                ];
-                if (isset($validationErrors[$e->getMessage()])) {
-                    return JsonResponder::error($response, $e->getMessage(), $validationErrors[$e->getMessage()], 422);
-                }
-                $conflictErrors = [
-                    'order_out_of_stock' => 'One or more products in this order are out of stock.',
-                    'order_insufficient_stock' => 'Requested quantity exceeds available stock for one or more products.',
-                ];
-                if (isset($conflictErrors[$e->getMessage()])) {
-                    return JsonResponder::error($response, $e->getMessage(), $conflictErrors[$e->getMessage()], 409);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, [
+                    'order_invalid_product',
+                    'order_invalid_delivery_method',
+                    'order_invalid_payment_method',
+                    'order_invalid_address',
+                    'order_invalid_invoice_data',
+                    'order_invalid_nip',
+                    'order_invalid_quantity',
+                    'order_out_of_stock',
+                    'order_insufficient_stock',
+                ]);
             }
             // Mail ("Zamówienie sklepowe: potwierdzenie i zmiana
             // statusu") — systemic, the shop belongs to the
@@ -3520,15 +3414,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $updated = $orders->changeStatus($orderId, $status, is_string($trackingNumber) ? $trackingNumber : null);
             } catch (RuntimeException $e) {
-                $errors = [
-                    'order_invalid_status' => ['Nieprawidłowy status zamówienia.', 422],
-                    'order_not_found' => ['Nie znaleziono zamówienia.', 404],
-                    'order_invalid_transition' => ['Nie można zmienić statusu zamówienia na wybrany.', 409],
-                ];
-                if (isset($errors[$e->getMessage()])) {
-                    return JsonResponder::error($response, $e->getMessage(), $errors[$e->getMessage()][0], $errors[$e->getMessage()][1]);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, ['order_invalid_status', 'order_not_found', 'order_invalid_transition']);
             }
             $logActivity((array) $request->getAttribute('auth'), 'order_status_changed', 'Zmieniono status zamówienia na ' . $status, 'order', $orderId, (string) ($updated['id'] ?? $orderId));
             $buyer = $users->find((string) ($updated['userId'] ?? ''));
@@ -3814,37 +3700,22 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $participation = $challenges->claimReward((string) $args['id'], $productId, $payload, $userId, $rewardCompetitorId !== '' ? $rewardCompetitorId : null);
             } catch (\RuntimeException $e) {
-                $notFound = ['challenge_not_found' => 'Wyzwanie nie istnieje.'];
-                if (isset($notFound[$e->getMessage()])) {
-                    return JsonResponder::error($response, $e->getMessage(), $notFound[$e->getMessage()], 404);
-                }
-                $validationErrors = [
-                    'challenge_not_joined' => 'Nie dołączono do tego Wyzwania.',
-                    'challenge_invalid_reward_product' => 'Wskazany produkt nie jest nagrodą tego Wyzwania.',
-                    'order_invalid_product' => 'One or more products in this order are invalid or no longer available.',
-                    'order_invalid_delivery_method' => 'Selected delivery method is not recognized.',
-                    'order_invalid_payment_method' => 'Selected payment method is not recognized.',
-                    'order_invalid_address' => 'A complete shipping address is required for this delivery method.',
-                    'order_invalid_invoice_data' => 'Company name and a complete billing address are required to request an invoice.',
-                    'order_invalid_nip' => 'The provided NIP (tax ID) is not a valid Polish NIP.',
-                    'order_invalid_quantity' => 'Nieprawidłowa liczba pakietów organizatora (dozwolone 1–10).',
-                ];
-                if (isset($validationErrors[$e->getMessage()])) {
-                    return JsonResponder::error($response, $e->getMessage(), $validationErrors[$e->getMessage()], 422);
-                }
-                $forbidden = ['challenge_not_completed' => 'Wyzwanie nie zostało jeszcze ukończone.'];
-                if (isset($forbidden[$e->getMessage()])) {
-                    return JsonResponder::error($response, $e->getMessage(), $forbidden[$e->getMessage()], 403);
-                }
-                $conflictErrors = [
-                    'challenge_reward_already_claimed' => 'Nagroda dla tego Wyzwania została już odebrana.',
-                    'order_out_of_stock' => 'One or more products in this order are out of stock.',
-                    'order_insufficient_stock' => 'Requested quantity exceeds available stock for one or more products.',
-                ];
-                if (isset($conflictErrors[$e->getMessage()])) {
-                    return JsonResponder::error($response, $e->getMessage(), $conflictErrors[$e->getMessage()], 409);
-                }
-                throw $e;
+                return DomainErrorResponder::respond($response, $e, [
+                    'challenge_not_found',
+                    'challenge_not_joined',
+                    'challenge_invalid_reward_product',
+                    'order_invalid_product',
+                    'order_invalid_delivery_method',
+                    'order_invalid_payment_method',
+                    'order_invalid_address',
+                    'order_invalid_invoice_data',
+                    'order_invalid_nip',
+                    'order_invalid_quantity',
+                    'challenge_not_completed',
+                    'challenge_reward_already_claimed',
+                    'order_out_of_stock',
+                    'order_insufficient_stock',
+                ]);
             }
             return JsonResponder::ok($response, $participation, 'Reward claimed', 201);
         })->add(new AuthMiddleware($jwt));
@@ -3968,16 +3839,14 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 $result = $uploads->storeImage($file, 'event-backgrounds');
             } catch (RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                $messages = [
-                    'file_too_large' => 'Obraz jest za duży. Maksymalny rozmiar pliku to 5 MB.',
-                    'unsupported_file_type' => 'Nieobsługiwany format obrazu. Wgraj plik JPG, PNG albo WebP.',
-                    'invalid_image_dimensions' => 'Nie udało się odczytać wymiarów obrazu. Wybierz inny plik.',
-                    'image_dimensions_too_large' => 'Obraz ma zbyt dużą rozdzielczość. Zmniejsz go i spróbuj ponownie.',
-                    'upload_dir_unavailable' => 'Nie można teraz zapisać pliku na serwerze.',
-                    'upload_failed' => 'Nie udało się wgrać pliku. Spróbuj ponownie.',
-                ];
-                return JsonResponder::error($response, $code, $messages[$code] ?? 'Nie udało się wgrać pliku. Spróbuj ponownie.', 422);
+                return DomainErrorResponder::respond($response, $e, [
+                    'file_too_large',
+                    'unsupported_file_type',
+                    'invalid_image_dimensions',
+                    'image_dimensions_too_large',
+                    'upload_dir_unavailable',
+                    'upload_failed',
+                ], fallback: ['message' => 'Nie udało się wgrać pliku. Spróbuj ponownie.', 'status' => 422]);
             }
             return JsonResponder::ok($response, $result, 'Tło wydarzenia zostało wgrane.', 201);
         })->add(new AuthMiddleware($jwt, $staffRoles));
@@ -4596,9 +4465,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             try {
                 return JsonResponder::ok($response, $competitorMerge->comparison((string) $args['idA'], (string) $args['idB']));
             } catch (\RuntimeException $e) {
-                DomainErrorCode::of($e);
-
-                return JsonResponder::error($response, 'not_found', 'Jeden z profili Zawodnika nie istnieje.', 404);
+                return DomainErrorResponder::respond($response, $e, fallback: ['code' => 'not_found', 'message' => 'Jeden z profili Zawodnika nie istnieje.', 'status' => 404]);
             }
         })->add(new AuthMiddleware($jwt, ['admin', 'moderator']));
 
@@ -4628,11 +4495,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             } catch (\InvalidArgumentException $e) {
                 return JsonResponder::error($response, 'validation_error', 'Nie można scalić profilu z samym sobą.', 422);
             } catch (\RuntimeException $e) {
-                $code = DomainErrorCode::of($e);
-                $message = $code === 'competitor_already_merged'
-                    ? 'Jeden z profili jest już scalony.'
-                    : 'Jeden z profili Zawodnika nie istnieje.';
-                return JsonResponder::error($response, $code, $message, $code === 'competitor_already_merged' ? 409 : 404);
+                return DomainErrorResponder::respond($response, $e, ['competitor_already_merged'], fallback: ['message' => 'Jeden z profili Zawodnika nie istnieje.', 'status' => 404]);
             }
 
             // Deliberately 200 for every outcome here, `field_decisions_required`

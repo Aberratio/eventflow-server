@@ -9,6 +9,7 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use ZmierzymyCzas\Domain\Payments\SettlementReport;
 use ZmierzymyCzas\Domain\Registrations\StartListExportFormatter;
+use ZmierzymyCzas\Http\DomainErrorResponder;
 use ZmierzymyCzas\Http\Support\ActivityLogger;
 use ZmierzymyCzas\Http\Support\RequestInput;
 use ZmierzymyCzas\Support\Env;
@@ -58,10 +59,7 @@ final class SettlementController
                 ? StartListExportFormatter::toXlsx($export['columns'], $export['rows'])
                 : StartListExportFormatter::toCsv($export['columns'], $export['rows']);
         } catch (\RuntimeException $e) {
-            if ($e->getMessage() === 'xlsx_not_supported') {
-                return JsonResponder::error($response, 'xlsx_not_supported', 'Serwer PHP nie obsluguje zapisu XLSX (brak rozszerzenia ZipArchive). Uzyj eksportu CSV.', 500);
-            }
-            throw $e;
+            return DomainErrorResponder::respond($response, $e, ['xlsx_not_supported']);
         }
 
         $this->activity->log(

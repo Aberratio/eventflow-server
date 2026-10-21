@@ -433,7 +433,7 @@ final class OrderRepository extends Repository
     {
         $methodId = (string) ($submitted['id'] ?? '');
         if ($methodId === '' || !isset($catalog[$methodId])) {
-            throw new \RuntimeException($errorCode);
+            throw new InvalidInput($errorCode);
         }
 
         return $catalog[$methodId];

@@ -87,9 +87,14 @@ use ZmierzymyCzas\Domain\Users\UserUpdatePolicy;
 use ZmierzymyCzas\Domain\Registrations\RegistrationCreatePolicy;
 use ZmierzymyCzas\Domain\Registrations\RegistrationFormInvalidException;
 use ZmierzymyCzas\Domain\Registrations\RegistrationPatchPolicy;
+use ZmierzymyCzas\Http\Access\EventAccess;
+use ZmierzymyCzas\Http\Access\RegistrationAccess;
+use ZmierzymyCzas\Http\Access\Roles;
 use ZmierzymyCzas\Http\DomainErrorCode;
 use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
+use ZmierzymyCzas\Http\Support\ActivityLogger;
+use ZmierzymyCzas\Http\Support\RequestInput;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Support\JsonResponder;
 use ZmierzymyCzas\Support\Log\LoggerFactory;
@@ -269,8 +274,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         (int) Env::get('APP_UPLOAD_MAX_BYTES', 5242880)
     );
 
-    $body = static fn (Request $request): array => is_array($request->getParsedBody()) ? $request->getParsedBody() : [];
-    $query = static fn (Request $request): array => $request->getQueryParams();
+    $body = RequestInput::body(...);
+    $query = RequestInput::query(...);
     // Shared validation for POST/PATCH /shop/products. On create ($partial =
     // false) every required field must be present and non-empty; on update
     // ($partial = true) a field is only checked when the caller actually
@@ -310,13 +315,13 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         }
         return null;
     };
-    $adminRoles = ['admin', 'superadmin'];
-    $staffRoles = ['admin', 'superadmin', 'moderator'];
-    $eventManagerRoles = ['organizer', 'admin', 'superadmin', 'moderator'];
-    $publisherRoles = ['admin', 'superadmin'];
+    $adminRoles = Roles::ADMIN;
+    $staffRoles = Roles::STAFF;
+    $eventManagerRoles = Roles::EVENT_MANAGER;
+    $publisherRoles = Roles::PUBLISHER;
     $publicEventStatuses = ['published', 'finished'];
     $isSuperAdmin = static fn (Request $request): bool => ((string) (((array) $request->getAttribute('auth'))['role'] ?? '')) === 'superadmin';
-    $isStaffRole = static fn (string $role): bool => in_array($role, ['admin', 'superadmin', 'moderator'], true);
+    $isStaffRole = Roles::isStaff(...);
     // D-01: detail routes answer 404 (standard error shape) for an unknown resource, never 200 with data:null.
     $okOrNotFound = static fn (Response $response, mixed $found, string $message) => $found === null
         ? JsonResponder::error($response, 'not_found', $message, 404)
@@ -343,126 +348,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return [];
         }
     };
-    // Event permission matrix. Activity-log org-scoping was deliberately kept single-owner,
-    // so the "Event Team" here is the event's single owning organizer account (plus any
-    // active Co-manager checked in $canManageEvent below).
-    // "Organizer (outside Team)" is any other organizer account.
-    $canViewEvent = static function (?array $event, array $auth, ?string $accessCode = null) use ($isStaffRole, $pdo): bool {
-        if (!$event) {
-            return false;
-        }
-        $role = (string) ($auth['role'] ?? '');
-        $userId = (string) ($auth['sub'] ?? '');
-        $isOwner = $role === 'organizer' && $userId !== '' && $event['organizerId'] === $userId;
-
-        if (($event['deletedAt'] ?? null) !== null) {
-            return $role === 'superadmin';
-        }
-        // An active Co-manager (any global role) is on the Team, so sees what the Owner sees.
-        if (!$isOwner && $userId !== '' && (new EventTeamRepository($pdo))->isActiveCoManager((string) ($event['id'] ?? ''), $userId)) {
-            $isOwner = true;
-        }
-
-        $status = (string) ($event['publicationStatus'] ?? '');
-        if (in_array($status, ['published', 'finished', 'cancelled'], true)) {
-            if ($isOwner || $isStaffRole($role)) {
-                return true;
-            }
-            if (empty($event['isPrivate'])) {
-                return true; // public — visible to everyone, including guests
-            }
-            // Private: only via direct link (this event's id/slug), gated by the access
-            // code when the organizer set one. "Organizer (outside Team)" gets no access
-            // here at all, per the matrix — only guests/participants get the link route.
-            if ($role === 'organizer') {
-                return false;
-            }
-            $requiredCode = (string) ($event['accessCode'] ?? '');
-            return $requiredCode === '' || $accessCode === $requiredCode;
-        }
-
-        // Draft / Submitted: never public. Draft is Event Team (owner) only, plus
-        // admin/superadmin read-only oversight — moderator gets none on Draft per the
-        // matrix. Submitted additionally opens up to the moderator for approve/reject.
-        if ($isOwner) {
-            return true;
-        }
-        if ($status === 'submitted') {
-            return $isStaffRole($role);
-        }
-        return in_array($role, ['admin', 'superadmin'], true);
-    };
-    // The Event's Team = its Owner (events.organizer_id) plus active Co-managers
-    // (event_team_members), any Account whatever its global role. Built here, not in the group's `use (...)`.
+    // Event permission matrix (see EventAccess). The closures below stay so that handlers still
+    // living in this file can call them; controllers take EventAccess directly.
     $eventTeam = new EventTeamRepository($pdo);
-    // $ownerLevel = true asks "may this caller do what only the Owner (or admin/superadmin) may do" - the
-    // closed owner-only list (Team roster, Event payment config, delete, ownership transfer)
-    // and Event money: an active Co-manager and a moderator (a Co-manager on someone else's Event) fail it.
-    $canManageEvent = static function (?array $event, array $auth, bool $ownerLevel = false) use ($eventTeam): bool {
-        if (!$event) {
-            return false;
-        }
-        $role = (string) ($auth['role'] ?? '');
-        $userId = (string) ($auth['sub'] ?? '');
-        if (($event['deletedAt'] ?? null) !== null && $role !== 'superadmin') {
-            return false;
-        }
-        if ($userId !== '' && ($event['organizerId'] ?? null) === $userId && $role === 'organizer') {
-            return true;
-        }
-        if (in_array($role, ['admin', 'superadmin', 'moderator'], true)
-            && !($ownerLevel && $role === 'moderator')
-            // Staff can edit once an event has cleared moderation (Published/Finished/
-            // Cancelled). Draft is Event Team only and Submitted is view + approve/reject —
-            // neither is a general staff edit, per the permission matrix.
-            && in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished', 'cancelled'], true)) {
-            return true;
-        }
-
-        // Any other Account (whatever its role) is in the Team only as an active Co-manager.
-        return !$ownerLevel && $userId !== '' && $eventTeam->isActiveCoManager((string) ($event['id'] ?? ''), $userId);
-    };
-    $canUploadResults = static function (?array $event, array $auth) use ($canManageEvent): bool {
-        return $canManageEvent($event, $auth)
-            && in_array((string) ($event['publicationStatus'] ?? ''), ['published', 'finished'], true);
-    };
-    // Money on an Event (refund approve/complete, manual mark-paid, payment details) —
-    // the Event's owner or admin/superadmin. The Moderator is Admin minus money; refunds
-    // are approved by the organizer (own Event) or admin.
-    // An active Co-manager is excluded like the moderator (owner-level only; easy to loosen later).
-    $canManageEventMoney = static fn (?array $event, array $auth): bool =>
-        $canManageEvent($event, $auth, true) && (string) ($auth['role'] ?? '') !== 'moderator';
-    // Registration owner — moved here (was defined locally next to the
-    // refund-request route) so $authorizeRegistration below can also use it.
-    $isRegistrationOwner = static function (?array $registration, array $auth): bool {
-        if (!$registration) {
-            return false;
-        }
-        $callerId = (string) ($auth['sub'] ?? '');
-        return $callerId !== '' && (
-            (string) $registration['userId'] === $callerId
-            || (string) ($registration['registeredById'] ?? '') === $callerId
-        );
-    };
-    /**
-     * The single gate for any route addressing one Zapis by id. Loads the
-     * Zapis and decides, or returns the ready-made error response. New routes that
-     * take a registration id MUST go through this.
-     *
-     * @return array{registration: array<string, mixed>, isManager: bool}|Response
-     */
-    $authorizeRegistration = static function (Response $response, string $registrationId, array $auth, bool $managerOnly = false, bool $money = false)
-        use ($registrations, $events, $isRegistrationOwner, $canManageEvent, $canManageEventMoney): array|Response {
-        $registration = $registrations->find($registrationId);
-        if ($registration === null) {
-            return JsonResponder::error($response, 'not_found', 'Nie znaleziono zapisu.', 404);
-        }
-        $isManager = ($money ? $canManageEventMoney : $canManageEvent)($events->find((string) $registration['eventId']), $auth);
-        if (!$isManager && ($managerOnly || !$isRegistrationOwner($registration, $auth))) {
-            return JsonResponder::forbidden($response);
-        }
-        return ['registration' => $registration, 'isManager' => $isManager];
-    };
+    $eventAccess = new EventAccess($eventTeam);
+    $canViewEvent = $eventAccess->canView(...);
+    $canManageEvent = $eventAccess->canManage(...);
+    $canUploadResults = $eventAccess->canUploadResults(...);
+    $canManageEventMoney = $eventAccess->canManageMoney(...);
+    $registrationAccess = new RegistrationAccess($registrations, $events, $eventAccess);
+    $isRegistrationOwner = $registrationAccess->isOwner(...);
+    $authorizeRegistration = $registrationAccess->authorize(...);
     // Every non-manager Event read goes through PublicEventPresenter (allowlist;
     // accessCode/bzOrganizationToken null; discount `usedBy` dropped; showFreeSlots).
     $stripBzToken = static fn (array $event): array => PublicEventPresenter::present($event);
@@ -472,24 +368,8 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         $nextRole = array_key_exists('role', $payload) ? (string) $payload['role'] : '';
         return in_array($existingRole, ['admin', 'superadmin'], true) || in_array($nextRole, ['admin', 'superadmin'], true);
     };
-    // Server-authored activity log: actor identity always comes from the verified
-    // JWT (`$auth`), never from the request body, so an entry can't be forged as someone
-    // else. `targetName` is a deliberate snapshot of the target's name at the time of the
-    // action, not a foreign-key lookup — keep it that way.
-    // $metadata: optional rich JSON snapshot, used today only by the
-    // competitor-merge log entry (see CompetitorMergeService) — every other
-    // caller keeps omitting it and behaves exactly as before.
-    $logActivity = static function (array $auth, string $action, string $description, ?string $targetType = null, ?string $targetId = null, ?string $targetName = null, ?array $metadata = null) use ($admin): void {
-        $admin->insertActivityLog([
-            'userId' => (string) ($auth['sub'] ?? ''),
-            'action' => $action,
-            'description' => $description,
-            'targetType' => $targetType,
-            'targetId' => $targetId,
-            'targetName' => $targetName,
-            'metadata' => $metadata,
-        ]);
-    };
+    $activityLogger = new ActivityLogger($admin);
+    $logActivity = $activityLogger->log(...);
 
     $publicUploadBase = '/' . trim((string) Env::get('APP_UPLOAD_PUBLIC_BASE', '/uploads'), '/');
     if (!str_starts_with($publicUploadBase, '/api/v1/')) {

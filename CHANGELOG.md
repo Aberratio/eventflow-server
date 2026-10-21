@@ -25,6 +25,11 @@ as the first version.
 - Online payments through Tpay and PayNow, with webhook amount and
   registration cross-checks, payment retries and expiry of unpaid
   registrations.
+- Discount code batches: an organizer of the event (or an admin) generates up
+  to 1000 unique, unambiguous codes at once (prefix, value, usage limit per
+  code, validity) and downloads the batch as a CSV
+  (`POST|GET /events/{id}/discount-code-batches`, `.../{batchId}/export`).
+  Batch codes are ordinary discount codes.
 - Account security: e-mail verification and verified e-mail change, password
   reset with hashed one-time tokens, session revocation and rotation, and
   blocked-account checks on every request.

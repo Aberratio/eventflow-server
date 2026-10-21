@@ -170,6 +170,13 @@ final class RbacFixtures
         $fx->values['importBatch'] = (string) $batch['id'];
         $fx->values['importRow'] = (string) $batch['rows'][0]['id'];
 
+        $discountBatch = (new \ZmierzymyCzas\Domain\Events\DiscountCodeBatchRepository($pdo))->generate(
+            (string) $event['id'],
+            ['prefix' => 'RBAC', 'count' => 2, 'discountType' => 'percent', 'discountValue' => 10],
+            $fx->values['organizer']
+        );
+        $fx->values['discountBatch'] = (string) $discountBatch['id'];
+
         $submissionId = $fx->prefix . '-vsub';
         $pdo->prepare(
             'INSERT INTO virtual_result_submissions (id, event_id, event_name, distance_id, distance_name, registration_id, user_id, user_name, user_email, submitted_time, submitted_time_in_seconds, submitted_at)

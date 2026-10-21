@@ -64,6 +64,7 @@
             "php -l src/Database/EventCoherence.php",
             "php -l src/Domain/Events/EventRepository.php",
             "php -l src/Domain/Events/EventChildSchema.php",
+            "php -l src/Domain/Events/DiscountCodeBatchRepository.php",
             "php -l src/Domain/Events/PublicEventPresenter.php",
             "php -l src/Domain/Competitors/CompetitorRepository.php",
             "php -l src/Domain/Competitors/CompetitorNamePresenter.php",

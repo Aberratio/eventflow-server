@@ -145,6 +145,10 @@ Integrations and mail
   `commit`, and the deploy fails its health check when the commit does not
   match. `APP_VERSION` only overrides the version now: clear the old
   `2026xxxx-x` placeholder from existing `.env` files.
+- Internal refactor: route handlers answer domain failures through one
+  `DomainErrorResponder` (status from the error category, messages from a
+  central catalogue, per-route overrides stay at the call site) instead of
+  per-route message chains. API responses are unchanged.
 
 ### Fixed
 

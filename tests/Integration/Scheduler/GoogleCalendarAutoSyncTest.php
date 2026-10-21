@@ -16,7 +16,7 @@ use ZmierzymyCzas\Scheduler\Jobs\GoogleCalendarOutboxRetryJob;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * R-17 follow-up: a changed date/time/place/title of an approved Event queues an update, a cancelled / deleted
+ * A changed date/time/place/title of an approved Event queues an update, a cancelled / deleted
  * Event queues a delete (only when the integration is active and the entry exists); the worker performs it.
  */
 final class GoogleCalendarAutoSyncTest extends TestCase

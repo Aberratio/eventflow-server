@@ -21,7 +21,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
-/** PP.18: mail #7 sent by the scheduler, once per payment window, with a per-route lead time. */
+/** Mail #7 sent by the scheduler, once per payment window, with a per-route lead time. */
 final class PaymentRemindersJobTest extends TestCase
 {
     private PDO $pdo;

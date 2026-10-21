@@ -8,7 +8,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * G-06: GET /shop/payment-methods lists the methods the shop can really take.
+ * GET /shop/payment-methods lists the methods the shop can really take.
  * Bank transfer is always offered; card and BLIK are online-gateway methods and
  * appear only when Tpay or PayNow is configured in the environment.
  */

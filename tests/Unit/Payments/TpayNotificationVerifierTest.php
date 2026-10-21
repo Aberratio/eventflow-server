@@ -14,7 +14,7 @@ use ZmierzymyCzas\Tests\Support\FakeHttpClient;
  * Exercises the real JWS verification mechanism (RFC 7515, RS256, x5u chain to a
  * root CA) against a real, freshly generated RSA key pair and certificate chain —
  * not a mock of the crypto itself, only of the two HTTP fetches (leaf cert, root
- * CA cert) the verifier makes, per the ticket's "mock the HTTP layer, not the
+ * CA cert) the verifier makes, per the "mock the HTTP layer, not the
  * integration logic" requirement.
  */
 final class TpayNotificationVerifierTest extends TestCase

@@ -15,7 +15,7 @@ use ZmierzymyCzas\Scheduler\Jobs\RetentionPurgeJob;
 use ZmierzymyCzas\Scheduler\SchedulerJobs;
 use ZmierzymyCzas\Support\Env;
 
-/** R-05 (specs 09, 10): confidential form answers and the activity log are purged after the configured period (90 days / 12 months by default). */
+/** Confidential form answers and the activity log are purged after the configured period (90 days / 12 months by default). */
 final class RetentionPurgeJobTest extends TestCase
 {
     private PDO $pdo;

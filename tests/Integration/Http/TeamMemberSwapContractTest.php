@@ -10,10 +10,10 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * G-04 (spec 23 Answer §2, spec 20 "Transfer", spec 11 §4): wymiana zawodnika w składzie
- * Drużyny sztafetowej = podmiana Zawodnika na istniejącym Zapisie. Cena (Rozliczenie) i numer
- * startowy zostają, kod startowy (`pqr_`) rotuje, kapitan wymienia do osobnego terminu, po nim
- * tylko organizator/Zespół Wydarzenia, a każda wymiana zostawia wpis w rejestrze aktywności.
+ * Swapping a Zawodnik in the roster of a relay Drużyna replaces the Zawodnik on an existing Zapis. The
+ * price (Rozliczenie) and bib number stay, the start code (`pqr_`) rotates, the captain swaps until a separate
+ * deadline, after which only the organizer/Event Team can, and every swap leaves an entry in the activity
+ * log.
  */
 final class TeamMemberSwapContractTest extends HttpTestCase
 {
@@ -131,11 +131,11 @@ final class TeamMemberSwapContractTest extends HttpTestCase
         // Kod startowy rotuje, format BZ bez zmian.
         self::assertNotSame($before['qr_code'], $after['qr_code']);
         self::assertMatchesRegularExpression('/^pqr_[a-f0-9]{48}$/', (string) $after['qr_code']);
-        // Numer startowy, status i Rozliczenie zostają przy Zapisie.
+        // The bib number, status and Rozliczenie stay with the Zapis.
         self::assertSame('17', $after['bib_number']);
         self::assertSame($before['status'], $after['status']);
         self::assertSame($itemsBefore, $this->settlementSnapshot($memberRegId));
-        // BZ: pull widzi zmianę dzięki znacznikowi updated_at (spec 12 LWW).
+        // BZ: pull sees the change thanks to the updated_at marker (last-write-wins).
         self::assertNotNull($after['updated_at']);
     }
 
@@ -194,7 +194,7 @@ final class TeamMemberSwapContractTest extends HttpTestCase
         self::assertSame(403, $denied->getStatusCode());
         self::assertSame('team_not_captain', $this->json($denied)['error']['code']);
 
-        // Sam członek (nie kapitan) też nie wymienia.
+        // The member alone (not the captain) cannot swap either.
         $member = $this->swap($this->member, $teamId, $memberRegId, $body);
         self::assertSame(403, $member->getStatusCode());
 

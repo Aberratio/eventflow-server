@@ -10,7 +10,7 @@ use ZmierzymyCzas\Tests\Support\HttpTestCase;
 use ZmierzymyCzas\Tests\Support\SavepointPdo;
 
 /**
- * PP.4: data-driven RBAC regression grid over every route of the real Slim route
+ * Data-driven RBAC regression grid over every route of the real Slim route
  * collector. Every request runs inside a savepoint that is rolled back, so allowed
  * actors can exercise write routes too and every actor sees pristine fixtures.
  */
@@ -198,7 +198,7 @@ final class RbacGridContractTest extends HttpTestCase
         }
     }
 
-    // PP.4 tripwires T1-T3 closed by PP.55; re-add a knownGaps() provider here for the next known-open leak.
+    // The earlier known-leak tripwires are closed; re-add a knownGaps() provider here for the next known-open leak.
 
     public function testDevSeedEndpointIsClosedOutsideLocal(): void
     {

@@ -26,7 +26,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Support\Uuid;
 
 /**
- * PP.63: a signed PayNow notification whose `externalId` disagrees with the registration id stored
+ * A signed PayNow notification whose `externalId` disagrees with the registration id stored
  * on the gateway transaction row must not mark anything paid, but is still acked (200, empty body).
  * Built like ObservabilityContractTest: real middleware stack + real routes.php. A DB that is not
  * reachable is a hard failure here, never a skip.

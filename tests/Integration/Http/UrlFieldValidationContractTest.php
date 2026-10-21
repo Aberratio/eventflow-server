@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.50: every stored URL field reachable through the API rejects non-http(s) schemes on write
+ * Every stored URL field reachable through the API rejects non-http(s) schemes on write
  * (422 invalid_url, Polish message, field = concrete path) and leaves the row untouched.
  */
 final class UrlFieldValidationContractTest extends HttpTestCase
@@ -32,7 +32,7 @@ final class UrlFieldValidationContractTest extends HttpTestCase
         $this->users = new UserRepository($this->pdo);
         $this->prefix = 'http-url-' . bin2hex(random_bytes(4));
 
-        // No Migrator::applyAll(): migration 052 is not idempotent on an already migrated DB (PP.13).
+        // No Migrator::applyAll(): migration 052 is not idempotent on an already migrated DB.
         $make = fn (string $suffix, string $role, array $extra = []): array => $this->users->create(array_merge([
             'name' => 'URL Test ' . $suffix,
             'email' => $this->prefix . '-' . $suffix . '@example.test',

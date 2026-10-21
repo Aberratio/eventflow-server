@@ -13,8 +13,8 @@ use ZmierzymyCzas\Domain\Teams\TeamRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E7.1 ("Cykl życia Drużyny: niepełny skład legalny, limit liczy Zapisy",
- * issue 23 Answer §1) — the new `teams` entity behind
+ * Drużyna lifecycle ("Cykl życia Drużyny: niepełny skład legalny, limit liczy Zapisy"):
+ * the `teams` entity behind
  * `registrations.team_id`/`team_name`, and the validation
  * RegistrationRepository::create() now runs against it.
  */
@@ -135,7 +135,7 @@ final class RegistrationTeamTest extends TestCase
     }
 
     /**
-     * PP.54: a join must carry the team's invitation (or be done by the captain).
+     * A join must carry the team's invitation (or be done by the captain).
      *
      * @param array<string, mixed> $captain the Zapis that created the team
      * @return array{teamId: mixed, teamInviteToken: string}
@@ -196,7 +196,7 @@ final class RegistrationTeamTest extends TestCase
         self::assertSame($event['distances'][0]['id'], $team['distanceId']);
         self::assertSame(1, $team['memberCount']);
         // relay_max_team_size = 4, one member registered => not yet complete
-        // (issue 23 Answer §1's own worked example: 3 of 4 is still legal
+        // (worked example: 3 of 4 is still legal
         // and incomplete, let alone 1 of 4).
         self::assertFalse($team['complete']);
     }
@@ -212,7 +212,7 @@ final class RegistrationTeamTest extends TestCase
         ]));
     }
 
-    /** PP.54: knowing a team id is not enough to join it. */
+    /** Knowing a team id is not enough to join it. */
     public function testJoinWithoutInviteOrCaptainIsRejected(): void
     {
         $event = $this->events->create($this->eventPayload());
@@ -231,7 +231,7 @@ final class RegistrationTeamTest extends TestCase
         self::assertSame(1, $this->teams->memberCount((string) $captain['teamId']));
     }
 
-    /** PP.54: captain consent - the captain (actorUserId) may register into their own team without a token. */
+    /** Captain consent - the captain (actorUserId) may register into their own team without a token. */
     public function testCaptainActorMayJoinOwnTeamWithoutToken(): void
     {
         $event = $this->events->create($this->eventPayload());
@@ -315,7 +315,7 @@ final class RegistrationTeamTest extends TestCase
     }
 
     /**
-     * E7.1 point 4: completeness is a purely derived value, never a stored
+     * Completeness is a purely derived value, never a stored
      * field a create()/join() call can set directly — this proves it moves
      * from incomplete to complete purely as a side effect of registration
      * count crossing relay_max_team_size, with nothing anywhere setting a
@@ -348,8 +348,8 @@ final class RegistrationTeamTest extends TestCase
     }
 
     /**
-     * The ticket's own named acceptance criterion (E7.1 point 5, issue 23
-     * Answer §1): an incomplete Drużyna's Zapisy count against the Dystans
+     * Acceptance criterion:
+     * an incomplete Drużyna's Zapisy count against the Dystans
      * limit exactly as many slots as they have registrations — never the
      * team's full/target size. Three Zapisy on a relay Dystans limited to
      * three total participant slots must exactly fill it, regardless of the
@@ -388,8 +388,8 @@ final class RegistrationTeamTest extends TestCase
     }
 
     /**
-     * E7.5 (issue 23 Answer §7): the captain declares the Kategoria
-     * specjalna at team-creation time, from the same configured list ticket
+     * The captain declares the Kategoria
+     * specjalna at team-creation time, from the same configured list
      * 10 already validates individual `category` free text against
      * (event_distances.special_categories) — see eventPayload()'s relay
      * distance, which configures 'Drużyna mieszana'/'Drużyna kobieca'.
@@ -422,7 +422,7 @@ final class RegistrationTeamTest extends TestCase
     }
 
     /**
-     * The ticket's own explicit design constraint (Answer §7): a member
+     * Design constraint: a member
      * joining/leaving the roster must never touch a previously declared
      * Kategoria specjalna, even when the join would make the declaration
      * look stale (here: "Drużyna kobieca" declared, then a member joins —
@@ -516,7 +516,7 @@ final class RegistrationTeamTest extends TestCase
     }
 
     /**
-     * TD.8 (spec 07 pkt 10 / spec 23 §3): "za drużynę" puts the entire opłata
+     * "za drużynę" puts the entire opłata
      * startowa on the captain's Zapis and zeroes it for every other member.
      * Uses a non-zero price (100) on the relay distance and
      * `teamPricingMode: 'per_team'` so the suppression is actually
@@ -550,7 +550,7 @@ final class RegistrationTeamTest extends TestCase
     }
 
     /**
-     * TD.8: steps 4–6 (modifiers, gadżety, NNW) are explicitly unaffected by
+     * Steps 4–6 (modifiers, gadżety, NNW) are explicitly unaffected by
      * the suppression — the spec is clear that merchandise/insurance always
      * stay with the ordering Zapis, because a t-shirt has a specific
      * person's size.
@@ -587,7 +587,7 @@ final class RegistrationTeamTest extends TestCase
     }
 
     /**
-     * TD.8: the discount-code block (step 3) must not run at all for a
+     * The discount-code block (step 3) must not run at all for a
      * suppressed registration — proven here with an entirely bogus code
      * that would normally throw `discount_code_invalid`. If suppression
      * were only zeroing the amount afterwards instead of skipping the step,
@@ -671,8 +671,8 @@ final class RegistrationTeamTest extends TestCase
 
     /**
      * The legacy free-text team classification path (no `teamId`, no
-     * `createTeam` — E1.13's general `collectTeam` label, unrelated to the
-     * E7.1 roster) must be completely unaffected: `team['teamId']` is
+     * `createTeam` — the general `collectTeam` label, unrelated to the
+     * roster) must be completely unaffected: `team['teamId']` is
      * always null there, so `$isJoiningExistingTeam` is false regardless of
      * `team_pricing_mode`, on any distance, relay or not.
      */

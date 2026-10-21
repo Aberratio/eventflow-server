@@ -13,7 +13,7 @@ use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailTemplateRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E1.10 §5 (model szablonów) against a real `mail_templates` table: global vs
+ * Template model against a real `mail_templates` table: global vs
  * per-event override resolution, the silent fallback chain (override -> global
  * -> MailCatalog's built-in default), validation of unknown variables at save
  * time, and the systemic-mail-types-reject-an-override guard.

@@ -11,7 +11,7 @@ use ZmierzymyCzas\Database\Migrator;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * PP.54: migration 062 adds teams.invite_token + its unique index, portably
+ * Migration 062 adds teams.invite_token + its unique index, portably
  * (information_schema + PREPARE, no `IF NOT EXISTS` inside ALTER) and idempotently.
  */
 final class TeamInviteTokenMigrationTest extends TestCase

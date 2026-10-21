@@ -12,8 +12,8 @@ use ZmierzymyCzas\Database\Migrator;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * Regression cover for the PHP-side QR backfills of migrations 039 (E1.11,
- * `registrations.qr_code`) and 040 (E1.12, `competitors.identity_code`).
+ * Regression cover for the PHP-side QR backfills of migrations 039
+ * (`registrations.qr_code`) and 040 (`competitors.identity_code`).
  *
  * Both originally generated their codes with `RANDOM_BYTES(24)` in SQL — a MySQL
  * 8.0 function MariaDB only has from 11.3, so on both environments this project

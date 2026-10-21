@@ -98,7 +98,7 @@ final class RouteContractTest extends HttpTestCase
 
     public function testPrivateEventSlugIsHiddenPubliclyButVisibleToStaffToken(): void
     {
-        // E1.1: a Published+Private event without the right access code is hidden from
+        // A Published+Private event without the right access code is hidden from
         // an anonymous caller entirely (not even reachable via the direct link).
         $publicResponse = $this->request('GET', '/api/v1/events/slug/' . $this->privateEvent['slug']);
         $publicPayload = $this->json($publicResponse);
@@ -133,7 +133,7 @@ final class RouteContractTest extends HttpTestCase
     }
 
     /**
-     * E3.2 (issue 12 §3): the pasted BZ organization token is credential-shaped and
+     * The pasted BZ organization token is credential-shaped and
      * must never reach a participant/anonymous reader of a published Event, even
      * though the rest of the Event payload (including bank details inside
      * paymentConfig) is already returned unfiltered on this same public route —
@@ -241,7 +241,7 @@ final class RouteContractTest extends HttpTestCase
     }
 
     /**
-     * E1.1 dropped the free-text `status` column entirely (see
+     * The free-text `status` column was dropped entirely (see
      * 031_e11_event_lifecycle.sql), so there is no ENUM to patch in place any more — the
      * schema this test needs only exists once every migration has actually run. Calling
      * the real Migrator (idempotent, no ledger — see its docblock) is the only thing that

@@ -16,8 +16,8 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * TD.6 (E6.6 follow-up, "wire anonymization masking into public start-list
- * and results"): E6.6 wired the real `competitors.is_anonymized` toggle into
+ * Follow-up ("wire anonymization masking into public start-list
+ * and results"): the real `competitors.is_anonymized` toggle into
  * the Wyzwanie/Series public ranking only — the public event start list
  * (`GET /events/{eventId}/start-list`, unauthenticated) kept showing a
  * competitor's real name completely unmasked even after they opted in. This

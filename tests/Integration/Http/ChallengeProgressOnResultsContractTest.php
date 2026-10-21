@@ -10,7 +10,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * G-02 (spec 15 §3): a Wyzwanie's progress follows the results - it is recomputed when results are
+ * A Wyzwanie's progress follows the results - it is recomputed when results are
  * published / corrected / imported, not only when the participant joins or reads the page. The
  * completion moment (mail #13 gate: completion_notified_at) is reached on the write path too.
  */

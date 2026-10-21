@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
-/** R-02 (zakres P2): self-service cancellation window, refund request, counter and history. */
+/** Self-service cancellation window, refund request, counter and history. */
 final class RegistrationSelfCancelContractTest extends HttpTestCase
 {
     private UserRepository $users;

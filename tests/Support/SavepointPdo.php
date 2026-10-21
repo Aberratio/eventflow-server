@@ -9,7 +9,7 @@ use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * PP.4: a real connection to the test database that lets a test run arbitrary HTTP
+ * A real connection to the test database that lets a test run arbitrary HTTP
  * requests with zero side effects. A test opens one outer transaction (beginOuter),
  * builds its fixtures inside it, and wraps every request in a named savepoint it can
  * roll back (savepoint / rollbackTo). While the outer transaction is open, the

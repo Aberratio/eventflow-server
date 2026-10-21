@@ -17,9 +17,9 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeBzHttpClient;
 
 /**
- * E3.4: BzWebhookOutboxService against a real outbox table (migration
+ * BzWebhookOutboxService against a real outbox table (migration
  * 049_e3_4_bz_webhook_outbox.sql) and a FakeBzHttpClient — exercises the outbox
- * pattern itself (mirroring CentralMailerOutboxServiceTest, E1.9's equivalent):
+ * pattern itself (mirroring CentralMailerOutboxServiceTest):
  * idempotency-key write-before-HTTP-call, no duplicate push on a repeated key,
  * and failure recording. The HTTP contract shape (headers, payload) is covered
  * separately in tests/Unit/Bz/BzWebhookClientTest.php.

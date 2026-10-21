@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E8.2 (spec 21 Answer §4): free-slots counter, default visible, organizer
+ * Free-slots counter, default visible, organizer
  * can hide it per Event. Mirrors the existing `display_options.showParticipants`
  * toggle's own mechanism exactly (same JSON column, same per-Event scope,
  * same generic PATCH /events/{id} write path) — this test only exercises the

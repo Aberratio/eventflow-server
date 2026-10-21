@@ -11,11 +11,11 @@ use ZmierzymyCzas\Domain\Payments\Tpay\TpayConfig;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E1.6: the webhook route itself, wired through the real routes.php (real
+ * The webhook route itself, wired through the real routes.php (real
  * TpayNotificationVerifier + a real CurlHttpClient underneath it — the same
  * wiring production uses). This deliberately only exercises the paths that can
  * be rejected *before* any certificate would need fetching (missing signature
- * header, and an x5u host that isn't Tpay's) — per this ticket's "never hit a
+ * header, and an x5u host that isn't Tpay's) — per the "never hit a
  * real external host in tests" constraint, the *accepting* path (a genuinely
  * valid signature) is covered instead at the unit level
  * (tests/Unit/Payments/TpayNotificationVerifierTest.php) against a fake HTTP

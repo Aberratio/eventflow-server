@@ -10,10 +10,10 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * B-01 (spec 08, umowa §5.4): POST /registrations enforces "are registrations open" on the server
+ * POST /registrations enforces "are registrations open" on the server
  * (published, status, open date, deadline, event date), with a 409 `registration_closed`.
  * The Event's own organizer / staff are exempt from the time rules (they add people after close).
- * G-08: on a Draft in test mode the request is a dry run - nothing real is created.
+ * On a Draft in test mode the request is a dry run - nothing real is created.
  */
 final class RegistrationOpenRulesContractTest extends HttpTestCase
 {

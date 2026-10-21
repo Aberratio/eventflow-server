@@ -9,7 +9,7 @@ use ZmierzymyCzas\Database\Connection;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * PP.20/PP.51: a real connection to the test database (built the way
+ * A real connection to the test database (built the way
  * `Connection::fromEnv()` builds one) whose prepare()/query() throw a given
  * PDOException whenever the SQL contains a given needle. Lets a test simulate a
  * database failure at exactly one statement without touching the real schema.

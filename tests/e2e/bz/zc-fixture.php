@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * Fixture for the ZC <-> BZ end-to-end runner (PP.43). Runs inside the ZC checkout the
+ * Fixture for the ZC <-> BZ end-to-end runner. Runs inside the ZC checkout the
  * runner owns (its `.env` points at the e2e database) and prints one JSON document.
  *
  * Built through the repositories rather than raw SQL so NOT NULL columns, generated

@@ -15,10 +15,10 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E6.5 (issue 15 §4-5): "Uczestnictwo odblokowuje zakup Produktu".
+ * "Uczestnictwo odblokowuje zakup Produktu".
  * ChallengeRepository::claimReward() gates purchase on real condition-tree
- * completion (E6.3), prevents double-claiming via the reward_granted
- * "claim lock", and reuses OrderRepository::create() (E5.1-E5.7) for the
+ * completion, prevents double-claiming via the reward_granted
+ * "claim lock", and reuses OrderRepository::create() for the
  * actual order so stock/variant limits and zero-price handling are never
  * duplicated here.
  */
@@ -224,8 +224,8 @@ final class ChallengeRewardClaimTest extends TestCase
 
     /**
      * The stock-exhaustion path exercises OrderRepository::create()'s
-     * existing `order_insufficient_stock` error unchanged — E6.5 deliberately
-     * doesn't build a parallel Challenge-specific stock rule (issue 15 §5).
+     * existing `order_insufficient_stock` error unchanged — the reward claim deliberately
+     * doesn't build a parallel Challenge-specific stock rule.
      * A failed claim must also release the reward_granted "claim lock" so
      * the competitor can retry once stock is replenished, and must not touch
      * challenge completion at all.

@@ -11,7 +11,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.90 (+ the PP.100 422): POST /dev/seed-event creates a whole event with registrations and results.
+ * POST /dev/seed-event creates a whole event with registrations and results.
  * Locally it keeps the convenient demo123 accounts; on staging (reachable from the internet) the accounts
  * it creates never get a known password, and the caller must hold a live session.
  */

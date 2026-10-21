@@ -12,7 +12,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * PP.7: migration 064 adds users.token_version and the auth token tables,
+ * Migration 064 adds users.token_version and the auth token tables,
  * portably (guarded ALTERs) and idempotently (applied twice here).
  */
 final class AuthTokensMigrationTest extends TestCase

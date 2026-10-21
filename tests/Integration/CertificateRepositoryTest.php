@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Certificate\CertificateRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * TD.16: CertificateRepository had zero direct test coverage before this file.
+ * CertificateRepository had zero direct test coverage before this file.
  * Certificates are participant-facing proof of a race result (finish time,
  * position, a certificate number meant to be unique/verifiable), so the two
  * things worth pinning down are (a) create() always mints a well-formed,

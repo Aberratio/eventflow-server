@@ -12,7 +12,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E1.14: `PATCH /registrations/{id}/form-snapshot` — the audited "korekta
+ * `PATCH /registrations/{id}/form-snapshot` — the audited "korekta
  * wsteczna" endpoint. Drives the real route (not the repository directly)
  * so the $canManageEvent authorization gate and the $logActivity wiring are
  * both exercised the way ChallengeJoinCompletionContractTest exercises its

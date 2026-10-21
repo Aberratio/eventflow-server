@@ -12,7 +12,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * R-12 (specs 07, 21): the Zapis total never drops below 0 when a negative form modifier ("udzial w
+ * The Zapis total never drops below 0 when a negative form modifier ("udzial w
  * losowaniu -5") is larger than the price, and the seat counter holds under truly parallel creates.
  */
 final class RegistrationPriceFloorAndCapacityTest extends TestCase

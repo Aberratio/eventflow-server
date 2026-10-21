@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E8.1 (issue 22): "wyłącznie Moderator/Admin" — this file's whole job is
+ * "wyłącznie Moderator/Admin" — this file's whole job is
  * proving that gate holds (participant and organizer rejected, moderator and
  * admin both succeed) and that the three endpoints behave over real HTTP,
  * not just at the service layer (see CompetitorMergeServiceTest for the
@@ -27,7 +27,7 @@ final class CompetitorMergeContractTest extends HttpTestCase
         parent::setUp();
         $this->competitors = new CompetitorRepository($this->pdo);
         $this->prefix = 'HttpMerge-' . bin2hex(random_bytes(4));
-        // PP.7: the session guard rejects tokens of users that do not exist, so each role is a real account.
+        // The session guard rejects tokens of users that do not exist, so each role is a real account.
         $users = new UserRepository($this->pdo);
         foreach (['participant', 'organizer', 'moderator', 'admin'] as $role) {
             $this->actors[$role] = $users->create([

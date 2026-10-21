@@ -15,7 +15,7 @@ use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Scheduler\Jobs\GoogleCalendarOutboxRetryJob;
 use ZmierzymyCzas\Support\Env;
 
-/** R-17: calendar.outbox_retry - sends queued entries, backs off on failure, updates instead of duplicating. */
+/** calendar.outbox_retry - sends queued entries, backs off on failure, updates instead of duplicating. */
 final class GoogleCalendarOutboxRetryTest extends TestCase
 {
     private PDO $pdo;

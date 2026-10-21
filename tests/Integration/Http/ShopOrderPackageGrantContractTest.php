@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.105 (QA49-01..04, P0 money): an organizer package grants credits, the
+ * An organizer package grants credits, the
  * Organizator role and an event slot only when its shop order becomes `paid`
  * (the single door is OrderRepository::changeStatus()), never at checkout.
  */

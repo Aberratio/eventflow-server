@@ -10,7 +10,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E2.7 (spec 14 sekcja 4): GET /events/{eventId}/distances/{distanceId}/team-results
+ * GET /events/{eventId}/distances/{distanceId}/team-results
  * is the new live-computed team/relay classification endpoint - public/
  * unauthenticated, mirroring GET /events/{eventId}/results (see
  * ResultsContractTest::testEventResultsEndpointIsPublic()).
@@ -103,7 +103,7 @@ final class TeamClassificationContractTest extends HttpTestCase
         $distanceId = (string) $this->event['distances'][0]['id'];
         $eventId = (string) $this->event['id'];
 
-        // E7.1: `registrations.team_id` is now FK-constrained to a real
+        // `registrations.team_id` is now FK-constrained to a real
         // `teams` row — createTeamMember()/createRegistrationOnly() below
         // insert straight into `registrations` (bypassing
         // RegistrationRepository::create()'s own team validation, which this
@@ -174,7 +174,7 @@ final class TeamClassificationContractTest extends HttpTestCase
         self::assertSame('dnf', $individual['status'], "The member's own individual result must be untouched by team exclusion.");
     }
 
-    /** E7.1: creates a real `teams` row, returning its server-generated id. */
+    /** Creates a real `teams` row, returning its server-generated id. */
     private function createTeam(string $eventId, string $distanceId, string $name): string
     {
         $id = $this->prefix . '-team-' . bin2hex(random_bytes(4));

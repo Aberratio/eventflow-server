@@ -9,7 +9,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.76: POST/PATCH /challenges and /info-pages with missing or wrongly typed fields answer
+ * POST/PATCH /challenges and /info-pages with missing or wrongly typed fields answer
  * 422 validation_error (details.field) instead of a 500 from strict MySQL. The test session
  * runs with MySQL 8.4's sql_mode (see StrictSessionTest), so the "fails before" behaviour is
  * the production one even on a non-strict local MariaDB.
@@ -173,7 +173,7 @@ final class RequiredFieldsContractTest extends HttpTestCase
     }
 
     /**
-     * Regression guard (passes before and after PP.76, not a red test): the handler's UrlPolicy
+     * Regression guard (passes before and after the fix, not a red test): the handler's UrlPolicy
      * check runs before the repository, so an unsafe URL still wins over the missing slug.
      */
     public function testChallengeUnsafeUrlStillWinsOverMissingSlug(): void

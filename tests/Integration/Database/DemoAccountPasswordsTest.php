@@ -14,7 +14,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * PP.90: seeded demo accounts must not keep a known password outside local. scrub() replaces the password
+ * Seeded demo accounts must not keep a known password outside local. scrub() replaces the password
  * of every manifest account and every account that still carries the seeders' demo hash (and, in deep mode,
  * any account that verifies demo123/demo1234) and ends its sessions.
  */

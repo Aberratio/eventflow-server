@@ -10,7 +10,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
-/** R-02 (zakres P2): transfer of a Zapis to another Zawodnik by the Event's manager. */
+/** Transfer of a Zapis to another Zawodnik by the Event's manager. */
 final class RegistrationTransferContractTest extends HttpTestCase
 {
     private UserRepository $users;

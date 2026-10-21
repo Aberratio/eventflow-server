@@ -10,7 +10,7 @@ use ZmierzymyCzas\Tests\Support\HttpTestCase;
 use ZmierzymyCzas\Tests\Support\SavepointPdo;
 
 /**
- * R-01 (S1): the Event Team's Co-managers. Targeted checks beside the RBAC grid: a Co-manager of any global
+ * The Event Team's Co-managers. Targeted checks beside the RBAC grid: a Co-manager of any global
  * role manages the Event but touches nothing owner-only, and a revoked / merely invited member gets nothing.
  * Runs on the RBAC fixture world (`coManager` = participant, `coManagerOrg` = organizer, `revoked`).
  */

@@ -23,7 +23,7 @@ use ZmierzymyCzas\Support\Uuid;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
 /**
- * E1.6: RegistrationRepository wired against a fake gateway (implements the same
+ * RegistrationRepository wired against a fake gateway (implements the same
  * PaymentGatewayInterface the real TpayGateway does) — exercises "start a session
  * on create/retry", "amount always comes from the frozen Rozliczenie, never the
  * caller", "webhook idempotency by transaction_id", and "a real refund call fires
@@ -220,7 +220,7 @@ final class RegistrationRepositoryTpayTest extends TestCase
     }
 
     /**
-     * The ticket's core idempotency requirement: Tpay retrying the same webhook
+     * The core idempotency requirement: Tpay retrying the same webhook
      * (its own timeout retry) after we already applied it once must be a pure
      * no-op — no double side effects, no error.
      */
@@ -355,7 +355,7 @@ final class RegistrationRepositoryTpayTest extends TestCase
         self::assertStringNotContainsString('PHPUnit User', $logged);
     }
 
-    // ---- PP.63: notified registration id cross-check ------------------------------------
+    // ---- Notified registration id cross-check ------------------------------------
 
     /** @return array<int, \Monolog\LogRecord> */
     private function recordsWithAlert(\Monolog\Handler\TestHandler $logs, string $alert): array
@@ -711,7 +711,7 @@ final class RegistrationRepositoryTpayTest extends TestCase
     }
 
     /**
-     * TD.13: $gateway->refund() throwing must no longer vanish silently. It
+     * $gateway->refund() throwing must no longer vanish silently. It
      * must (a) be logged, (b) not be reported to the caller as a plain
      * success, and (c) leave the refund cycle's persisted status exactly
      * where the pre-fix code already left it (`approved` — see

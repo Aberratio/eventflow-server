@@ -12,10 +12,10 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E8.2 (spec 21 Answer §2): GET /events/{id}/registration-stats — built-in
+ * GET /events/{id}/registration-stats — built-in
  * organizer cross-sections (distance/payment-status/signup-curve, plus
  * gender/club/age-category when configured). Gated the same way as the
- * sibling E2.5 form-field-aggregates endpoint — see
+ * sibling form-field-aggregates endpoint — see
  * FormFieldAggregatesContractTest's own doc comment for the precedent this
  * mirrors.
  */
@@ -105,7 +105,7 @@ final class RegistrationStatsContractTest extends HttpTestCase
         // Club defaults to `hidden` (control-class free — migration 041's
         // backfill, FormFieldRepository::ensureSystemCatalog()'s default for
         // CONTROL_FREE) — the concrete "field not configured -> key absent"
-        // case the ticket calls out.
+        // case worth calling out.
         self::assertArrayNotHasKey('byClub', $data);
         self::assertArrayNotHasKey('ageCategories', $data);
 

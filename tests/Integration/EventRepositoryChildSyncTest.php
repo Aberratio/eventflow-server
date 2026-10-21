@@ -13,7 +13,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Support\InputValidationException;
 
 /**
- * PP.59: transaction + trusted-mode + logging behaviour of EventRepository's child sync.
+ * Transaction + trusted-mode + logging behaviour of EventRepository's child sync.
  */
 final class EventRepositoryChildSyncTest extends TestCase
 {

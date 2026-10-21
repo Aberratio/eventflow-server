@@ -11,7 +11,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.82: an account created through POST /users never gets a known password. The
+ * An account created through POST /users never gets a known password. The
  * admin cannot supply one (422), the stored hash is an unusable bcrypt hash, and the
  * owner receives a one-time password-set link (PASSWORD_RESET token, 72 h) by mail.
  */

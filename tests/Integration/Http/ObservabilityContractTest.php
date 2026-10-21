@@ -27,7 +27,7 @@ use ZmierzymyCzas\Support\Uuid;
 use ZmierzymyCzas\Tests\Support\FaultInjectingPdo;
 
 /**
- * PP.20 / PP.51: builds its own app (real middleware stack + real routes.php, a TestHandler
+ * Builds its own app (real middleware stack + real routes.php, a TestHandler
  * logger carrying the real redactor) instead of extending HttpTestCase. A DB that is not
  * reachable is a hard failure here, never a skip.
  */
@@ -244,7 +244,7 @@ final class ObservabilityContractTest extends TestCase
         return $app->handle($request);
     }
 
-    /** PP.7: the session guard needs a real user row (a token for an unknown sub is a 401). */
+    /** The session guard needs a real user row (a token for an unknown sub is a 401). */
     private function bearer(string $role): string
     {
         if ($this->userId === null) {

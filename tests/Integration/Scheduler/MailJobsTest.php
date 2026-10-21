@@ -22,7 +22,7 @@ use ZmierzymyCzas\Scheduler\Jobs\ResultsPublishedMailJob;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
-/** PP.19: the mail.outbox_retry job (skipped when unconfigured, dispatches deferred rows otherwise). */
+/** The mail.outbox_retry job (skipped when unconfigured, dispatches deferred rows otherwise). */
 final class MailJobsTest extends TestCase
 {
     private PDO $pdo;

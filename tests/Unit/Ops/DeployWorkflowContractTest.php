@@ -7,8 +7,8 @@ namespace ZmierzymyCzas\Tests\Unit\Ops;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Text-level contract over the deploy workflows. It guards the safety design of
- * PP.21 (guard job, no secrets before the guard, delegated remote logic, no push
+ * Text-level contract over the deploy workflows. It guards the safety design of the deploy pipeline
+ * (guard job, no secrets before the guard, delegated remote logic, no push
  * to production) against accidental edits. Behaviour is covered by tests/ops.
  */
 final class DeployWorkflowContractTest extends TestCase

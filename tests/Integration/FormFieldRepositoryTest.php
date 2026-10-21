@@ -17,7 +17,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E1.13: "Pozycja formularza" (model-formularza-zapisow.md). Covers the
+ * "Pozycja formularza" (the form-field model). Covers the
  * acceptance criteria that need a real database: the 13-position catalog
  * seeded per event, three-state control-class enforcement, label-override
  * not touching the key, public-list derivation, and the seams' inertness
@@ -212,7 +212,7 @@ final class FormFieldRepositoryTest extends TestCase
         self::assertContains($confidential['id'], array_column($answers, 'formFieldId'));
     }
 
-    /** Seam #1: distance_id is always null — no per-Distance override is ever produced by this ticket's code paths. */
+    /** Seam #1: distance_id is always null — no per-Distance override is ever produced by the current code paths. */
     public function testDistanceScopingColumnIsAlwaysNull(): void
     {
         $this->fields->ensureSystemCatalog($this->eventId);
@@ -259,7 +259,7 @@ final class FormFieldRepositoryTest extends TestCase
     }
 
     /**
-     * E1.13 verification fix: the acceptance criterion ("public start-list
+     * The acceptance criterion ("public start-list
      * column derivation follows form-item order + visibility flag,
      * confidential fields always excluded") must be reachable through the
      * real endpoint path, not just FormFieldRepository::publicListColumns()
@@ -318,7 +318,7 @@ final class FormFieldRepositoryTest extends TestCase
     }
 
     /**
-     * E3.3: `visible_to_bz` mirrors `public_list_visible`'s own default —
+     * `visible_to_bz` mirrors `public_list_visible`'s own default —
      * every field, system or custom, must default to Nie so no existing field
      * becomes visible to Biuro Zawodów by accident when this column first
      * appears on a Wydarzenie's catalog.
@@ -339,7 +339,7 @@ final class FormFieldRepositoryTest extends TestCase
     }
 
     /**
-     * E3.3: a pre-existing row that never touched this column (simulating a
+     * A pre-existing row that never touched this column (simulating a
      * form field written before migration 048 ran) must still read
      * `visibleToBz` as false, purely off the column's own DEFAULT 0 — the
      * same non-breaking backfill guarantee 047's `bz_integration_enabled`
@@ -366,7 +366,7 @@ final class FormFieldRepositoryTest extends TestCase
     }
 
     /**
-     * E3.3: settable the same way `publicListVisible` is — through
+     * Settable the same way `publicListVisible` is — through
      * updateBzVisibility(), the method the PATCH /form-fields/{fieldId}
      * endpoint calls when the request body carries `visibleToBz`.
      */
@@ -387,7 +387,7 @@ final class FormFieldRepositoryTest extends TestCase
     }
 
     /**
-     * E3.3: a confidential field can never become visible to Biuro Zawodów
+     * A confidential field can never become visible to Biuro Zawodów
      * either — same defense as updatePublicListVisibility()'s own guard.
      */
     public function testUpdateBzVisibilityRejectsAConfidentialField(): void
@@ -404,7 +404,7 @@ final class FormFieldRepositoryTest extends TestCase
     }
 
     /**
-     * E3.3: bzVisibleColumns() is the filter RegistrationRepository::
+     * bzVisibleColumns() is the filter RegistrationRepository::
      * bzParticipantList() uses to decide which CUSTOM fields ride along on
      * the BZ pull — system fields are deliberately excluded here (the
      * identity section is sent unconditionally by the caller, not gated by
@@ -441,7 +441,7 @@ final class FormFieldRepositoryTest extends TestCase
     }
 
     /**
-     * E2.5: single_choice gets an automatic count per option, zero-count
+     * single_choice gets an automatic count per option, zero-count
      * options included so the organizer sees the full breakdown (e.g. a
      * t-shirt size nobody picked yet still needs to be ordered as "0").
      */
@@ -475,7 +475,7 @@ final class FormFieldRepositoryTest extends TestCase
         self::assertSame(FormFieldType::SINGLE_CHOICE, $tshirtAggregate['fieldType']);
     }
 
-    /** E2.5: multi_choice lets one registration count toward several options — total can exceed registration count. */
+    /** multi_choice lets one registration count toward several options — total can exceed registration count. */
     public function testMultiChoiceAggregateCountsEachSelectedOption(): void
     {
         $meal = $this->fields->createCustom($this->eventId, [
@@ -502,7 +502,7 @@ final class FormFieldRepositoryTest extends TestCase
         self::assertSame(3, array_sum($countsByKey), 'Two registrations, three total selections — multi-select can exceed registration count.');
     }
 
-    /** E2.5: consent tallies true vs false/unanswered among live registrations. */
+    /** Consent tallies true vs false/unanswered among live registrations. */
     public function testConsentAggregateCountsYesAndNo(): void
     {
         $marketing = $this->fields->createCustom($this->eventId, [
@@ -525,7 +525,7 @@ final class FormFieldRepositoryTest extends TestCase
         self::assertSame(['yes' => 2, 'no' => 1], $countsByKey);
     }
 
-    /** E2.5: a cancelled/expired registration's answer must not count toward the tally. */
+    /** A cancelled/expired registration's answer must not count toward the tally. */
     public function testCancelledRegistrationAnswerIsExcludedFromAggregate(): void
     {
         $tshirt = $this->fields->createCustom($this->eventId, [
@@ -556,7 +556,7 @@ final class FormFieldRepositoryTest extends TestCase
         self::assertSame(['s' => 1, 'm' => 0], $countsByKey, 'Cancelled and expired registrations must not count toward the tally.');
     }
 
-    /** E2.5: only custom choice-type fields are aggregated — system fields and other custom types are excluded. */
+    /** Only custom choice-type fields are aggregated — system fields and other custom types are excluded. */
     public function testAggregatesForEventExcludesNonChoiceTypesAndSystemFields(): void
     {
         $this->fields->ensureSystemCatalog($this->eventId);
@@ -572,7 +572,7 @@ final class FormFieldRepositoryTest extends TestCase
     }
 
     /**
-     * TD.23: reorder() was converted from a per-row UPDATE loop to a single
+     * reorder() was converted from a per-row UPDATE loop to a single
      * batched `UPDATE ... CASE WHEN`. Five fields (more than one row) so a
      * wrong id→sortOrder mapping in the CASE construction would show up as
      * a scrambled order rather than accidentally passing.

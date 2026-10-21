@@ -16,11 +16,11 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E1.14 ("Formularz: snapshot danych przy zakończeniu Wydarzenia + korekta
+ * Form data snapshot at Wydarzenie end plus retroactive correction ("Formularz: snapshot danych przy zakończeniu Wydarzenia + korekta
  * wsteczna ze śladem"). Covers the repository-level acceptance criteria:
  * a finished Event's Registration freezes its public form-field values on
  * first read, a later Competitor edit no longer reaches that frozen payload,
- * and a not-yet-finished Registration keeps reading live (E1.13's existing
+ * and a not-yet-finished Registration keeps reading live (the existing
  * behavior, unchanged).
  *
  * The Event's `publication_status` is flipped to `finished` directly via SQL
@@ -53,7 +53,7 @@ final class RegistrationFormSnapshotTest extends TestCase
             self::markTestSkipped('Database is not available for integration tests: ' . $e->getMessage());
         }
 
-        // Deliberately outside the try/catch above (E1.14 verification fix):
+        // Deliberately outside the try/catch above:
         // a migration failure means the DB IS reachable but broken, which is
         // a real bug, not "DB not available" — folding it into the same
         // broad catch previously turned migration 041's JSON_TABLE syntax
@@ -108,7 +108,7 @@ final class RegistrationFormSnapshotTest extends TestCase
 
     /**
      * The core "zamarzanie" guarantee: once captured, a later Competitor edit
-     * (a real profile change, not a correction through this ticket's audited
+     * (a real profile change, not a correction through the audited
      * endpoint) must never reach a subsequent read — the public start list for
      * a finished Event keeps serving the frozen value.
      */
@@ -134,7 +134,7 @@ final class RegistrationFormSnapshotTest extends TestCase
         );
     }
 
-    /** Pre-finish behavior must stay exactly as E1.13 built it: live, so a typo fix keeps working. */
+    /** Pre-finish behavior must stay exactly as it was built: live, so a typo fix keeps working. */
     public function testPreFinishReadStaysLiveAndReflectsACompetitorEditImmediately(): void
     {
         [$registrationId, $competitorId] = $this->createRegistrationWithCompetitor('PHPUnit Snapshot Typo');
@@ -192,7 +192,7 @@ final class RegistrationFormSnapshotTest extends TestCase
         $this->registrations->correctFormSnapshot($registrationId, ['first_name' => 'Should Not Apply']);
     }
 
-    /** PP.18: the scheduler job freezes every non-removed Zapis of a finished Event, once. */
+    /** The scheduler job freezes every non-removed Zapis of a finished Event, once. */
     public function testSnapshotJobCapturesAllFinishedRegistrationsOnce(): void
     {
         [$first] = $this->createRegistrationWithCompetitor('PHPUnit Snapshot JobA');
@@ -223,7 +223,7 @@ final class RegistrationFormSnapshotTest extends TestCase
     }
 
     /**
-     * PP.18: whichever reader captured the snapshot first, the public start list must never serve a
+     * Whichever reader captured the snapshot first, the public start list must never serve a
      * field outside publicListColumns() (the BZ identity set holds contact_email, the export set
      * holds non-public fields). Before the fix the first reader froze ITS column set and every
      * later reader was served it unfiltered.

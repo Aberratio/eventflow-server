@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Payments\Http\HttpResponse;
  * Test double for HttpClientInterface — queues canned HttpResponses (in call
  * order) and records every request made, so integration logic (OAuth token
  * fetch, transaction creation, refund, certificate fetch) can be exercised
- * without ever opening a real socket to Tpay, per the ticket's testing
+ * without ever opening a real socket to Tpay, as the testing
  * requirement.
  */
 final class FakeHttpClient implements HttpClientInterface

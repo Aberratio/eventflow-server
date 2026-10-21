@@ -10,7 +10,7 @@ use ZmierzymyCzas\Tests\Support\HttpTestCase;
 use ZmierzymyCzas\Tests\Support\SavepointPdo;
 
 /**
- * PP.17: GET /me/orders and GET /me/orders/{id} - ownership, buyer projection and the
+ * GET /me/orders and GET /me/orders/{id} - ownership, buyer projection and the
  * no-enumeration 404, on the RBAC fixture world (order = owner's, orderForeign = participant's).
  */
 final class OwnShopOrdersContractTest extends HttpTestCase

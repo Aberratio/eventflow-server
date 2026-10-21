@@ -10,7 +10,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.7 (7a): a session is a login token for a user that still exists, whose
+ * A session is a login token for a user that still exists, whose
  * token_version matches and whose jti was not logged out. Mail-link (purpose)
  * tokens are never sessions. Tokens here come from POST /auth/login so the
  * real claims (tv, jti) are exercised.

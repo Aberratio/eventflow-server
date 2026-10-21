@@ -60,7 +60,7 @@ final class TestDatabase
     public const TEST_SQL_MODE = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';
 
     /**
-     * PP.76: every test connection runs with production's strict sql_mode, so a missing NOT NULL
+     * Every test connection runs with production's strict sql_mode, so a missing NOT NULL
      * column (1364), NULL into NOT NULL (1048), bad ENUM (1265) or non-numeric number (1366)
      * fails on a developer's non-strict MariaDB exactly as on MySQL 8.4.
      * ZC_TEST_DB_SQL_MODE overrides the mode; ZC_TEST_DB_SQL_MODE=server keeps the server's own.

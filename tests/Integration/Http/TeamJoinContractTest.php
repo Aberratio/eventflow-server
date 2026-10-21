@@ -10,7 +10,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.54 (spec 23 §1): a Zapis joins an existing Drużyna only through the captain's
+ * A Zapis joins an existing Drużyna only through the captain's
  * invitation token, or when the captain themself registers (captain consent).
  * Team ids are public (GET /events/{e}/distances/{d}/teams), so knowing one must
  * never be enough.

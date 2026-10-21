@@ -10,7 +10,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.19: publishing official results only records a mail request row (O(1)); no mail is sent or
+ * Publishing official results only records a mail request row (O(1)); no mail is sent or
  * queued inside the request, and the response shape is unchanged.
  */
 final class ResultsPublishedMailContractTest extends HttpTestCase

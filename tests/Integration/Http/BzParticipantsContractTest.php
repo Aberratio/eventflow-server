@@ -14,12 +14,12 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E3.3: "Pull uczestników" — GET /api/v1/events/{eventId}/bz/participants,
- * the endpoint Biuro Zawodów's own polling calls (issue 12 §1/§5/§6).
+ * "Pull uczestników" — GET /api/v1/events/{eventId}/bz/participants,
+ * the endpoint Biuro Zawodów's own polling calls.
  *
- * Two independent auth layers are covered by the matrix below: E3.1's
+ * Two independent auth layers are covered by the matrix below: the global
  * `X-API-Key` (ApiKeyAuthMiddleware, wired onto a real route for the first
- * time by this ticket) and E3.2's per-Event `bz_organization_token`,
+ * time by this route) and the per-Event `bz_organization_token`,
  * presented here as `X-BZ-Organization-Token` and compared with
  * `hash_equals()`. Both must pass independently; failing either one (or the
  * Event having `bzIntegrationEnabled = false`) collapses to the exact same
@@ -27,7 +27,7 @@ use ZmierzymyCzas\Tests\Support\HttpTestCase;
  * this codebase already uses for a hidden/missing Event.
  *
  * The response-shape tests are the money-adjacent regression coverage the
- * ticket calls out explicitly: every financial key must be entirely absent
+ * contract calls out explicitly: every financial key must be entirely absent
  * (not merely unused/null), never something this test would miss by only
  * checking happy-path values.
  */
@@ -198,7 +198,7 @@ final class BzParticipantsContractTest extends HttpTestCase
     /**
      * Regression test: hydrate()'s financial keys must be entirely absent
      * from every entry, not merely null/zero — a future field added to
-     * hydrate() must never leak here by accident (issue 12 §5, "bez kwot").
+     * hydrate() must never leak here by accident ("bez kwot").
      */
     public function testResponseNeverContainsAnyFinancialField(): void
     {
@@ -354,7 +354,7 @@ final class BzParticipantsContractTest extends HttpTestCase
             'lastName' => 'Testowy',
         ], skipDuplicateCheck: true);
 
-        // PP.59: child ids sent through update() are replaced by server ids; read the stored id back.
+        // Child ids sent through update() are replaced by server ids; read the stored id back.
         $updated = $this->events->update((string) $event['id'], [
             'merchandise' => [
                 ['name' => 'Koszulka techniczna', 'price' => 65, 'sizes' => ['M'], 'colors' => []],

@@ -12,7 +12,7 @@ use ZmierzymyCzas\Domain\Challenges\ChallengePointsSettingsRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E6.2 (issue 15 §2): the global, admin-configurable points-per-place table.
+ * The global, admin-configurable points-per-place table.
  * Migration 055 seeds a fixed singleton row — these tests read/restore it so
  * they can run repeatedly without leaving global state mutated for other
  * suites (this settings row is shared, unlike per-test challenge/event rows).

@@ -17,7 +17,7 @@ use ZmierzymyCzas\Scheduler\Jobs\MailOutboxReconcileJob;
 use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
-/** PP.18: mail.outbox_reconcile writes back Central Mailer's status for accepted rows; skipped when unconfigured. */
+/** mail.outbox_reconcile writes back Central Mailer's status for accepted rows; skipped when unconfigured. */
 final class MailOutboxReconcileJobTest extends TestCase
 {
     private PDO $pdo;

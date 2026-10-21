@@ -14,7 +14,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * PP.105: migration 067 adds shop_orders.organizer_credits_granted (the grant marker),
+ * Migration 067 adds shop_orders.organizer_credits_granted (the grant marker),
  * backfills it for orders that the old code already granted at checkout, and renames the
  * legacy `organizer_license` service kind to the canonical `organizer_package`.
  */

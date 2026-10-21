@@ -8,8 +8,8 @@ use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Domain\FormFields\FormFieldType;
 
 /**
- * model-formularza-zapisow.md §4: siedem typów pola własnego, walidacja
- * wyłącznie z typu (bez regexów/formatów własnych).
+ * Form-field model: seven custom field types, validation
+ * derived from the type alone (no custom regexes/formats).
  */
 final class FormFieldTypeTest extends TestCase
 {

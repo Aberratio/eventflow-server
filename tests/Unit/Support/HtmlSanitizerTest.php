@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase;
 use ZmierzymyCzas\Support\HtmlSanitizer;
 
 /**
- * PP.5: second line of defence for stored XSS in event/insurance rich text.
+ * Second line of defence for stored XSS in event/insurance rich text.
  * Allowlist must stay in sync with client src/lib/sanitizeHtml.ts.
  */
 final class HtmlSanitizerTest extends TestCase

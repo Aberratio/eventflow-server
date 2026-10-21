@@ -11,7 +11,7 @@ use ZmierzymyCzas\Tests\Support\HttpTestCase;
 use ZmierzymyCzas\Tests\Support\RsaTestKey;
 
 /**
- * R-17 (umowa 5.9 / 4.4.13): /calendar/settings and /calendar/events are admin-only, the service-account
+ * /calendar/settings and /calendar/events are admin-only, the service-account
  * key is never exposed, a missing key keeps the integration inactive (nothing queued, nothing sent), and
  * approving an Event only enqueues - it never calls Google inline. Tests whose name contains "WithKey" run
  * with a temporary key file wired through GOOGLE_CALENDAR_SERVICE_ACCOUNT_FILE (routes read it at app build).

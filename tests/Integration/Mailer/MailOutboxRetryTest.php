@@ -20,7 +20,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
 /**
- * PP.19: outbox retry (backoff, max attempts, 429, permanent errors, lease, SQL due filter).
+ * Outbox retry (backoff, max attempts, 429, permanent errors, lease, SQL due filter).
  * Time is injected into retryDue(); nothing sleeps. Payload comparisons decode JSON and never
  * look at stored JSON text (MySQL 8.4 normalises JSON key order).
  */

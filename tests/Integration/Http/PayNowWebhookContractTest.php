@@ -10,7 +10,7 @@ use Slim\Psr7\Factory\StreamFactory;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E1.7: the webhook route itself, wired through the real routes.php (a real
+ * The webhook route itself, wired through the real routes.php (a real
  * PayNowNotificationVerifier underneath it — the same wiring production uses).
  * This repo's own test env has no PAYNOW_SIGNATURE_KEY set, so a genuinely
  * valid signature can't be produced against the real wiring here — that

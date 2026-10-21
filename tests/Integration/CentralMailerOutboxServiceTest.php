@@ -17,9 +17,9 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeCentralMailerHttpClient;
 
 /**
- * E1.9: CentralMailerOutboxService against a real outbox table (migration
+ * CentralMailerOutboxService against a real outbox table (migration
  * 037_e19_central_mailer_outbox.sql) and a FakeCentralMailerHttpClient — exercises
- * the outbox pattern itself (kontrakt-central-mailer.md §6.4): idempotency-key
+ * the outbox pattern itself: idempotency-key
  * write-before-HTTP-call, no duplicate send on a repeated key, failure recording,
  * and reconciliation. The HTTP contract shape (headers, payload) is covered
  * separately in tests/Unit/Mailer/CentralMailerClientTest.php.

@@ -282,7 +282,7 @@ final class RegistrationAccessContractTest extends HttpTestCase
         self::assertSame($this->eventA['distances'][0]['id'], $unpaid['distanceId']);
         self::assertSame('Open', $unpaid['category']);
         self::assertSame('pending', $unpaid['registrationStatus']);
-        self::assertNull($unpaid['qrCode'], 'start code must stay hidden until the Zapis is paid/confirmed (spec 11 pkt 4)');
+        self::assertNull($unpaid['qrCode'], 'start code must stay hidden until the Zapis is paid/confirmed');
 
         $this->pdo->prepare("UPDATE registrations SET status = 'confirmed' WHERE id = :id")->execute(['id' => $this->registrationRP['id']]);
         $paid = json_decode((string) $this->request('GET', $path, [], $auth)->getBody(), true)['data'][0] ?? [];

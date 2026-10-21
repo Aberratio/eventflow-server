@@ -8,7 +8,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * G-05: GET /admin/sales-stats — the shape the admin overview expects
+ * GET /admin/sales-stats — the shape the admin overview expects
  * (monthlyRevenue, topProducts, ordersByStatus). Revenue counts only paid
  * orders (paid / shipped / delivered); pending, cancelled and refunded are
  * excluded from revenue but still listed in ordersByStatus.

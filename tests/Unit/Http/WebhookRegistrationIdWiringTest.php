@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * PP.63 wiring guard. No valid Tpay JWS signature can reach the live route in tests (the
+ * Wiring guard. No valid Tpay JWS signature can reach the live route in tests (the
  * certificate is fetched from the x5u URL), so the Tpay route is covered here as a contract on
  * routes.php: both webhook closures must hand the parsed notification's registration id to
  * applyGatewayNotification(). The PayNow route is additionally driven end to end in

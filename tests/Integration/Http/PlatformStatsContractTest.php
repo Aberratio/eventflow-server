@@ -9,10 +9,10 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E8.3 (spec 21 Answer §6): GET /admin/platform-stats — the minimal,
+ * GET /admin/platform-stats — the minimal,
  * explicitly-closed platform-admin cross-section: Events by
- * publication_status (E1.1), Organizer count, and active package-credit
- * total (E5.6, `users.organizer_package_credits` summed across all users —
+ * publication_status, Organizer count, and active package-credit
+ * total (`users.organizer_package_credits` summed across all users —
  * see AdminRepository::platformStats() docblock for why sum rather than
  * "organizers holding at least one credit"). Admin-only, not moderator.
  *
@@ -83,7 +83,7 @@ final class PlatformStatsContractTest extends HttpTestCase
 
     public function testAdminSeesEventCountsByPublicationStatusOrganizerCountAndActivePackageCredits(): void
     {
-        // Any EventRepository read lazily flips past Published events to Finished (issue 08). Run it first so
+        // Any EventRepository read lazily flips past Published events to Finished. Run it first so
         // pre-existing past events cannot move between buckets while this test creates its fixtures.
         $this->events->featured();
 

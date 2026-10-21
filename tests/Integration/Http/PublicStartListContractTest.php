@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * PP.3: `GET /events/{eventId}/start-list` (anonymous) must return only the
+ * `GET /events/{eventId}/start-list` (anonymous) must return only the
  * allowlisted DTO (RegistrationRepository::PUBLIC_START_LIST_FIELDS), never
  * userEmail/qrCode/discountCode/checkedInBy or any other financial/PII field,
  * and must never leak an anonymized competitor's userId.

@@ -10,7 +10,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * E7.5 (issue 23 Answer §7, "Kategoria specjalna: deklaracja ręczna
+ * Captain's manual declaration of the Kategoria specjalna ("Kategoria specjalna: deklaracja ręczna
  * kapitana") — the HTTP contract for PATCH /teams/{teamId}/special-category,
  * the route a captain uses to change a previously declared value (creation
  * itself goes through RegistrationRepository::create(), covered by

@@ -11,7 +11,7 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Tests\Support\HttpTestCase;
 
 /**
- * B-02 (część): POST /registrations/quote takes the payload of POST /registrations and returns the
+ * POST /registrations/quote takes the payload of POST /registrations and returns the
  * Rozliczenie lines and the total WITHOUT writing a Zapis. It runs the very same pricing code as
  * create(), so for the same data the quote total equals the total of the Zapis that follows.
  */

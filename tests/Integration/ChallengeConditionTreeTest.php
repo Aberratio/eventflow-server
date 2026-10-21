@@ -12,8 +12,8 @@ use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E6.1 (issue 15 §1): the condition tree — schema + admin CRUD only, no
- * scoring/verification (those are E6.2/E6.3, separate tickets).
+ * The condition tree — schema + admin CRUD only, no
+ * scoring/verification (those are covered elsewhere).
  *
  * ChallengeRepository::create() always mints its own id (Repository::id(),
  * a UUID) regardless of what the caller's $data contains, so every test here
@@ -267,7 +267,7 @@ final class ChallengeConditionTreeTest extends TestCase
     }
 
     /**
-     * PP.13 regression: the pre-fix 054 backfill inserted a root node with
+     * Regression: the pre-fix 054 backfill inserted a root node with
      * `id = challenge_id` for every challenge lacking a node with THAT id — even
      * one that already has an app-created root (ChallengeRepository::insertNode()
      * always mints a fresh UUID), so every re-run added a second root to every
@@ -295,10 +295,10 @@ final class ChallengeConditionTreeTest extends TestCase
     }
 
     /**
-     * PP.13 regression: `challenge_events` carries no FK to `challenges` (by
+     * Regression: `challenge_events` carries no FK to `challenges` (by
      * design — see 001_init.sql), so an orphan row (its challenge deleted, e.g.
      * by test cleanup) made the pre-fix 054 backfill's second INSERT violate
-     * `fk_ccne_node` (QA.7) because it referenced `node_id = ce.challenge_id`
+     * `fk_ccne_node` because it referenced `node_id = ce.challenge_id`
      * for a challenge that no longer has any row, node or not.
      */
     public function testBackfillMigrationToleratesOrphanChallengeEvents(): void

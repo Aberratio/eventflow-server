@@ -17,7 +17,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FailOncePdo;
 
 /**
- * PP.18: the scheduler's expiry job and its money guards. Every decision is made against an
+ * The scheduler's expiry job and its money guards. Every decision is made against an
  * injected $now, never the wall clock.
  */
 final class UnpaidExpiryJobTest extends TestCase

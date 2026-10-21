@@ -12,7 +12,7 @@ use ZmierzymyCzas\Domain\Challenges\ChallengeRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E1.10 mail #13 seam: ChallengeRepository::checkCompletion() materializes the
+ * Mail #13 seam: ChallengeRepository::checkCompletion() materializes the
  * "just crossed minCompleted" moment (see its doc comment for why this is
  * needed — hydrateParticipation() only ever *computes* isCompleted on read).
  */
@@ -102,7 +102,7 @@ final class ChallengeCompletionTest extends TestCase
     }
 
     /**
-     * E1.10 fix-loop round 1: a challenge that reaches minCompleted purely
+     * A challenge that reaches minCompleted purely
      * through syncResultEntries()'s result-derived auto-approval (no
      * reviewEntry() call at all) must still be detectable as "just
      * completed" — this is the join() write path routes.php now checks via

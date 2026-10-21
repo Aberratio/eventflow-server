@@ -17,10 +17,10 @@ use ZmierzymyCzas\Domain\Users\UserRepository;
 use ZmierzymyCzas\Support\Env;
 
 /**
- * E2.2: manual create/update of a Result (POST/PATCH /results, backing
+ * Manual create/update of a Result (POST/PATCH /results, backing
  * AddResultDialog.tsx) must enforce the same DNF/DNS/DSQ-excluded-from-
  * ranking rule that ResultImportRepository already enforces for CSV import
- * (spec 14 sekcja 1), and must keep sibling positions in the same
+ *, and must keep sibling positions in the same
  * event+distance correct after a manual insert/edit - see
  * ResultRepository::renumberEventDistance().
  */
@@ -221,7 +221,7 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * E2.3 (spec 14 sekcja 6): a freshly created result is "wstepne" without
+     * A freshly created result is "wstepne" without
      * any organizer action - publication is never the starting state.
      */
     public function testNewlyCreatedResultDefaultsToPreliminaryPublicationStatus(): void
@@ -234,7 +234,7 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * E2.3: markOfficial() operates on the event+distance unit (same
+     * markOfficial() operates on the event+distance unit (same
      * granularity as renumberEventDistance()), not on a single Result -
      * every finished/dnf/dns/dsq row sharing that event+distance flips to
      * "official" in one call, and rows in a different distance are left
@@ -264,7 +264,7 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * E2.3 (spec 14 sekcja 6): "Korekta jest mozliwa zawsze, takze po
+     * "Korekta jest mozliwa zawsze, takze po
      * ogloszeniu oficjalnych" - a correction must not silently revert the
      * set back to preliminary. update() doesn't even know about the column,
      * so this asserts the observable guarantee: official stays official
@@ -286,10 +286,10 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * E2.4 (spec 14 sekcja 3): a competitor's lifetime record for a distance
+     * A competitor's lifetime record for a distance
      * length only counts status='finished' rows - dnf/dns/dsq are not "an
      * actually completed" live-timed start, even though dnf can carry a
-     * partial time (spec 14 sekcja 1).
+     * partial time.
      */
     public function testLifetimeRecordExcludesDnfDnsDsqResults(): void
     {
@@ -309,7 +309,7 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * E2.4 (spec 14 sekcja 3): "wynik wirtualny ... jest wykluczony, nawet po
+     * "wynik wirtualny ... jest wykluczony, nawet po
      * weryfikacji organizatora" - a result materialized from an approved
      * virtual submission (is_virtual = 1, see VirtualResultRepository) must
      * never win a record, even when it is the only/fastest qualifying-looking
@@ -333,7 +333,7 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * E2.4 core acceptance criterion: the record groups by distance LENGTH,
+     * Core acceptance criterion: the record groups by distance LENGTH,
      * not by event_id/distance_id - two different Events, each with their own
      * event_distances row but the same length, must be treated as "the same
      * distance" for record purposes, and the lower gross time (regardless of
@@ -396,7 +396,7 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * E2.4: event_distances.length is nullable (migration 014) for
+     * event_distances.length is nullable (migration 014) for
      * legacy/incomplete distances - those fall back to grouping by
      * distance_name rather than being silently dropped.
      */
@@ -422,7 +422,7 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * E2.4 acceptance criterion 5: a correction to a result's time (PATCH
+     * A correction to a result's time (PATCH
      * /results/{id} -> update()) must be reflected in the record because it
      * is a live query, not a stored/cached column - no separate
      * invalidation/recompute step exists or is needed.
@@ -446,7 +446,7 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * E2.4: competitor identity resolution falls back to results.user_id =
+     * Competitor identity resolution falls back to results.user_id =
      * competitors.user_id (a Zawodnik's own Konto) when a result has no
      * registration_id at all - e.g. an older/manual entry, per
      * ResultRepository::lifetimeRecordsForCompetitor()'s docblock.
@@ -472,7 +472,7 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * TD.6 (E6.6 follow-up): `GET /events/{eventId}/results` is public and
+     * `GET /events/{eventId}/results` is public and
      * unauthenticated (routes.php) — byEvent() must mask a competitor's real
      * name via the registration_id -> registrations.competitor_id chain
      * (the authoritative path per lifetimeRecordsForCompetitor()'s own
@@ -536,7 +536,7 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * TD.6 follow-up: `GET /results` (list()) is just as public/unauthenticated
+     * `GET /results` (list()) is just as public/unauthenticated
      * as `GET /events/{eventId}/results` (routes.php has no AuthMiddleware on
      * either) and reads the exact same `results` table, so it must mask an
      * anonymized competitor's real name the same way byEvent() already does.
@@ -598,7 +598,7 @@ final class ResultRepositoryTest extends TestCase
     }
 
     /**
-     * TD.6 follow-up: `GET /users/{userId}/results` (byUser()) is just as
+     * `GET /users/{userId}/results` (byUser()) is just as
      * public/unauthenticated as byEvent() and reads the same `results` table -
      * same leak, same fix.
      */
@@ -704,7 +704,7 @@ final class ResultRepositoryTest extends TestCase
             'category' => 'Open',
             'registeredAt' => date(DATE_ATOM),
             'status' => 'confirmed',
-            // qr_code has a UNIQUE index (E1.11) - the column defaults to ''
+            // qr_code has a UNIQUE index - the column defaults to ''
             // when omitted, which collides across more than one row inserted
             // by this helper within the same test.
             'qrCode' => 'phpres_' . bin2hex(random_bytes(16)),

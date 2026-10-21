@@ -48,7 +48,7 @@ final class BzWebhookClientTest extends TestCase
         self::assertSame('2026-01-01T00:00:00+00:00', $sent['occurredAt']);
         self::assertSame('QR-123', $sent['qrCode']);
 
-        // Money-leakage discipline (issue 12 §5): the payload passed straight
+        // Money-leakage discipline: the payload passed straight
         // through is never inspected/augmented by the client, but this
         // regression pins the exact key set so a future caller accidentally
         // adding e.g. 'amount' would fail this test, not silently ship.

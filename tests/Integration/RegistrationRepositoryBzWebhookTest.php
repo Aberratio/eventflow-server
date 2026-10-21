@@ -19,13 +19,13 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Tests\Support\FakeBzHttpClient;
 
 /**
- * E3.4: "Push zmian krytycznych (rezygnacja, zwrot) webhookiem" — the trigger
+ * "Push zmian krytycznych (rezygnacja, zwrot) webhookiem" — the trigger
  * wiring inside RegistrationRepository (cancel() via update(), approveRefund(),
  * markRefunded()). Uses a real bz_webhook_outbox table with a fake BZ HTTP
  * client — no real network call is ever made (BZ's own webhook receiver does
  * not exist yet either way, see BzWebhookClientInterface's doc comment).
  *
- * Mirrors RegistrationRepositoryMailTest's shape (E1.10's equivalent trigger
+ * Mirrors RegistrationRepositoryMailTest's shape (the equivalent trigger
  * wiring test).
  */
 final class RegistrationRepositoryBzWebhookTest extends TestCase
@@ -213,7 +213,7 @@ final class RegistrationRepositoryBzWebhookTest extends TestCase
         // The organizer bulk-cancel-event-cascades-refund-approvals path
         // (bulkApproveRefundsForEvent() -> bulkApproveOneRefund()) fires the
         // same "do zwrotu" push as the single-registration approveRefund()
-        // above, per bulkApproveOneRefund()'s own E3.4 doc comment — this
+        // above, per bulkApproveOneRefund()'s own doc comment — this
         // exercises that call site with a real BzWebhookOutboxService wired
         // in, which the existing bulk-refund test in
         // RegistrationRepositoryTest never does.

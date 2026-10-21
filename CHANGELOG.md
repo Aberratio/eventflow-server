@@ -35,6 +35,10 @@ as the first version.
 - Scheduler (`bin/scheduler.php`) for payment reminders, registration expiry,
   results-published mail, outbox and webhook retries, and Google Calendar
   sync.
+- Data retention job `retention.purge`: answers to confidential form fields
+  are deleted 90 days after the event ends and activity log entries after 12
+  months (`RETENTION_CONFIDENTIAL_ANSWERS_DAYS`,
+  `RETENTION_ACTIVITY_LOG_MONTHS`).
 - Integration with the biuro_zawodow race office: webhook pushes with retries
   and an end-to-end contract test in CI.
 - Operations: PII-redacting structured logs, throttled e-mail alerts,

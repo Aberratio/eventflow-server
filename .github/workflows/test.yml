@@ -1,15 +1,23 @@
 name: Server Test
 
+# Pull requests only: deploy.yml already runs lint, Unit and Integration before every master
+# deploy. Draft pull requests are skipped (each job's `if`); "Ready for review" starts the run.
 on:
   pull_request:
-  push:
-    branches:
-      - main
-      - master
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   unit:
     name: Backend unit gate
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +35,7 @@ jobs:
 
   integration:
     name: Backend integration gate
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -72,6 +81,7 @@ jobs:
 
   workflow-lint:
     name: Workflow and script checks
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -85,6 +95,7 @@ jobs:
 
   ops-backup-restore:
     name: Backup and restore scripts (MySQL 8.4)
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:

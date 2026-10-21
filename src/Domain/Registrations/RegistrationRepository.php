@@ -361,16 +361,16 @@ SQL;
                 return $registration;
             }
 
-            $registration['userName'] = CompetitorNamePresenter::publicName((string) $registration['userName'], true);
+            $registration['userName'] = CompetitorNamePresenter::publicName((string) $registration['userName'], true, (string) $competitorId);
             // PP.3: internal marker consumed only by toPublicStartListEntry() (this
             // method's only caller, via publicStartList()) to null out `userId` —
             // never surfaces itself, since the DTO projection never copies it.
             $registration['__anonymized'] = true;
 
             if (isset($registration['formFields']) && is_array($registration['formFields'])) {
-                $registration['formFields'] = array_map(static function (array $field): array {
+                $registration['formFields'] = array_map(static function (array $field) use ($competitorId): array {
                     if ($field['fieldKey'] === 'first_name') {
-                        $field['value'] = CompetitorNamePresenter::ANONYMIZED_LABEL;
+                        $field['value'] = CompetitorNamePresenter::anonymousLabel((string) $competitorId);
                     } elseif ($field['fieldKey'] === 'last_name') {
                         // Both halves masked into one label rather than
                         // duplicating it on both fields (see this method's
@@ -880,8 +880,18 @@ SQL;
             }
 
             $answersByFieldId = [];
-            foreach ($answerRepository->forRegistration((string) $registration['id']) as $answer) {
-                $answersByFieldId[$answer['formFieldId']] = $answer['valueText'] ?? $answer['valueJson'] ?? null;
+            $answersByKey = [];
+            foreach ($answerRepository->forRegistrationWithKeys((string) $registration['id']) as $answer) {
+                $value = $answer['valueText'] ?? $answer['valueJson'] ?? null;
+                $answersByFieldId[$answer['formFieldId']] = $value;
+                $answersByKey[(string) $answer['fieldKey']] = $value;
+            }
+            // R-04: an answer given on a Dystans override is stored under the override's id, but the
+            // event-level column is what lists/exports render - match it up by the stable field key.
+            foreach ($columns as $column) {
+                if ($column['kind'] === 'custom' && !array_key_exists($column['id'], $answersByFieldId) && array_key_exists((string) $column['fieldKey'], $answersByKey)) {
+                    $answersByFieldId[$column['id']] = $answersByKey[(string) $column['fieldKey']];
+                }
             }
 
             $registration['formFields'] = array_map(
@@ -1621,6 +1631,12 @@ SQL;
         return array_map(fn (array $row): array => $this->hydrate($row), $stmt->fetchAll());
     }
 
+    /** R-13: bib ranges, automatic assignment and manual-override checks (see BibNumberService). */
+    public function bibNumbers(): BibNumberService
+    {
+        return new BibNumberService($this->pdo);
+    }
+
     public function find(string $id): ?array
     {
         $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM registrations WHERE id = :id');
@@ -1889,8 +1905,8 @@ SQL;
      * Same input as create() (the HTTP layer prepares it identically for both), same pricing code
      * (priceRegistration()), so the total equals the one of the Zapis created from the same data.
      * Writes nothing and takes no lock: no Zapis, no answers, no counter bump, no discount use, no
-     * team. Capacity is not checked (a price is not an availability promise) and neither is the
-     * team invitation (create() does that when the Zapis is really made).
+     * team. Capacity and the team invitation ARE checked (read-only, same error codes as create()): a price for a
+     * Zapis that could not be made is refused here too.
      *
      * @param array<string, mixed> $data
      * @return array{eventName: string, distanceName: string, settlementItems: array<int, array{name: string, basis: string, amount: float}>, totalAmount: float, discountCode: ?string}
@@ -1899,10 +1915,13 @@ SQL;
     {
         $distanceRow = $this->lockDistanceForRegistration((string) $data['eventId'], (string) $data['distanceId'], false);
 
+        // Read-only twins of the checks create() makes: a full Dystans and a team the caller may not
+        // join (invitation / distance / size) are refused here as well, with the same error codes.
+        $this->enforceCapacity($distanceRow);
         $teamId = isset($data['teamId']) ? trim((string) $data['teamId']) : '';
         $isJoiningExistingTeam = $teamId !== '' && empty($data['createTeam']);
-        if ($isJoiningExistingTeam && (new TeamRepository($this->pdo))->find($teamId) === null) {
-            throw new \RuntimeException('registration_team_not_found');
+        if ($isJoiningExistingTeam) {
+            $this->assertMayJoinTeam($data, $distanceRow, new TeamRepository($this->pdo));
         }
 
         $pricing = $this->priceRegistration($data, $distanceRow, $isJoiningExistingTeam)['pricing'];
@@ -2092,31 +2111,12 @@ SQL;
      */
     private function resolveTeamForRegistration(array $data, array $distanceRow): array
     {
+        // (the join checks live in assertMayJoinTeam(), shared with quote())
         $teams = new TeamRepository($this->pdo);
 
         $teamId = isset($data['teamId']) ? trim((string) $data['teamId']) : '';
         if ($teamId !== '') {
-            $team = $teams->find($teamId);
-            if ($team === null) {
-                throw new \RuntimeException('registration_team_not_found');
-            }
-            // PP.54 (spec 23 §1): an existing Drużyna is joined only through the captain's invitation
-            // link or by the captain themself (captain consent). `actorUserId` is set by the HTTP layer
-            // from the JWT, never from the body (RegistrationCreatePolicy drops it); internal callers that
-            // omit it fall back to the invitation check only, i.e. fail closed.
-            $actorUserId = is_string($data['actorUserId'] ?? null) ? trim($data['actorUserId']) : '';
-            $presentedToken = is_string($data['teamInviteToken'] ?? null) ? trim($data['teamInviteToken']) : '';
-            if (!TeamRepository::isCaptain($team, $actorUserId)
-                && !$teams->inviteTokenMatches((string) $team['id'], $presentedToken)) {
-                throw new \RuntimeException('registration_team_invite_required');
-            }
-            if ((string) $team['eventId'] !== (string) $data['eventId'] || (string) $team['distanceId'] !== (string) $data['distanceId']) {
-                throw new \RuntimeException('registration_team_distance_mismatch');
-            }
-            $maxSize = $distanceRow['relayMaxTeamSize'] !== null ? (int) $distanceRow['relayMaxTeamSize'] : null;
-            if ($maxSize !== null && $team['memberCount'] >= $maxSize) {
-                throw new \RuntimeException('registration_team_full');
-            }
+            $team = $this->assertMayJoinTeam($data, $distanceRow, $teams);
 
             return ['teamId' => $team['id'], 'teamName' => $team['name']];
         }
@@ -2154,6 +2154,40 @@ SQL;
 
         // Legacy/general classification path — unchanged.
         return ['teamId' => null, 'teamName' => $data['teamName'] ?? null];
+    }
+
+    /**
+     * Read-only checks for JOINING an existing Drużyna (create() and quote() share them): the team
+     * exists, the joiner holds the invitation or is the captain (PP.54, spec 23 §1), the team belongs to
+     * this event+distance and is not at `relay_max_team_size`. `actorUserId` is set by the HTTP layer
+     * from the JWT, never from the body (RegistrationCreatePolicy drops it); internal callers that omit
+     * it fall back to the invitation check only, i.e. fail closed.
+     *
+     * @param array<string, mixed> $data
+     * @param array<string, mixed> $distanceRow
+     * @return array<string, mixed> the team
+     */
+    private function assertMayJoinTeam(array $data, array $distanceRow, TeamRepository $teams): array
+    {
+        $team = $teams->find(trim((string) $data['teamId']));
+        if ($team === null) {
+            throw new \RuntimeException('registration_team_not_found');
+        }
+        $actorUserId = is_string($data['actorUserId'] ?? null) ? trim($data['actorUserId']) : '';
+        $presentedToken = is_string($data['teamInviteToken'] ?? null) ? trim($data['teamInviteToken']) : '';
+        if (!TeamRepository::isCaptain($team, $actorUserId)
+            && !$teams->inviteTokenMatches((string) $team['id'], $presentedToken)) {
+            throw new \RuntimeException('registration_team_invite_required');
+        }
+        if ((string) $team['eventId'] !== (string) $data['eventId'] || (string) $team['distanceId'] !== (string) $data['distanceId']) {
+            throw new \RuntimeException('registration_team_distance_mismatch');
+        }
+        $maxSize = $distanceRow['relayMaxTeamSize'] !== null ? (int) $distanceRow['relayMaxTeamSize'] : null;
+        if ($maxSize !== null && $team['memberCount'] >= $maxSize) {
+            throw new \RuntimeException('registration_team_full');
+        }
+
+        return $team;
     }
 
     /**

@@ -268,6 +268,19 @@ final class PublicEventVisibilityContractTest extends HttpTestCase
         $this->assertPublicShape($this->get('/api/v1/events/slug/' . $this->slugs['pub'])['body']['data'], 'by slug');
     }
 
+    public function testUnknownEventSlugAndIdReturn404ErrorContract(): void
+    {
+        foreach (['/api/v1/events/slug/no-such-slug-' . $this->prefix, '/api/v1/events/no-such-id-' . $this->prefix] as $path) {
+            foreach ([null, 'A'] as $who) {
+                $r = $this->get($path, $who);
+                self::assertSame(404, $r['status'], $path);
+                self::assertFalse($r['body']['success'], $path);
+                self::assertSame('not_found', $r['body']['error']['code'], $path);
+                self::assertArrayNotHasKey('data', $r['body'], $path);
+            }
+        }
+    }
+
     public function testPrivateEventByLinkWithCodeHidesTheCode(): void
     {
         foreach (['/api/v1/events/' . $this->ids['priv'], '/api/v1/events/slug/' . $this->slugs['priv']] as $path) {

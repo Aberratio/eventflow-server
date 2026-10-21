@@ -90,6 +90,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationPatchPolicy;
 use ZmierzymyCzas\Http\Access\EventAccess;
 use ZmierzymyCzas\Http\Access\RegistrationAccess;
 use ZmierzymyCzas\Http\Access\Roles;
+use ZmierzymyCzas\Http\Controller\DiscountCodeBatchController;
 use ZmierzymyCzas\Http\Controller\EventTeamController;
 use ZmierzymyCzas\Http\Controller\RegistrationChangeController;
 use ZmierzymyCzas\Http\DomainErrorCode;
@@ -374,6 +375,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $logActivity = $activityLogger->log(...);
     $eventTeamController = new EventTeamController($events, $users, $eventTeam, $eventAccess, $activityLogger, $mailer, $logger);
     $registrationChangeController = new RegistrationChangeController($registrations, $events, $registrationAccess, $activityLogger);
+    $discountCodeBatchController = new DiscountCodeBatchController($events, $discountBatches, $eventAccess, $activityLogger);
 
     $publicUploadBase = '/' . trim((string) Env::get('APP_UPLOAD_PUBLIC_BASE', '/uploads'), '/');
     if (!str_starts_with($publicUploadBase, '/api/v1/')) {
@@ -393,7 +395,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
     // Convention: routes behind a plain `AuthMiddleware($jwt)` only require a valid session. Authorization that depends on
     // the resource (event Team, registration owner, ...) is decided per request inside the handler.
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $discountBatches, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync, $registrationChangeController): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync, $registrationChangeController, $discountCodeBatchController): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // A cheap round trip on the connection index.php already opened.
             try {
@@ -2195,71 +2197,10 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 ->withHeader('Content-Type', 'text/csv; charset=windows-1250')
                 ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.csv"');
         })->add(new AuthMiddleware($jwt));
-        // Discount code batches (a generator over event_discount_codes, not a second
-        // mechanism). Same $canManageEvent gate as the rest of the event-manager group (owner + admin roles;
-        // a foreign organizer gets 403, a foreign/unknown batch id 404). The CSV hands out live codes, so a
-        // successful export is activity-logged like the start-list export.
-        $api->post('/events/{eventId}/discount-code-batches', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent, $logActivity, $body) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find((string) $args['eventId']);
-            if (!$canManageEvent($event, $auth)) {
-                return JsonResponder::forbidden($response);
-            }
-            $batch = $discountBatches->generate((string) $args['eventId'], $body($request), (string) ($auth['sub'] ?? ''));
-            $logActivity(
-                $auth,
-                'discount_batch_generated',
-                sprintf('Wygenerowano partię kodów rabatowych "%s" (%d szt.)', $batch['label'], $batch['count']),
-                'event',
-                (string) $args['eventId'],
-                (string) ($event['name'] ?? '')
-            );
-            return JsonResponder::ok($response, $batch, 'Partia kodów została wygenerowana.', 201);
-        })->add(new AuthMiddleware($jwt));
-        $api->get('/events/{eventId}/discount-code-batches', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent) {
-            $event = $events->find((string) $args['eventId']);
-            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
-                return JsonResponder::forbidden($response);
-            }
-            return JsonResponder::ok($response, $discountBatches->listForEvent((string) $args['eventId']));
-        })->add(new AuthMiddleware($jwt));
-        $api->get('/events/{eventId}/discount-code-batches/{batchId}', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent) {
-            $event = $events->find((string) $args['eventId']);
-            if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {
-                return JsonResponder::forbidden($response);
-            }
-            $batch = $discountBatches->find((string) $args['eventId'], (string) $args['batchId']);
-            if ($batch === null) {
-                return JsonResponder::error($response, 'not_found', 'Nie znaleziono partii kodów.', 404);
-            }
-            return JsonResponder::ok($response, $batch);
-        })->add(new AuthMiddleware($jwt));
-        $api->get('/events/{eventId}/discount-code-batches/{batchId}/export', function (Request $request, Response $response, array $args) use ($events, $discountBatches, $canManageEvent, $logActivity) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find((string) $args['eventId']);
-            if (!$canManageEvent($event, $auth)) {
-                return JsonResponder::forbidden($response);
-            }
-            $batch = $discountBatches->find((string) $args['eventId'], (string) $args['batchId']);
-            if ($batch === null) {
-                return JsonResponder::error($response, 'not_found', 'Nie znaleziono partii kodów.', 404);
-            }
-            $export = DiscountCodeBatchRepository::exportRows($batch);
-            $fileContent = StartListExportFormatter::toCsv($export['columns'], $export['rows']);
-            $filenameBase = 'kody-rabatowe-' . trim((string) preg_replace('/[^a-z0-9]+/i', '-', (string) ($batch['prefix'] !== '' ? $batch['prefix'] : 'partia')), '-');
-            $logActivity(
-                $auth,
-                'discount_batch_exported',
-                sprintf('Eksport partii kodów rabatowych "%s" (CSV)', $batch['label']),
-                'event',
-                (string) $args['eventId'],
-                (string) ($event['name'] ?? '')
-            );
-            $response->getBody()->write($fileContent);
-            return $response
-                ->withHeader('Content-Type', 'text/csv; charset=windows-1250')
-                ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.csv"');
-        })->add(new AuthMiddleware($jwt));
+        $api->post('/events/{eventId}/discount-code-batches', [$discountCodeBatchController, 'create'])->add(new AuthMiddleware($jwt));
+        $api->get('/events/{eventId}/discount-code-batches', [$discountCodeBatchController, 'list'])->add(new AuthMiddleware($jwt));
+        $api->get('/events/{eventId}/discount-code-batches/{batchId}', [$discountCodeBatchController, 'show'])->add(new AuthMiddleware($jwt));
+        $api->get('/events/{eventId}/discount-code-batches/{batchId}/export', [$discountCodeBatchController, 'export'])->add(new AuthMiddleware($jwt));
         $api->put('/events/{eventId}/form-fields/reorder', function (Request $request, Response $response, array $args) use ($events, $formFields, $canManageEvent, $body) {
             $event = $events->find((string) $args['eventId']);
             if (!$canManageEvent($event, (array) $request->getAttribute('auth'))) {

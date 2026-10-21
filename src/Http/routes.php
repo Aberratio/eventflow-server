@@ -90,6 +90,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationPatchPolicy;
 use ZmierzymyCzas\Http\Access\EventAccess;
 use ZmierzymyCzas\Http\Access\RegistrationAccess;
 use ZmierzymyCzas\Http\Access\Roles;
+use ZmierzymyCzas\Http\Controller\EventTeamController;
 use ZmierzymyCzas\Http\DomainErrorCode;
 use ZmierzymyCzas\Http\Middleware\ApiKeyAuthMiddleware;
 use ZmierzymyCzas\Http\Middleware\AuthMiddleware;
@@ -370,6 +371,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     };
     $activityLogger = new ActivityLogger($admin);
     $logActivity = $activityLogger->log(...);
+    $eventTeamController = new EventTeamController($events, $users, $eventTeam, $eventAccess, $activityLogger, $mailer, $logger);
 
     $publicUploadBase = '/' . trim((string) Env::get('APP_UPLOAD_PUBLIC_BASE', '/uploads'), '/');
     if (!str_starts_with($publicUploadBase, '/api/v1/')) {
@@ -389,7 +391,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
     // Convention: routes behind a plain `AuthMiddleware($jwt)` only require a valid session. Authorization that depends on
     // the resource (event Team, registration owner, ...) is decided per request inside the handler.
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $discountBatches, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $discountBatches, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // A cheap round trip on the connection index.php already opened.
             try {
@@ -1586,175 +1588,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // The Event Team. Roster, invitations and
         // revocations are Owner-level only: $canManageEvent(..., true) = the Owner and admin/superadmin; a
         // Co-manager and a moderator never see or change the roster.
-        $sendTeamInvitation = static function (array $event, array $member, string $token, string $inviterName) use ($mailer, $logger): string {
-            $acceptLink = rtrim((string) Env::get('APP_URL', ''), '/') . '/team-invitations/' . $token;
-            // 'sent' = Central Mailer accepted it; 'pending' = a retry is scheduled; 'lost' = nothing will be sent.
-            $state = 'lost';
-            try {
-                $row = $mailer->sendEventTeamInvitation(
-                    (string) $member['id'] . ':' . substr($token, 0, 12),
-                    (string) $event['id'],
-                    (string) $member['email'],
-                    (string) ($event['name'] ?? ''),
-                    $inviterName,
-                    $acceptLink,
-                    EventTeamRepository::INVITE_TTL_DAYS
-                );
-                if ($row !== null) {
-                    if (($row['centralMailerEmailId'] ?? null) !== null) {
-                        $state = 'sent';
-                    } elseif (($row['nextAttemptAt'] ?? null) !== null) {
-                        $state = 'pending';
-                    }
-                }
-            } catch (Throwable $e) {
-                // Ids and the error class only, never the link, the token or the address.
-                $logger->error('Event team invitation mail could not be queued', ['eventId' => (string) $event['id'], 'memberId' => (string) $member['id'], 'errorClass' => $e::class]);
-            }
-
-            return $state;
-        };
-        $api->get('/events/{id}/team', function (Request $request, Response $response, array $args) use ($events, $users, $canManageEvent, $pdo) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find($args['id']);
-            if (!$canManageEvent($event, $auth, true)) {
-                return JsonResponder::forbidden($response);
-            }
-            $owner = $users->find((string) $event['organizerId']);
-
-            return JsonResponder::ok($response, [
-                'owner' => $owner === null ? null : ['id' => $owner['id'], 'name' => $owner['name'], 'email' => $owner['email']],
-                'members' => (new EventTeamRepository($pdo))->listForEvent((string) $args['id']),
-            ]);
-        })->add(new AuthMiddleware($jwt));
-        $api->post('/events/{id}/team/invitations', function (Request $request, Response $response, array $args) use ($events, $users, $body, $canManageEvent, $pdo, $logActivity, $sendTeamInvitation) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find($args['id']);
-            if (!$canManageEvent($event, $auth, true)) {
-                return JsonResponder::forbidden($response);
-            }
-            $email = strtolower(trim((string) ($body($request)['email'] ?? '')));
-            if ($email === '' || strlen($email) > 255 || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
-                return JsonResponder::error($response, 'validation_error', 'Podaj poprawny adres e-mail.', 422, ['field' => 'email']);
-            }
-            $owner = $users->find((string) $event['organizerId']);
-            if ($owner !== null && strtolower((string) $owner['email']) === $email) {
-                return JsonResponder::error($response, 'team_member_owner', 'Właściciel wydarzenia jest już w zespole.', 409);
-            }
-            $team = new EventTeamRepository($pdo);
-            try {
-                $issued = $team->invite((string) $event['id'], $email, (string) ($auth['sub'] ?? ''));
-            } catch (RuntimeException $e) {
-                if ($e->getMessage() === 'team_member_active') {
-                    return JsonResponder::error($response, 'team_member_active', 'Ta osoba jest już współzarządzającym tego wydarzenia.', 409);
-                }
-                throw $e;
-            }
-            $inviter = $users->find((string) ($auth['sub'] ?? ''));
-            $mailState = $sendTeamInvitation($event, $issued['member'], $issued['token'], (string) ($inviter['name'] ?? ''));
-            $logActivity($auth, 'event_team_invited', 'Zaproszono współzarządzającego do wydarzenia', 'event', (string) $event['id'], (string) ($event['name'] ?? ''), ['recipient' => MailRecipientMask::mask($email)]);
-
-            return JsonResponder::ok($response, $issued['member'] + ['mailState' => $mailState], 'Zaproszenie zostało utworzone.', 201);
-        })->add(new AuthMiddleware($jwt));
-        $api->post('/events/{id}/team/{memberId}/resend', function (Request $request, Response $response, array $args) use ($events, $users, $canManageEvent, $pdo, $logActivity, $sendTeamInvitation) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find($args['id']);
-            if (!$canManageEvent($event, $auth, true)) {
-                return JsonResponder::forbidden($response);
-            }
-            $team = new EventTeamRepository($pdo);
-            $member = $team->find((string) $args['memberId']);
-            if ($member === null || (string) $member['eventId'] !== (string) $event['id']) {
-                return JsonResponder::error($response, 'not_found', 'Nie znaleziono członka zespołu.', 404);
-            }
-            if ($member['status'] !== 'invited') {
-                return JsonResponder::error($response, 'invalid_status_transition', 'Zaproszenie można wysłać ponownie tylko do osoby, która go jeszcze nie przyjęła.', 409);
-            }
-            $issued = $team->invite((string) $event['id'], (string) $member['email'], (string) ($auth['sub'] ?? ''));
-            $inviter = $users->find((string) ($auth['sub'] ?? ''));
-            $mailState = $sendTeamInvitation($event, $issued['member'], $issued['token'], (string) ($inviter['name'] ?? ''));
-            $logActivity($auth, 'event_team_invitation_resent', 'Wysłano ponownie zaproszenie do zespołu wydarzenia', 'event', (string) $event['id'], (string) ($event['name'] ?? ''), ['recipient' => MailRecipientMask::mask((string) $member['email'])]);
-
-            return JsonResponder::ok($response, $issued['member'] + ['mailState' => $mailState], 'Zaproszenie zostało wysłane ponownie.');
-        })->add(new AuthMiddleware($jwt));
-        $api->delete('/events/{id}/team/{memberId}', function (Request $request, Response $response, array $args) use ($events, $canManageEvent, $pdo, $logActivity, $mailer, $logger) {
-            $auth = (array) $request->getAttribute('auth');
-            $event = $events->find($args['id']);
-            if (!$canManageEvent($event, $auth, true)) {
-                return JsonResponder::forbidden($response);
-            }
-            $team = new EventTeamRepository($pdo);
-            $member = $team->find((string) $args['memberId']);
-            if ($member === null || (string) $member['eventId'] !== (string) $event['id']) {
-                return JsonResponder::error($response, 'not_found', 'Nie znaleziono członka zespołu.', 404);
-            }
-            if ($member['status'] !== 'revoked') {
-                $team->revoke((string) $member['id']);
-                $logActivity($auth, 'event_team_revoked', 'Odebrano dostęp współzarządzającemu wydarzenia', 'event', (string) $event['id'], (string) ($event['name'] ?? ''), ['recipient' => MailRecipientMask::mask((string) $member['email'])]);
-                if ($member['status'] === 'active') {
-                    try {
-                        $mailer->sendEventTeamRevoked((string) $member['id'] . ':' . time(), (string) $event['id'], (string) $member['email'], (string) ($event['name'] ?? ''));
-                    } catch (Throwable $e) {
-                        $logger->error('Event team revocation mail could not be queued', ['eventId' => (string) $event['id'], 'memberId' => (string) $member['id'], 'errorClass' => $e::class]);
-                    }
-                }
-            }
-
-            return JsonResponder::ok($response, $team->find((string) $member['id']));
-        })->add(new AuthMiddleware($jwt));
-        // Public preview: the token is the credential; it shows the Event and the inviter, never the Team.
-        $api->get('/team-invitations/{token}', function (Request $request, Response $response, array $args) use ($pdo) {
-            $invitation = (new EventTeamRepository($pdo))->findInvitation((string) $args['token']);
-            if ($invitation === null || ($invitation['eventDeletedAt'] ?? null) !== null) {
-                return JsonResponder::error($response, 'invitation_not_found', 'To zaproszenie nie istnieje albo zostało odwołane.', 404);
-            }
-            if ($invitation['expired']) {
-                return JsonResponder::error($response, 'invitation_expired', 'To zaproszenie wygasło. Poproś organizatora o nowe.', 410);
-            }
-
-            return JsonResponder::ok($response, [
-                'eventName' => $invitation['eventName'],
-                'inviterName' => $invitation['inviterName'] ?? '',
-                'email' => MailRecipientMask::mask((string) $invitation['email']),
-                'status' => $invitation['status'],
-                'expiresAt' => $invitation['inviteExpiresAt'],
-            ]);
-        });
-        $api->post('/team-invitations/{token}/accept', function (Request $request, Response $response, array $args) use ($users, $pdo, $logActivity) {
-            $auth = (array) $request->getAttribute('auth');
-            $user = $users->find((string) ($auth['sub'] ?? ''));
-            if ($user === null) {
-                return JsonResponder::error($response, 'unauthorized', 'Sesja wygasła. Zaloguj się ponownie.', 401);
-            }
-            $team = new EventTeamRepository($pdo);
-            $invitation = $team->findInvitation((string) $args['token']);
-            try {
-                $member = $team->accept((string) $args['token'], (string) $user['id'], (string) $user['email']);
-            } catch (RuntimeException $e) {
-                $errors = [
-                    'invitation_not_found' => [404, 'To zaproszenie nie istnieje albo zostało odwołane.'],
-                    'invitation_expired' => [410, 'To zaproszenie wygasło. Poproś organizatora o nowe.'],
-                    'invitation_email_mismatch' => [403, 'To zaproszenie wysłano na inny adres e-mail. Zaloguj się na właściwe konto.'],
-                    'team_member_owner' => [409, 'Jesteś właścicielem tego wydarzenia.'],
-                    'team_member_active' => [409, 'Jesteś już współzarządzającym tego wydarzenia.'],
-                ];
-                if (isset($errors[$e->getMessage()])) {
-                    return JsonResponder::error($response, $e->getMessage(), $errors[$e->getMessage()][1], $errors[$e->getMessage()][0]);
-                }
-                throw $e;
-            }
-            // Only the first acceptance is news for the activity register (a repeat call is a no-op).
-            if (($invitation['status'] ?? '') === 'invited') {
-                $logActivity($auth, 'event_team_joined', 'Przyjęto zaproszenie do zespołu wydarzenia', 'event', (string) $member['eventId'], (string) ($invitation['eventName'] ?? ''));
-            }
-
-            return JsonResponder::ok($response, [
-                'eventId' => $member['eventId'],
-                'eventName' => $invitation['eventName'] ?? '',
-                'teamRole' => 'co_manager',
-                'status' => $member['status'],
-            ], 'Zaproszenie zostało przyjęte.');
-        })->add(new AuthMiddleware($jwt));
+        $api->get('/events/{id}/team', [$eventTeamController, 'list'])->add(new AuthMiddleware($jwt));
+        $api->post('/events/{id}/team/invitations', [$eventTeamController, 'invite'])->add(new AuthMiddleware($jwt));
+        $api->post('/events/{id}/team/{memberId}/resend', [$eventTeamController, 'resend'])->add(new AuthMiddleware($jwt));
+        $api->delete('/events/{id}/team/{memberId}', [$eventTeamController, 'revoke'])->add(new AuthMiddleware($jwt));
+        $api->get('/team-invitations/{token}', [$eventTeamController, 'previewInvitation']);
+        $api->post('/team-invitations/{token}/accept', [$eventTeamController, 'acceptInvitation'])->add(new AuthMiddleware($jwt));
         $api->get('/organizers/{organizerId}/event-limit', function (Request $request, Response $response, array $args) use ($events, $isStaffRole) {
             $auth = (array) $request->getAttribute('auth');
             $role = (string) ($auth['role'] ?? '');

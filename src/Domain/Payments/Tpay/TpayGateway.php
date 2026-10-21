@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Payments\Tpay;
 
+use ZmierzymyCzas\Domain\Errors\Internal;
 use ZmierzymyCzas\Domain\Payments\Http\HttpClientInterface;
 use ZmierzymyCzas\Domain\Payments\PaymentGatewayInterface;
 
@@ -78,7 +79,7 @@ final class TpayGateway implements PaymentGatewayInterface
         $transactionId = (string) ($decoded['transactionId'] ?? '');
         $redirectUrl = (string) ($decoded['transactionPaymentUrl'] ?? '');
         if ($transactionId === '' || $redirectUrl === '') {
-            throw new \RuntimeException('tpay_start_session_malformed_response');
+            throw new Internal('tpay_start_session_malformed_response');
         }
 
         return ['transactionId' => $transactionId, 'redirectUrl' => $redirectUrl];

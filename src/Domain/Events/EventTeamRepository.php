@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Events;
 
+use ZmierzymyCzas\Domain\Errors\Conflict;
+use ZmierzymyCzas\Domain\Errors\Forbidden;
+use ZmierzymyCzas\Domain\Errors\Gone;
+use ZmierzymyCzas\Domain\Errors\NotFound;
 use ZmierzymyCzas\Domain\Repository;
 
 /**
@@ -134,7 +138,7 @@ final class EventTeamRepository extends Repository
         $existing->execute(['eventId' => $eventId, 'email' => $email]);
         $row = $existing->fetch();
         if ($row !== false && $row['status'] === 'active') {
-            throw new \RuntimeException('team_member_active');
+            throw new Conflict('team_member_active');
         }
         if ($row === false) {
             $id = $this->id();
@@ -196,23 +200,23 @@ final class EventTeamRepository extends Repository
     {
         $invitation = $this->findInvitation($token);
         if ($invitation === null || ($invitation['eventDeletedAt'] ?? null) !== null) {
-            throw new \RuntimeException('invitation_not_found');
+            throw new NotFound('invitation_not_found');
         }
         if (strtolower(trim($userEmail)) !== strtolower((string) $invitation['email'])) {
-            throw new \RuntimeException('invitation_email_mismatch');
+            throw new Forbidden('invitation_email_mismatch');
         }
         if ($invitation['status'] === 'active') {
             if ((string) $invitation['userId'] !== $userId) {
-                throw new \RuntimeException('invitation_email_mismatch');
+                throw new Forbidden('invitation_email_mismatch');
             }
 
             return $this->find((string) $invitation['memberId']) ?? [];
         }
         if ($invitation['expired']) {
-            throw new \RuntimeException('invitation_expired');
+            throw new Gone('invitation_expired');
         }
         if ((string) $invitation['organizerId'] === $userId) {
-            throw new \RuntimeException('team_member_owner');
+            throw new Conflict('team_member_owner');
         }
         // A leftover row of this Account for the Event (an old invitation under another address) must not
         // collide with the unique (event, user) key: an active one wins, any other is dropped.
@@ -220,7 +224,7 @@ final class EventTeamRepository extends Repository
         $other->execute(['eventId' => $invitation['eventId'], 'userId' => $userId, 'id' => $invitation['memberId']]);
         foreach ($other->fetchAll() as $stale) {
             if ($stale['status'] === 'active') {
-                throw new \RuntimeException('team_member_active');
+                throw new Conflict('team_member_active');
             }
             $this->pdo->prepare('DELETE FROM event_team_members WHERE id = :id')->execute(['id' => $stale['id']]);
         }

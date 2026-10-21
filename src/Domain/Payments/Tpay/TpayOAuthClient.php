@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Payments\Tpay;
 
+use ZmierzymyCzas\Domain\Errors\Internal;
 use ZmierzymyCzas\Domain\Payments\Http\HttpClientInterface;
 
 /**
@@ -51,7 +52,7 @@ final class TpayOAuthClient
         $decoded = $response->json();
         $token = (string) ($decoded['access_token'] ?? '');
         if ($token === '') {
-            throw new \RuntimeException('tpay_oauth_missing_access_token');
+            throw new Internal('tpay_oauth_missing_access_token');
         }
 
         $this->cachedToken = $token;

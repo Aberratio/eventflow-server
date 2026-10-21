@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Mailer\Http;
 
+use ZmierzymyCzas\Domain\Errors\Internal;
+
 /**
  * The one real implementation of HttpClientInterface used outside tests — a thin
  * curl wrapper, identical in shape to
@@ -23,7 +25,7 @@ final class CurlHttpClient implements HttpClientInterface
     {
         $ch = curl_init($url);
         if ($ch === false) {
-            throw new \RuntimeException('central_mailer_http_init_failed');
+            throw new Internal('central_mailer_http_init_failed');
         }
 
         $headerLines = [];

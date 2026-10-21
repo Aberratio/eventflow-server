@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Events;
 
+use ZmierzymyCzas\Domain\Errors\Conflict;
+use ZmierzymyCzas\Domain\Errors\Internal;
 use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Support\InputValidationException;
 
@@ -84,7 +86,7 @@ final class DiscountCodeBatchRepository extends Repository
             throw $e;
         }
 
-        return $this->find($eventId, $batchId) ?? throw new \RuntimeException('discount_batch_missing_after_insert');
+        return $this->find($eventId, $batchId) ?? throw new Internal('discount_batch_missing_after_insert');
     }
 
     /** @return list<array<string, mixed>> batches of the event, newest first, with usage totals */
@@ -286,7 +288,7 @@ final class DiscountCodeBatchRepository extends Repository
         $attempts = 0;
         while (count($codes) < $count) {
             if (++$attempts > $count * 20 + 100) {
-                throw new \RuntimeException('discount_batch_code_space_exhausted');
+                throw new Conflict('discount_batch_code_space_exhausted');
             }
             $suffix = '';
             for ($i = 0; $i < self::SUFFIX_LENGTH; $i++) {

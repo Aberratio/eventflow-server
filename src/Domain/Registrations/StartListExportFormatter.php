@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Registrations;
 
 use ZipArchive;
+use ZmierzymyCzas\Domain\Errors\Internal;
 
 /**
  * Start list export ("Eksport listy startowej": CSV (Windows-1250) + XLSX).
@@ -54,7 +55,7 @@ final class StartListExportFormatter
     {
         $handle = fopen('php://temp', 'r+');
         if ($handle === false) {
-            throw new \RuntimeException('csv_buffer_unavailable');
+            throw new Internal('csv_buffer_unavailable');
         }
 
         fputcsv($handle, array_map(static fn (array $c): string => $c['label'], $columns), ';');
@@ -100,18 +101,18 @@ final class StartListExportFormatter
     public static function toXlsx(array $columns, array $rows): string
     {
         if (!class_exists(ZipArchive::class)) {
-            throw new \RuntimeException('xlsx_not_supported');
+            throw new Internal('xlsx_not_supported');
         }
 
         $tmpPath = tempnam(sys_get_temp_dir(), 'zc_xlsx_');
         if ($tmpPath === false) {
-            throw new \RuntimeException('xlsx_tmp_unavailable');
+            throw new Internal('xlsx_tmp_unavailable');
         }
 
         $zip = new ZipArchive();
         if ($zip->open($tmpPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
             @unlink($tmpPath);
-            throw new \RuntimeException('xlsx_zip_open_failed');
+            throw new Internal('xlsx_zip_open_failed');
         }
 
         $zip->addFromString('[Content_Types].xml', self::contentTypesXml());

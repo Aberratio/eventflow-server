@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Payments\PayNow;
 
+use ZmierzymyCzas\Domain\Errors\InvalidInput;
+
 /**
  * A parsed, normalized PayNow webhook notification
  * (https://docs.paynow.pl/docs/v1/integration — "Odbieranie powiadomień"). The
@@ -32,12 +34,12 @@ final class PayNowNotification
     {
         $decoded = json_decode($rawBody, true);
         if (!is_array($decoded)) {
-            throw new \RuntimeException('paynow_notification_malformed_body');
+            throw new InvalidInput('paynow_notification_malformed_body');
         }
 
         $transactionId = (string) ($decoded['paymentId'] ?? '');
         if ($transactionId === '') {
-            throw new \RuntimeException('paynow_notification_missing_payment_id');
+            throw new InvalidInput('paynow_notification_missing_payment_id');
         }
 
         $status = strtoupper(trim((string) ($decoded['status'] ?? '')));

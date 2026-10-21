@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Mailer\CentralMailer;
 
+use ZmierzymyCzas\Domain\Errors\Internal;
 use ZmierzymyCzas\Domain\Mailer\Http\HttpClientInterface;
 use ZmierzymyCzas\Domain\Mailer\Http\HttpResponse;
 
@@ -100,7 +101,7 @@ final class CentralMailerClient implements CentralMailerClientInterface
         $id = (string) ($decoded['id'] ?? '');
         $status = (string) ($decoded['status'] ?? '');
         if ($id === '') {
-            throw new \RuntimeException('central_mailer_enqueue_malformed_response');
+            throw new Internal('central_mailer_enqueue_malformed_response');
         }
 
         return ['id' => $id, 'status' => $status];

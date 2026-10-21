@@ -8,6 +8,10 @@ use Psr\Log\LoggerInterface;
 use ZmierzymyCzas\Domain\Bz\BzWebhookOutboxService;
 use ZmierzymyCzas\Domain\Competitors\CompetitorNamePresenter;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
+use ZmierzymyCzas\Domain\Errors\Conflict;
+use ZmierzymyCzas\Domain\Errors\Forbidden;
+use ZmierzymyCzas\Domain\Errors\InvalidInput;
+use ZmierzymyCzas\Domain\Errors\NotFound;
 use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldCatalog;
 use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
@@ -570,7 +574,7 @@ SQL;
     {
         $row = $this->bzSyncRow($registrationId);
         if ($row === null || (string) $row['eventId'] !== $eventId) {
-            throw new \RuntimeException('registration_not_found');
+            throw new NotFound('registration_not_found');
         }
 
         $competitorRepository = new CompetitorRepository($this->pdo);
@@ -1547,10 +1551,10 @@ SQL;
             $stmt->execute(['id' => $registrationId]);
             $row = $stmt->fetch();
             if ($row === false) {
-                throw new \RuntimeException('registration_not_found');
+                throw new NotFound('registration_not_found');
             }
             if ((string) $row['publicationStatus'] !== 'finished') {
-                throw new \RuntimeException('registration_form_snapshot_not_finished');
+                throw new Conflict('registration_form_snapshot_not_finished');
             }
 
             $current = $row['formDataSnapshot'] !== null ? (json_decode((string) $row['formDataSnapshot'], true) ?: []) : [];
@@ -2044,7 +2048,7 @@ SQL;
         $stmt->execute(['eventId' => $eventId, 'distanceId' => $distanceId]);
         $row = $stmt->fetch();
         if (!$row) {
-            throw new \RuntimeException('registration_distance_invalid');
+            throw new InvalidInput('registration_distance_invalid');
         }
 
         return $row;
@@ -2062,7 +2066,7 @@ SQL;
     {
         $limit = $distanceRow['participantLimit'] !== null ? (int) $distanceRow['participantLimit'] : null;
         if ($limit !== null && $limit > 0 && (int) $distanceRow['registeredCount'] >= $limit) {
-            throw new \RuntimeException('registration_capacity_exceeded');
+            throw new Conflict('registration_capacity_exceeded');
         }
     }
 
@@ -2120,11 +2124,11 @@ SQL;
 
         if (!empty($data['createTeam'])) {
             if ((string) ($distanceRow['startType'] ?? 'individual') !== 'relay') {
-                throw new \RuntimeException('registration_team_requires_relay_distance');
+                throw new InvalidInput('registration_team_requires_relay_distance');
             }
             $name = trim((string) ($data['teamName'] ?? ''));
             if ($name === '') {
-                throw new \RuntimeException('registration_team_name_required');
+                throw new InvalidInput('registration_team_name_required');
             }
             // The captain's optional, manual
             // Kategoria specjalna declaration, validated here against the
@@ -2168,20 +2172,20 @@ SQL;
     {
         $team = $teams->find(trim((string) $data['teamId']));
         if ($team === null) {
-            throw new \RuntimeException('registration_team_not_found');
+            throw new NotFound('registration_team_not_found');
         }
         $actorUserId = is_string($data['actorUserId'] ?? null) ? trim($data['actorUserId']) : '';
         $presentedToken = is_string($data['teamInviteToken'] ?? null) ? trim($data['teamInviteToken']) : '';
         if (!TeamRepository::isCaptain($team, $actorUserId)
             && !$teams->inviteTokenMatches((string) $team['id'], $presentedToken)) {
-            throw new \RuntimeException('registration_team_invite_required');
+            throw new Forbidden('registration_team_invite_required');
         }
         if ((string) $team['eventId'] !== (string) $data['eventId'] || (string) $team['distanceId'] !== (string) $data['distanceId']) {
-            throw new \RuntimeException('registration_team_distance_mismatch');
+            throw new InvalidInput('registration_team_distance_mismatch');
         }
         $maxSize = $distanceRow['relayMaxTeamSize'] !== null ? (int) $distanceRow['relayMaxTeamSize'] : null;
         if ($maxSize !== null && $team['memberCount'] >= $maxSize) {
-            throw new \RuntimeException('registration_team_full');
+            throw new Conflict('registration_team_full');
         }
 
         return $team;
@@ -2204,7 +2208,7 @@ SQL;
         );
         $stmt->execute(['id' => $distanceId]);
         if ($stmt->rowCount() !== 1) {
-            throw new \RuntimeException('registration_capacity_exceeded');
+            throw new Conflict('registration_capacity_exceeded');
         }
     }
 
@@ -2737,22 +2741,22 @@ SQL;
         $teams = new TeamRepository($this->pdo);
         $team = $teams->find($teamId);
         if ($team === null) {
-            throw new \RuntimeException('team_not_found');
+            throw new NotFound('team_not_found');
         }
         $actorId = (string) $actor['id'];
         $isManager = (bool) $actor['isManager'];
         if (!$isManager && !TeamRepository::isCaptain($team, $actorId)) {
-            throw new \RuntimeException('team_not_captain');
+            throw new Forbidden('team_not_captain');
         }
 
         $this->pdo->beginTransaction();
         try {
             $locked = $this->lockRegistration($registrationId);
             if ($locked === null || (string) $this->teamIdOf($registrationId) !== $teamId) {
-                throw new \RuntimeException('registration_not_found');
+                throw new NotFound('registration_not_found');
             }
             if (in_array((string) $locked['status'], self::NOT_COUNTED_STATUSES, true)) {
-                throw new \RuntimeException('team_swap_registration_inactive');
+                throw new Conflict('team_swap_registration_inactive');
             }
 
             $info = $this->pdo->prepare(
@@ -2764,10 +2768,10 @@ SQL;
             $info->execute(['eventId' => $locked['eventId'], 'distanceId' => $locked['distanceId']]);
             $distanceRow = $info->fetch();
             if (!$distanceRow) {
-                throw new \RuntimeException('registration_distance_invalid');
+                throw new InvalidInput('registration_distance_invalid');
             }
             if (!$isManager && !$this->teamSwapStillOpen($distanceRow)) {
-                throw new \RuntimeException('team_swap_deadline_passed');
+                throw new Conflict('team_swap_deadline_passed');
             }
 
             $swap = $this->swapRegistrationPerson($registrationId, $locked, $distanceRow, $input, $actor, $isManager);
@@ -2812,21 +2816,21 @@ SQL;
         if ($newCompetitorId !== '') {
             $competitor = $competitors->find($newCompetitorId);
             if ($competitor === null) {
-                throw new \RuntimeException('team_swap_competitor_not_found');
+                throw new NotFound('team_swap_competitor_not_found');
             }
             // The captain names only people they may register (Opieka or own profile — the
             // capped permission, no new Opieka is granted); the Event's manager
             // is organising the start list and may name any Zawodnik.
             if (!$isManager && !(new \ZmierzymyCzas\Domain\Care\CareRepository($this->pdo))->canRegister($actorId, $newCompetitorId)) {
-                throw new \RuntimeException('not_authorized_to_register');
+                throw new Forbidden('not_authorized_to_register');
             }
         } elseif ($newPerson !== null) {
             if (trim((string) ($newPerson['firstName'] ?? '')) === '' || trim((string) ($newPerson['lastName'] ?? '')) === '') {
-                throw new \RuntimeException('team_swap_person_required');
+                throw new InvalidInput('team_swap_person_required');
             }
             $competitor = null;
         } else {
-            throw new \RuntimeException('team_swap_person_required');
+            throw new InvalidInput('team_swap_person_required');
         }
 
         $current = $this->pdo->prepare('SELECT competitor_id, user_name, user_id, category FROM registrations WHERE id = :id');
@@ -2835,14 +2839,14 @@ SQL;
 
         if ($competitor !== null) {
             if ((string) $before['competitor_id'] === (string) $competitor['id']) {
-                throw new \RuntimeException('team_swap_same_person');
+                throw new InvalidInput('team_swap_same_person');
             }
             $dup = $this->pdo->prepare(
                 "SELECT 1 FROM registrations WHERE event_id = :eventId AND competitor_id = :cid AND id <> :id AND status NOT IN ('cancelled', 'removed', 'expired') LIMIT 1"
             );
             $dup->execute(['eventId' => $locked['eventId'], 'cid' => $competitor['id'], 'id' => $registrationId]);
             if ($dup->fetchColumn() !== false) {
-                throw new \RuntimeException('team_swap_competitor_already_registered');
+                throw new Conflict('team_swap_competitor_already_registered');
             }
         } else {
             $competitor = $competitors->create([
@@ -2976,7 +2980,7 @@ SQL;
                 return null;
             }
             if ($registration['status'] !== 'confirmed') {
-                throw new \RuntimeException('refund_requires_paid_registration');
+                throw new Conflict('refund_requires_paid_registration');
             }
 
             $existing = $this->lockRefund($id);
@@ -3026,7 +3030,7 @@ SQL;
             }
             $existing = $this->lockRefund($id);
             if ($existing === null || $existing['status'] === 'refunded') {
-                throw new \RuntimeException('refund_request_not_found');
+                throw new Conflict('refund_request_not_found');
             }
             if ($existing['status'] === 'approved') {
                 $this->pdo->commit();
@@ -3127,14 +3131,14 @@ SQL;
             }
             $existing = $this->lockRefund($id);
             if ($existing === null) {
-                throw new \RuntimeException('refund_request_not_found');
+                throw new Conflict('refund_request_not_found');
             }
             if ($existing['status'] === 'refunded') {
                 $this->pdo->commit();
                 return $this->find($id);
             }
             if ($existing['status'] !== 'approved') {
-                throw new \RuntimeException('refund_not_approved');
+                throw new Conflict('refund_not_approved');
             }
 
             $this->pdo->prepare(
@@ -3313,7 +3317,7 @@ SQL;
                 // SAME Zapis and the same frozen amount; the window and the slot are left untouched.
                 // A transfer (organizer_bank) Zapis has no gateway session to restart.
                 if ($this->paymentConfigType((string) $registration['eventId']) === 'organizer_bank') {
-                    throw new \RuntimeException('retry_not_available_for_bank_transfer');
+                    throw new Conflict('retry_not_available_for_bank_transfer');
                 }
                 $this->pdo->commit();
                 $pending = $this->find($id);
@@ -3324,7 +3328,7 @@ SQL;
                 return $pending;
             }
             if ($registration['status'] !== 'expired') {
-                throw new \RuntimeException('retry_requires_expired_registration');
+                throw new Conflict('retry_requires_expired_registration');
             }
 
             $distanceRow = $this->lockDistanceForRegistration((string) $registration['eventId'], (string) $registration['distanceId']);
@@ -3662,7 +3666,7 @@ SQL;
             $stmt->execute(['transactionId' => $transactionId]);
             $transaction = $stmt->fetch();
             if ($transaction === false) {
-                throw new \RuntimeException('gateway_transaction_unknown');
+                throw new NotFound('gateway_transaction_unknown');
             }
 
             $registrationId = (string) $transaction['registrationId'];
@@ -3962,20 +3966,20 @@ SQL;
     {
         $eventId = $this->registrationEventId($id);
         if ($eventId === null) {
-            throw new \RuntimeException('registration_not_found');
+            throw new NotFound('registration_not_found');
         }
         if ($this->paymentConfigType($eventId) !== 'organizer_bank') {
-            throw new \RuntimeException('registration_not_manual_route');
+            throw new Conflict('registration_not_manual_route');
         }
 
         $this->pdo->beginTransaction();
         try {
             $registration = $this->lockRegistration($id);
             if ($registration === null) {
-                throw new \RuntimeException('registration_not_found');
+                throw new NotFound('registration_not_found');
             }
             if ($registration['status'] !== 'pending') {
-                throw new \RuntimeException('registration_not_pending');
+                throw new Conflict('registration_not_pending');
             }
             $this->markGatewayPaymentPaid($id);
             $this->pdo->commit();
@@ -3992,7 +3996,7 @@ SQL;
 
         $registration = $this->find($id);
         if ($registration === null) {
-            throw new \RuntimeException('registration_not_found');
+            throw new NotFound('registration_not_found');
         }
 
         return $registration;
@@ -4533,30 +4537,30 @@ SQL;
         $stmt->execute(['eventId' => $eventId, 'code' => $code]);
         $discount = $stmt->fetch();
         if (!$discount) {
-            throw new \RuntimeException('discount_code_invalid');
+            throw new InvalidInput('discount_code_invalid');
         }
         if (!(bool) $discount['active']) {
-            throw new \RuntimeException('discount_code_inactive');
+            throw new InvalidInput('discount_code_inactive');
         }
 
         $now = time();
         if (!empty($discount['valid_from']) && strtotime((string) $discount['valid_from']) > $now) {
-            throw new \RuntimeException('discount_code_not_started');
+            throw new InvalidInput('discount_code_not_started');
         }
         if (!empty($discount['valid_to']) && strtotime((string) $discount['valid_to']) < $now) {
-            throw new \RuntimeException('discount_code_expired');
+            throw new InvalidInput('discount_code_expired');
         }
         // Re-checking the code of a Zapis that already holds one of its uses (change of Dystans).
         if ($discount['max_uses'] !== null && (int) $discount['used_count'] >= (int) $discount['max_uses']
             && !($ownRegistrationId !== null && $this->discountUsedBy($discount, $ownRegistrationId))) {
-            throw new \RuntimeException('discount_code_used_up');
+            throw new InvalidInput('discount_code_used_up');
         }
 
         $distanceIds = $discount['distance_ids'] !== null && $discount['distance_ids'] !== ''
             ? (json_decode((string) $discount['distance_ids'], true) ?: [])
             : [];
         if ($distanceIds !== [] && !in_array($distanceId, $distanceIds, true)) {
-            throw new \RuntimeException('discount_code_distance_mismatch');
+            throw new InvalidInput('discount_code_distance_mismatch');
         }
 
         return $discount;
@@ -4749,7 +4753,7 @@ SQL;
             }
             $catalog = $this->merchandiseCatalogItem($eventId, $merchandiseId);
             if ($catalog === null) {
-                throw new \RuntimeException('merchandise_invalid');
+                throw new InvalidInput('merchandise_invalid');
             }
 
             $quantity = max(1, (int) ($line['quantity'] ?? 1));

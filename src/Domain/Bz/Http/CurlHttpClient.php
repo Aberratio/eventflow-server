@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Bz\Http;
 
+use ZmierzymyCzas\Domain\Errors\Internal;
+
 /**
  * The one real implementation of HttpClientInterface used outside tests — a thin
  * curl wrapper, identical in shape to Mailer\Http\CurlHttpClient and
@@ -21,7 +23,7 @@ final class CurlHttpClient implements HttpClientInterface
     {
         $ch = curl_init($url);
         if ($ch === false) {
-            throw new \RuntimeException('bz_webhook_http_init_failed');
+            throw new Internal('bz_webhook_http_init_failed');
         }
 
         $headerLines = [];

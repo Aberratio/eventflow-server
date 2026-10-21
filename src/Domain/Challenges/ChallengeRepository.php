@@ -6,6 +6,10 @@ namespace ZmierzymyCzas\Domain\Challenges;
 
 use Psr\Log\LoggerInterface;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
+use ZmierzymyCzas\Domain\Errors\Conflict;
+use ZmierzymyCzas\Domain\Errors\Forbidden;
+use ZmierzymyCzas\Domain\Errors\InvalidInput;
+use ZmierzymyCzas\Domain\Errors\NotFound;
 use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Domain\Shop\OrderRepository;
 use ZmierzymyCzas\Support\InputRules;
@@ -629,7 +633,7 @@ final class ChallengeRepository extends Repository
         } else {
             $competitor = $competitors->find($competitorId);
             if ($competitor === null) {
-                throw new \RuntimeException('competitor_not_found');
+                throw new NotFound('competitor_not_found');
             }
             if (($competitor['userId'] ?? null) !== $userId) {
                 $displayName = trim($competitor['firstName'] . ' ' . $competitor['lastName']);
@@ -697,18 +701,18 @@ final class ChallengeRepository extends Repository
     {
         $challenge = $this->find($challengeId);
         if ($challenge === null) {
-            throw new \RuntimeException('challenge_not_found');
+            throw new NotFound('challenge_not_found');
         }
 
         $participation = $this->findParticipationRow($challengeId, new ChallengeParticipant($userId, $competitorId));
         if ($participation === null) {
-            throw new \RuntimeException('challenge_not_joined');
+            throw new InvalidInput('challenge_not_joined');
         }
         $rowParticipant = new ChallengeParticipant($userId, ChallengeParticipant::nullableId($participation['competitorId']));
         $rowCompetitorId = $rowParticipant->competitorId;
 
         if (!$this->isChallengeCompletedForUser($challenge, $rowParticipant)) {
-            throw new \RuntimeException('challenge_not_completed');
+            throw new Forbidden('challenge_not_completed');
         }
 
         $isRewardProduct = false;
@@ -719,7 +723,7 @@ final class ChallengeRepository extends Repository
             }
         }
         if (!$isRewardProduct) {
-            throw new \RuntimeException('challenge_invalid_reward_product');
+            throw new InvalidInput('challenge_invalid_reward_product');
         }
 
         $participationId = (string) $participation['id'];
@@ -729,7 +733,7 @@ final class ChallengeRepository extends Repository
         );
         $claim->execute(['at' => $claimedAt, 'id' => $participationId]);
         if ($claim->rowCount() !== 1) {
-            throw new \RuntimeException('challenge_reward_already_claimed');
+            throw new Conflict('challenge_reward_already_claimed');
         }
 
         try {

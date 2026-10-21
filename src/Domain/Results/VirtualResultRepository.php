@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Results;
 
-use RuntimeException;
+use ZmierzymyCzas\Domain\Errors\InvalidInput;
 use ZmierzymyCzas\Domain\Repository;
 
 final class VirtualResultRepository extends Repository
@@ -55,26 +55,26 @@ SQL;
         $seconds = (int) ($data['submittedTimeInSeconds'] ?? 0);
 
         if ($eventId === '' || $distanceId === '' || $time === '' || $seconds <= 0) {
-            throw new RuntimeException('validation_error');
+            throw new InvalidInput('validation_error');
         }
 
         $this->pdo->beginTransaction();
         try {
             $event = $this->event($eventId);
             if (!$event || !(bool) $event['is_virtual']) {
-                throw new RuntimeException('virtual_event_required');
+                throw new InvalidInput('virtual_event_required');
             }
             if (!$this->isWindowOpen($event)) {
-                throw new RuntimeException('virtual_result_window_closed');
+                throw new InvalidInput('virtual_result_window_closed');
             }
 
             $registration = $this->registration($eventId, $distanceId, $userId);
             if (!$registration) {
-                throw new RuntimeException('virtual_result_registration_required');
+                throw new InvalidInput('virtual_result_registration_required');
             }
 
             if ($this->hasActiveSubmission($eventId, $distanceId, $userId)) {
-                throw new RuntimeException('virtual_result_duplicate');
+                throw new InvalidInput('virtual_result_duplicate');
             }
 
             $id = $this->id();
@@ -107,7 +107,7 @@ SQL;
     public function review(string $id, string $status, string $reviewedBy, ?string $reason = null): ?array
     {
         if (!in_array($status, ['approved', 'rejected'], true)) {
-            throw new RuntimeException('validation_error');
+            throw new InvalidInput('validation_error');
         }
 
         $this->pdo->beginTransaction();
@@ -195,7 +195,7 @@ SQL);
             (string) $submission['userId']
         );
         if (!$registration) {
-            throw new RuntimeException('virtual_result_registration_required');
+            throw new InvalidInput('virtual_result_registration_required');
         }
 
         $this->deleteOfficialResult($submission);

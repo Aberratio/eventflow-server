@@ -61,6 +61,13 @@ as the first version.
 - Operations: PII-redacting structured logs, throttled e-mail alerts,
   `/health`, daily database backups with restore checks, and scripted deploys
   with code snapshots and rollback.
+- Registration price quote also refuses a full distance and a team the caller
+  has no invitation to, with the same errors as the registration itself.
+- An event switched to private visibility is removed from the Google Calendar
+  (queued through the calendar outbox, like a cancellation).
+- Manually corrected result places never collide: two manual places cannot be
+  equal in a classification, and computed places skip the manual ones. Results
+  also carry the place by gender (`genderPosition`).
 - Demo data seeding around the current date, with locked demo accounts
   outside local environments.
 - `/health` reports the deployed `version` (from the release tag) and

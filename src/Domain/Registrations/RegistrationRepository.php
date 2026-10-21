@@ -1892,8 +1892,8 @@ SQL;
      * Same input as create() (the HTTP layer prepares it identically for both), same pricing code
      * (priceRegistration()), so the total equals the one of the Zapis created from the same data.
      * Writes nothing and takes no lock: no Zapis, no answers, no counter bump, no discount use, no
-     * team. Capacity is not checked (a price is not an availability promise) and neither is the
-     * team invitation (create() does that when the Zapis is really made).
+     * team. Capacity and the team invitation ARE checked (read-only, same error codes as create()): a price for a
+     * Zapis that could not be made is refused here too.
      *
      * @param array<string, mixed> $data
      * @return array{eventName: string, distanceName: string, settlementItems: array<int, array{name: string, basis: string, amount: float}>, totalAmount: float, discountCode: ?string}
@@ -1902,10 +1902,13 @@ SQL;
     {
         $distanceRow = $this->lockDistanceForRegistration((string) $data['eventId'], (string) $data['distanceId'], false);
 
+        // Read-only twins of the checks create() makes: a full Dystans and a team the caller may not
+        // join (invitation / distance / size) are refused here as well, with the same error codes.
+        $this->enforceCapacity($distanceRow);
         $teamId = isset($data['teamId']) ? trim((string) $data['teamId']) : '';
         $isJoiningExistingTeam = $teamId !== '' && empty($data['createTeam']);
-        if ($isJoiningExistingTeam && (new TeamRepository($this->pdo))->find($teamId) === null) {
-            throw new \RuntimeException('registration_team_not_found');
+        if ($isJoiningExistingTeam) {
+            $this->assertMayJoinTeam($data, $distanceRow, new TeamRepository($this->pdo));
         }
 
         $pricing = $this->priceRegistration($data, $distanceRow, $isJoiningExistingTeam)['pricing'];
@@ -2095,31 +2098,12 @@ SQL;
      */
     private function resolveTeamForRegistration(array $data, array $distanceRow): array
     {
+        // (the join checks live in assertMayJoinTeam(), shared with quote())
         $teams = new TeamRepository($this->pdo);
 
         $teamId = isset($data['teamId']) ? trim((string) $data['teamId']) : '';
         if ($teamId !== '') {
-            $team = $teams->find($teamId);
-            if ($team === null) {
-                throw new \RuntimeException('registration_team_not_found');
-            }
-            // PP.54 (spec 23 §1): an existing Drużyna is joined only through the captain's invitation
-            // link or by the captain themself (captain consent). `actorUserId` is set by the HTTP layer
-            // from the JWT, never from the body (RegistrationCreatePolicy drops it); internal callers that
-            // omit it fall back to the invitation check only, i.e. fail closed.
-            $actorUserId = is_string($data['actorUserId'] ?? null) ? trim($data['actorUserId']) : '';
-            $presentedToken = is_string($data['teamInviteToken'] ?? null) ? trim($data['teamInviteToken']) : '';
-            if (!TeamRepository::isCaptain($team, $actorUserId)
-                && !$teams->inviteTokenMatches((string) $team['id'], $presentedToken)) {
-                throw new \RuntimeException('registration_team_invite_required');
-            }
-            if ((string) $team['eventId'] !== (string) $data['eventId'] || (string) $team['distanceId'] !== (string) $data['distanceId']) {
-                throw new \RuntimeException('registration_team_distance_mismatch');
-            }
-            $maxSize = $distanceRow['relayMaxTeamSize'] !== null ? (int) $distanceRow['relayMaxTeamSize'] : null;
-            if ($maxSize !== null && $team['memberCount'] >= $maxSize) {
-                throw new \RuntimeException('registration_team_full');
-            }
+            $team = $this->assertMayJoinTeam($data, $distanceRow, $teams);
 
             return ['teamId' => $team['id'], 'teamName' => $team['name']];
         }
@@ -2157,6 +2141,40 @@ SQL;
 
         // Legacy/general classification path — unchanged.
         return ['teamId' => null, 'teamName' => $data['teamName'] ?? null];
+    }
+
+    /**
+     * Read-only checks for JOINING an existing Drużyna (create() and quote() share them): the team
+     * exists, the joiner holds the invitation or is the captain (PP.54, spec 23 §1), the team belongs to
+     * this event+distance and is not at `relay_max_team_size`. `actorUserId` is set by the HTTP layer
+     * from the JWT, never from the body (RegistrationCreatePolicy drops it); internal callers that omit
+     * it fall back to the invitation check only, i.e. fail closed.
+     *
+     * @param array<string, mixed> $data
+     * @param array<string, mixed> $distanceRow
+     * @return array<string, mixed> the team
+     */
+    private function assertMayJoinTeam(array $data, array $distanceRow, TeamRepository $teams): array
+    {
+        $team = $teams->find(trim((string) $data['teamId']));
+        if ($team === null) {
+            throw new \RuntimeException('registration_team_not_found');
+        }
+        $actorUserId = is_string($data['actorUserId'] ?? null) ? trim($data['actorUserId']) : '';
+        $presentedToken = is_string($data['teamInviteToken'] ?? null) ? trim($data['teamInviteToken']) : '';
+        if (!TeamRepository::isCaptain($team, $actorUserId)
+            && !$teams->inviteTokenMatches((string) $team['id'], $presentedToken)) {
+            throw new \RuntimeException('registration_team_invite_required');
+        }
+        if ((string) $team['eventId'] !== (string) $data['eventId'] || (string) $team['distanceId'] !== (string) $data['distanceId']) {
+            throw new \RuntimeException('registration_team_distance_mismatch');
+        }
+        $maxSize = $distanceRow['relayMaxTeamSize'] !== null ? (int) $distanceRow['relayMaxTeamSize'] : null;
+        if ($maxSize !== null && $team['memberCount'] >= $maxSize) {
+            throw new \RuntimeException('registration_team_full');
+        }
+
+        return $team;
     }
 
     /**

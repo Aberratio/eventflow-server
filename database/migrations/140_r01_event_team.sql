@@ -1,8 +1,8 @@
--- R-01 (spec 09 pkt 2-3, macierz uprawnien §2): Zespol Wydarzenia. Wlasciciel to nadal events.organizer_id
--- (bez duplikacji); ta tabela trzyma wylacznie Wspolzarzadzajacych - dowolne Konto, niezaleznie od roli
--- globalnej. Zakres P2, do potwierdzenia przez Zamawiajacego (umowa §5.10).
--- user_id jest NULL, dopoki zaproszony nie zaakceptuje zaproszenia (zaproszenie idzie na adres e-mail).
--- Token zaproszenia jest przechowywany wylacznie jako hash (surowy token trafia tylko do maila).
+-- Event (Wydarzenie) Team. The owner is still events.organizer_id
+-- (no duplication); this table holds only Co-managers - any Account, regardless of the
+-- global role.
+-- user_id is NULL until the invitee accepts the invitation (the invitation goes to an email address).
+-- The invitation token is stored only as a hash (the raw token goes only into the email).
 CREATE TABLE IF NOT EXISTS event_team_members (
     id VARCHAR(36) NOT NULL PRIMARY KEY,
     event_id VARCHAR(36) NOT NULL,

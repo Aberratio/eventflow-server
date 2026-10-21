@@ -3,7 +3,7 @@
     <description>
         Code style ruleset for the Zmierzymy Czas server API. No project style precedent existed
         (no prior PHPCS/PHP-CS-Fixer config), so this adopts PSR-12 as a widely-used, uncontroversial
-        default (see TD.15). Only the paths that ship as application code are checked; vendored,
+        default. Only the paths that ship as application code are checked; vendored,
         generated and fixture data are excluded.
     </description>
 

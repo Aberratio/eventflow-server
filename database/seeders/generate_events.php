@@ -81,7 +81,7 @@ function uuid(string $prefix = ''): string
 }
 
 /**
- * Kod startowy (E1.11) — ten sam kształt, co `RegistrationRepository::generateStartCode()`.
+ * Kod startowy — ten sam kształt, co `RegistrationRepository::generateStartCode()`.
  *
  * Fixtury muszą go podawać wprost: `registrations.qr_code` jest NOT NULL bez DEFAULT
  * i UNIQUE (migracja 039), a MariaDB bez STRICT_TRANS_TABLES podstawiłaby za brakującą
@@ -308,7 +308,7 @@ function buildPastEvent(
             sq(startCode())
         );
 
-        // Rozliczenie (E0.3): "Oplata startowa" line item replaces registrations.price_paid.
+        // Rozliczenie: "Oplata startowa" line item replaces registrations.price_paid.
         $settlementRows[] = sprintf(
             "(%s,%s,'Oplata startowa','distance_price',%.2f,%s,0)",
             // registration_settlement_items.id is VARCHAR(36): a bare UUID, not a prefixed
@@ -517,7 +517,7 @@ function buildCurrentEvent(): array
                 sq(startCode())
             );
 
-            // Rozliczenie (E0.3): replaces registrations.price_paid.
+            // Rozliczenie: replaces registrations.price_paid.
             $settleRows[] = sprintf(
                 "(%s,%s,'Oplata startowa','distance_price',%.2f,%s,0)",
                 // See the identical fix's comment in buildPastEvent() above.

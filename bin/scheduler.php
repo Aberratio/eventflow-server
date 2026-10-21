@@ -12,7 +12,7 @@ use ZmierzymyCzas\Support\Env;
 use ZmierzymyCzas\Support\Log\LogConfig;
 use ZmierzymyCzas\Support\Log\LoggerFactory;
 
-// PP.18: the cron entrypoint (see docs/scheduler.md). Not reachable over HTTP (public/ is the
+// The cron entrypoint (see docs/scheduler.md). Not reachable over HTTP (public/ is the
 // docroot), but refuse anyway.
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);

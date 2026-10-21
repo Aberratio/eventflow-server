@@ -1,4 +1,4 @@
--- R-10: login throttling. One row per throttled subject: `account` (sha256 of the normalised e-mail,
+-- Login throttling. One row per throttled subject: `account` (sha256 of the normalised e-mail,
 -- also for e-mails that do not exist, so an unknown address behaves exactly like a real one) or `ip`.
 -- Times are unix seconds written by the application clock; locked_until > now means "blocked".
 -- Old rows are deleted lazily by LoginThrottleRepository on every recorded failure.

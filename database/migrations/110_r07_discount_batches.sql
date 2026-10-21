@@ -1,4 +1,4 @@
--- R-07 (ticket 07 pkt 7): partia kodow rabatowych to generator, nie drugi mechanizm. Kody nadal leza
+-- Partia kodow rabatowych to generator, nie drugi mechanizm. Kody nadal leza
 -- w event_discount_codes (limit uzyc = 1 to kod jednorazowy); partia jedynie grupuje je
 -- pod wspolna etykieta, zeby dalo sie je wylistowac i wyeksportowac razem.
 CREATE TABLE IF NOT EXISTS event_discount_code_batches (

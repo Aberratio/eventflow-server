@@ -6,7 +6,7 @@ parameters:
     # real bugs (wrong argument/return types, dead catch blocks, always-true/false
     # conditions, calling methods on possibly-null values, etc.) without requiring
     # the full property-typehint/generics discipline that higher levels demand.
-    # Ratchet this up over time (see TD.15 in the backlog).
+    # Ratchet this up over time.
     level: 4
     tmpDir: var/phpstan
     paths:

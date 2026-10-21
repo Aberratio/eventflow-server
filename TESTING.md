@@ -204,7 +204,7 @@ SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE FROM information_schema
 SELECT TABLE_NAME, CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS
  WHERE TABLE_SCHEMA = DATABASE() AND CONSTRAINT_TYPE = 'FOREIGN KEY' ORDER BY 1, 2;
 
--- Duplicate root condition-tree nodes from an old (pre-PP.13) re-run of migration 054:
+-- Duplicate root condition-tree nodes from an old (older) re-run of migration 054:
 SELECT challenge_id, COUNT(*) AS roots FROM challenge_condition_nodes
  WHERE parent_node_id IS NULL GROUP BY challenge_id HAVING roots > 1;
 

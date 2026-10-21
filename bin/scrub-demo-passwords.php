@@ -9,7 +9,7 @@ use ZmierzymyCzas\Support\Env;
 require __DIR__ . '/../vendor/autoload.php';
 
 /**
- * PP.90: removes the well-known demo passwords (demo1234 / demo123) from an existing database.
+ * Removes the well-known demo passwords (demo1234 / demo123) from an existing database.
  *
  *   php bin/scrub-demo-passwords.php --dry-run   count the accounts, write nothing
  *   php bin/scrub-demo-passwords.php             scrub seed-manifest and demo-hash accounts

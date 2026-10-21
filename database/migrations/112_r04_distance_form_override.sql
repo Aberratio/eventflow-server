@@ -1,10 +1,10 @@
--- R-04: formularz zapisow per Dystans (spec 10). Wiersz form_fields z ustawionym `distance_id`
--- jest albo nadpisaniem odziedziczonej pozycji wydarzenia (ten sam `field_key`), albo polem
--- dostepnym tylko na tym Dystansie. Stary klucz unikalny (event_id, field_key) zabraniał
--- drugiego wiersza o tym samym kluczu, a UNIQUE z kolumna NULL nie pilnuje wierszy
--- wydarzenia - stad `distance_scope`: '' dla wydarzenia, id Dystansu dla wiersza Dystansu.
--- Utrzymywana przez kod (FormFieldRepository). Gdy Dystans zniknie (FK ustawia distance_id na
--- NULL), `distance_scope` zostaje, wiec osierocony wiersz nie udaje pozycji wydarzenia.
+-- Registration (Zapis) form per Distance (Dystans). A form_fields row with `distance_id` set
+-- is either an override of the inherited event-level entry (same `field_key`), or a field
+-- available only on that Distance. The old unique key (event_id, field_key) forbade a
+-- second row with the same key, and a UNIQUE with a NULL column does not guard event-level
+-- rows - hence `distance_scope`: '' for the event, the Distance id for a Distance row.
+-- Maintained by code (FormFieldRepository). When a Distance disappears (the FK sets distance_id to
+-- NULL), `distance_scope` stays, so an orphaned row does not pose as an event-level entry.
 -- @guard: column-missing form_fields.distance_scope
 ALTER TABLE form_fields ADD COLUMN distance_scope VARCHAR(36) NOT NULL DEFAULT '' AFTER distance_id;
 

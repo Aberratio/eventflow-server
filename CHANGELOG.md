@@ -40,6 +40,10 @@ as the first version.
   are closed by a rejection or by the merge.
 - Transactional mail through Central Mailer via an outbox with backoff and
   `Retry-After` handling, QR code attachments and the organizer as reply-to.
+- Settlement report for gateway (route A) payments: per-event payments, refunds,
+  platform commission (`SETTLEMENT_COMMISSION_BPS`, default 0) and the net amount to
+  pay out to the organizer for a date range, with CSV/XLSX export. Admin only
+  (`GET /admin/settlements`, `GET /admin/settlements/export`).
 - Scheduler (`bin/scheduler.php`) for payment reminders, registration expiry,
   results-published mail, outbox and webhook retries, and Google Calendar
   sync.

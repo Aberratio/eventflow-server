@@ -331,6 +331,8 @@ final class RbacGrid
         'GET /api/v1/admin/online-sessions' => ['policy' => self::ADMIN, 'basis' => 'H10 (plan line 3231)'],
         'GET /api/v1/admin/sales-stats' => ['policy' => self::ADMIN, 'basis' => 'admin-only (G-05, same as platform-stats)'],
         'GET /api/v1/admin/platform-stats' => ['policy' => self::ADMIN, 'basis' => 'admin-only (macierz section 3) (no extra per-row rule) (plan line 3239)'],
+        'GET /api/v1/admin/settlements' => ['policy' => self::ADMIN, 'basis' => 'admin-only: raport rozliczeniowy trasy A (spec 13), organizator 403'],
+        'GET /api/v1/admin/settlements/export' => ['policy' => self::ADMIN, 'basis' => 'admin-only: eksport raportu rozliczeniowego (spec 13/21)'],
         'GET /api/v1/users/{userId}/tickets' => ['policy' => self::SELF_OR_STAFF, 'params' => ['userId' => 'owner'], 'override' => ['owner' => self::OK], 'basis' => 'PP.2 (plan line 3244)'],
         'GET /api/v1/users/{userId}/certificates' => ['policy' => self::SELF_OR_STAFF, 'params' => ['userId' => 'owner'], 'override' => ['owner' => self::OK], 'basis' => 'PP.2 (plan line 3251)'],
         'POST /api/v1/dev/seed-event' => ['policy' => self::ENV_GATED, 'basis' => '§3.6 (plan line 3262)'],

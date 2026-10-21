@@ -37,6 +37,7 @@ use ZmierzymyCzas\Domain\Events\PublicEventPresenter;
 use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Payments\Http\CurlHttpClient;
+use ZmierzymyCzas\Domain\Payments\SettlementReport;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowConfig;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowGateway;
 use ZmierzymyCzas\Domain\Payments\PayNow\PayNowNotification;
@@ -4036,6 +4037,81 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             ->add(new AuthMiddleware($jwt, $adminRoles));
         $api->get('/admin/platform-stats', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->platformStats()))
             ->add(new AuthMiddleware($jwt, $adminRoles));
+
+        // R-03 (spec 13, trasa A): raport rozliczeniowy - wplaty bramka minus zwroty minus prowizja = kwota
+        // do recznej wyplaty dla organizatora. Admin-only. Kwoty w groszach. Eksport CSV/XLSX ta sama
+        // maszyneria co eksport listy startowej.
+        $parseSettlementQuery = static function (array $params): array {
+            $dateFrom = trim((string) ($params['dateFrom'] ?? ''));
+            $dateTo = trim((string) ($params['dateTo'] ?? ''));
+            foreach (['dateFrom' => $dateFrom, 'dateTo' => $dateTo] as $field => $value) {
+                $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+                if ($parsed === false || $parsed->format('Y-m-d') !== $value) {
+                    return ['error' => ['validation_error', 'Podaj okres rozliczenia w formacie RRRR-MM-DD (' . $field . ').']];
+                }
+            }
+            if ($dateFrom > $dateTo) {
+                return ['error' => ['validation_error', 'Data początkowa nie może być późniejsza niż końcowa.']];
+            }
+            $eventId = trim((string) ($params['eventId'] ?? ''));
+
+            return ['dateFrom' => $dateFrom, 'dateTo' => $dateTo, 'eventId' => $eventId !== '' ? $eventId : null];
+        };
+        $api->get('/admin/settlements', function (Request $request, Response $response) use ($pdo, $parseSettlementQuery) {
+            $settlementReport = new SettlementReport($pdo, max(0, (int) Env::get('SETTLEMENT_COMMISSION_BPS', 0)));
+            $parsed = $parseSettlementQuery($request->getQueryParams());
+            if (isset($parsed['error'])) {
+                return JsonResponder::error($response, $parsed['error'][0], $parsed['error'][1], 422);
+            }
+
+            return JsonResponder::ok($response, $settlementReport->report($parsed['dateFrom'], $parsed['dateTo'], $parsed['eventId']));
+        })->add(new AuthMiddleware($jwt, $adminRoles));
+        $api->get('/admin/settlements/export', function (Request $request, Response $response) use ($pdo, $parseSettlementQuery, $logActivity) {
+            $settlementReport = new SettlementReport($pdo, max(0, (int) Env::get('SETTLEMENT_COMMISSION_BPS', 0)));
+            $params = $request->getQueryParams();
+            $format = strtolower((string) ($params['format'] ?? 'csv'));
+            if (!in_array($format, ['csv', 'xlsx'], true)) {
+                return JsonResponder::error($response, 'validation_error', 'Nieobsługiwany format eksportu. Dozwolone: csv, xlsx.', 422);
+            }
+            $parsed = $parseSettlementQuery($params);
+            if (isset($parsed['error'])) {
+                return JsonResponder::error($response, $parsed['error'][0], $parsed['error'][1], 422);
+            }
+
+            $report = $settlementReport->report($parsed['dateFrom'], $parsed['dateTo'], $parsed['eventId']);
+            $export = SettlementReport::exportRows($report['lines'], $report['summary']);
+            try {
+                $fileContent = $format === 'xlsx'
+                    ? StartListExportFormatter::toXlsx($export['columns'], $export['rows'])
+                    : StartListExportFormatter::toCsv($export['columns'], $export['rows']);
+            } catch (\RuntimeException $e) {
+                if ($e->getMessage() === 'xlsx_not_supported') {
+                    return JsonResponder::error($response, 'xlsx_not_supported', 'Serwer PHP nie obsluguje zapisu XLSX (brak rozszerzenia ZipArchive). Uzyj eksportu CSV.', 500);
+                }
+                throw $e;
+            }
+
+            $logActivity(
+                (array) $request->getAttribute('auth'),
+                'settlement_exported',
+                sprintf('Eksport raportu rozliczeniowego (%s) za okres %s - %s', strtoupper($format), $parsed['dateFrom'], $parsed['dateTo']),
+                'settlement',
+                $parsed['eventId'] ?? 'all',
+                ''
+            );
+
+            $filenameBase = 'rozliczenie-' . $parsed['dateFrom'] . '_' . $parsed['dateTo'];
+            $response->getBody()->write($fileContent);
+            if ($format === 'xlsx') {
+                return $response
+                    ->withHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                    ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.xlsx"');
+            }
+
+            return $response
+                ->withHeader('Content-Type', 'text/csv; charset=windows-1250')
+                ->withHeader('Content-Disposition', 'attachment; filename="' . $filenameBase . '.csv"');
+        })->add(new AuthMiddleware($jwt, $adminRoles));
 
         // Bilet is a view of Zapis, not a stored entity (E0.2) — derived from registrations.
         // PP.2: self or staff — same as /users/{userId}/registrations.

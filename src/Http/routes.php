@@ -2665,6 +2665,79 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, (new RegistrationChangeRepository($pdo))->listForRegistration((string) $args['id']));
         })
             ->add(new AuthMiddleware($jwt));
+        // R-02 (spec 20 §2 + spec 07 pkt 12, zakres P2): change of Dystans / Wariant opłaty of a Zapis. The quote
+        // and the change share one gate (SelfServicePolicy for the owner, the Event's manager always) and one
+        // calculation; the quote writes nothing. Owner + dearer Dystans -> 409 balance_due_requires_organizer.
+        $distanceChangeRoute = static function (bool $commit) use ($authorizeRegistration, $registrations, $events, $logActivity, $body): callable {
+            return static function (Request $request, Response $response, array $args) use ($commit, $authorizeRegistration, $registrations, $events, $logActivity, $body): Response {
+                $auth = (array) $request->getAttribute('auth');
+                $gate = $authorizeRegistration($response, (string) $args['id'], $auth);
+                if ($gate instanceof Response) {
+                    return $gate;
+                }
+                $payload = $body($request);
+                $distanceId = is_string($payload['distanceId'] ?? null) ? trim($payload['distanceId']) : '';
+                if ($distanceId === '') {
+                    return JsonResponder::error($response, 'validation_error', 'distanceId is required', 422, ['field' => 'distanceId']);
+                }
+                foreach (['pricingVariantId', 'category'] as $optional) {
+                    if (isset($payload[$optional]) && !is_string($payload[$optional])) {
+                        return JsonResponder::error($response, 'validation_error', $optional . ' must be a string', 422, ['field' => $optional]);
+                    }
+                }
+                $verdict = (new SelfServicePolicy())->evaluate((array) $events->find((string) $gate['registration']['eventId']), $gate['registration'], $gate['isManager']);
+                if (!$verdict['allowed']) {
+                    $messages = [
+                        SelfServicePolicy::REASON_DISABLED => 'Organizator wyłączył samodzielną zmianę zapisów w tym wydarzeniu.',
+                        SelfServicePolicy::REASON_CLOSED => 'Termin samodzielnej zmiany dystansu minął.',
+                        SelfServicePolicy::REASON_EVENT_OVER => 'Wydarzenie jest już zamknięte dla zmian.',
+                        SelfServicePolicy::REASON_REGISTRATION_INACTIVE => 'Ten zapis nie jest już aktywny.',
+                    ];
+                    $reason = (string) $verdict['reason'];
+                    return JsonResponder::error($response, $reason, $messages[$reason] ?? 'Zmiana dystansu jest niedostępna.', 409, ['deadline' => $verdict['deadline']]);
+                }
+                $actor = ['id' => (string) ($auth['sub'] ?? ''), 'role' => (string) ($auth['role'] ?? ''), 'isManager' => $gate['isManager']];
+                $variantId = isset($payload['pricingVariantId']) ? (string) $payload['pricingVariantId'] : null;
+                $category = isset($payload['category']) ? (string) $payload['category'] : null;
+                try {
+                    if (!$commit) {
+                        return JsonResponder::ok($response, $registrations->quoteDistanceChange((string) $args['id'], $distanceId, $variantId, $category, $actor));
+                    }
+                    $result = $registrations->changeDistance((string) $args['id'], $distanceId, $variantId, $category, $actor);
+                } catch (\ZmierzymyCzas\Domain\Registrations\DistanceChangeRejected $e) {
+                    return JsonResponder::error($response, $e->reason, $e->getMessage(), $e->status, $e->details);
+                } catch (RuntimeException $e) {
+                    if ($e->getMessage() === 'registration_capacity_exceeded') {
+                        return JsonResponder::error($response, 'registration_capacity_exceeded', 'Wybrany dystans osiągnął limit uczestników.', 409);
+                    }
+                    if ($e->getMessage() === 'registration_distance_invalid') {
+                        return JsonResponder::error($response, 'registration_distance_invalid', 'Wybrany dystans nie istnieje w tym wydarzeniu.', 422);
+                    }
+                    throw $e;
+                }
+                $change = $result['change'];
+                $logActivity(
+                    $auth,
+                    'registration_distance_changed',
+                    $gate['isManager'] ? 'Zmieniono dystans zapisu' : 'Zmiana dystansu zapisu',
+                    'registration',
+                    (string) $args['id'],
+                    (string) ($gate['registration']['eventName'] ?? ''),
+                    ['from' => $change['from'], 'to' => $change['to'], 'balanceDueMinor' => $change['balanceDueMinor'], 'refundDueMinor' => $change['refundDueMinor']]
+                );
+                return JsonResponder::ok($response, [
+                    ...$result['registration'],
+                    'balanceDueMinor' => $change['balanceDueMinor'],
+                    'refundDueMinor' => $change['refundDueMinor'],
+                    'refundRequested' => $result['refundRequested'],
+                    'change' => $change,
+                ]);
+            };
+        };
+        $api->post('/registrations/{id}/distance-change/quote', $distanceChangeRoute(false))
+            ->add(new AuthMiddleware($jwt));
+        $api->post('/registrations/{id}/distance-change', $distanceChangeRoute(true))
+            ->add(new AuthMiddleware($jwt));
         // PP.2: $eventManagerRoles alone only checked global role — an organizer of a
         // different event could mark another organizer's Zapis paid. managerOnly:
         // true rejects the owner too (payment-details is manager-only by design).

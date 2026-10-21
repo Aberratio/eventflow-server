@@ -81,6 +81,18 @@ as the first version.
   start), a refund request opened automatically for a paid registration, the
   freed slot returned to the pool, and a per-registration change history
   (`GET /registrations/{id}/changes`). Organizers can still cancel at any time.
+- Change of the distance or fee variant of a registration (zakres P2, do
+  potwierdzenia przez Zamawiającego): `POST /registrations/{id}/distance-change`
+  and a read-only `.../distance-change/quote`. The owner may do it inside the
+  self-service window, the organizer always; capacity is checked on the target
+  distance, the seat moves, the category is recomputed, the start fee is priced
+  again at today's price list (other settlement lines and a still valid
+  discount code stay), the bib number is cleared and the start code kept. A
+  cheaper distance opens a refund request for the overpayment; a dearer one is
+  refused for the owner (`balance_due_requires_organizer`) and left to the
+  organizer, who gets `balanceDueMinor` and settles the extra by hand. The
+  change is written to the registration history and the activity log, mailed
+  to the registrant and pushed to Biuro Zawodów as `distance_change`.
 - `/health` reports the deployed `version` (from the release tag) and
   `commit`, and the deploy fails its health check when the commit does not
   match. `APP_VERSION` only overrides the version now: clear the old

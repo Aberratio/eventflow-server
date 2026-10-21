@@ -22,6 +22,8 @@ use ZmierzymyCzas\Support\QrCode;
 
 final class RegistrationRepository extends Repository
 {
+    use RegistrationDistanceChange;
+
     /**
      * Trasa A (bramka) seam (E1.6/E1.7) — null in every environment without real
      * gateway credentials configured (local dev, CI, this repo's own test suite),
@@ -85,6 +87,8 @@ final class RegistrationRepository extends Repository
     public const GATEWAY_IN_FLIGHT_GRACE_MINUTES = 15;
     /** R-02: `registration_refunds.reason` of the refund request an owner's paid self-cancellation opens. */
     public const SELF_CANCEL_REFUND_REASON = 'self_cancel';
+    /** R-02: `registration_refunds.reason` of the refund opened for the overpayment after a change to a cheaper Dystans. */
+    public const DISTANCE_CHANGE_REFUND_REASON = 'distance_change';
 
     /** PP.63: the format of the registration ids this platform generates (Uuid::v4()). */
     private const REGISTRATION_ID_PATTERN = '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i';
@@ -3007,6 +3011,11 @@ SQL;
             }
 
             $ceiling = $this->totalAmountFor($id);
+            if ((string) ($existing['reason'] ?? '') === self::DISTANCE_CHANGE_REFUND_REASON && $existing['amount'] !== null) {
+                // R-02: the overpayment of a cheaper Dystans was fixed when the change was made; it is the
+                // ceiling (and the default) here, not the - now smaller - Rozliczenie total.
+                $ceiling = (float) $existing['amount'];
+            }
             $resolvedAmount = $amount !== null ? max(0.0, min($amount, $ceiling)) : $ceiling;
             $route = $this->refundRouteForRegistration($registration);
 
@@ -3117,7 +3126,10 @@ SQL;
 
             $refundedAmount = (float) $existing['amount'];
             $ceiling = $this->totalAmountFor($id);
-            $isFullRefund = $refundedAmount >= ($ceiling - 0.005);
+            // R-02: a refund of the overpayment after a change of Dystans is partial by nature, even when it
+            // exceeds the (smaller) new total - the Zapis stays.
+            $isFullRefund = (string) ($existing['reason'] ?? '') !== self::DISTANCE_CHANGE_REFUND_REASON
+                && $refundedAmount >= ($ceiling - 0.005);
             if ($isFullRefund && $registration['status'] === 'confirmed') {
                 $cancelled = $this->pdo->prepare(
                     "UPDATE registrations SET status = 'cancelled' WHERE id = :id AND status = 'confirmed'"
@@ -4053,7 +4065,7 @@ SQL;
      * is silently lost — failed and stale `queued` rows are retried with
      * backoff by the scheduler (bz.outbox_retry, BzWebhookOutboxService::retryDue()).
      */
-    private function pushBzCriticalChange(string $eventId, string $registrationId, string $changeType): void
+    private function pushBzCriticalChange(string $eventId, string $registrationId, string $changeType, string $discriminator = ''): void
     {
         if ($this->bzWebhookOutbox === null) {
             return;
@@ -4096,7 +4108,8 @@ SQL;
                 // refund_refunded) happens at most once per Zapis — its own
                 // caller already guards against firing on a repeated/no-op
                 // transition (see the three call sites above).
-                'idempotencyKey' => sprintf('bz-push:%s:%s', $registrationId, $changeType),
+                // R-02: a change that can repeat (distance_change) adds the id of its history row.
+                'idempotencyKey' => sprintf('bz-push:%s:%s', $registrationId, $changeType) . ($discriminator !== '' ? ':' . $discriminator : ''),
                 'organizationToken' => $organizationToken,
                 'payload' => $payload,
             ]);
@@ -4202,7 +4215,8 @@ SQL;
                 $discount = $this->discountForRegistration(
                     (string) $data['eventId'],
                     (string) $data['distanceId'],
-                    $discountCode
+                    $discountCode,
+                    isset($data['changingRegistrationId']) ? (string) $data['changingRegistrationId'] : null
                 );
                 $discountValue = (float) $discount['discount_value'];
                 $discountAmount = $discount['discount_type'] === 'percent'
@@ -4483,7 +4497,7 @@ SQL;
     }
 
     /** @return array<string, mixed> */
-    private function discountForRegistration(string $eventId, string $distanceId, string $code): array
+    private function discountForRegistration(string $eventId, string $distanceId, string $code, ?string $ownRegistrationId = null): array
     {
         $stmt = $this->pdo->prepare('SELECT * FROM event_discount_codes WHERE event_id = :eventId AND UPPER(code) = UPPER(:code) LIMIT 1');
         $stmt->execute(['eventId' => $eventId, 'code' => $code]);
@@ -4502,7 +4516,9 @@ SQL;
         if (!empty($discount['valid_to']) && strtotime((string) $discount['valid_to']) < $now) {
             throw new \RuntimeException('discount_code_expired');
         }
-        if ($discount['max_uses'] !== null && (int) $discount['used_count'] >= (int) $discount['max_uses']) {
+        // R-02: re-checking the code of a Zapis that already holds one of its uses (change of Dystans).
+        if ($discount['max_uses'] !== null && (int) $discount['used_count'] >= (int) $discount['max_uses']
+            && !($ownRegistrationId !== null && $this->discountUsedBy($discount, $ownRegistrationId))) {
             throw new \RuntimeException('discount_code_used_up');
         }
 

@@ -60,6 +60,65 @@ final class HttpMiddlewareStackTest extends TestCase
         ]);
     }
 
+    public function testPreflightAllowsEveryRoutedMethod(): void
+    {
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('OPTIONS', '/ok')
+            ->withHeader('Origin', 'http://localhost:5173')
+            ->withHeader('Access-Control-Request-Method', 'PUT');
+        $response = $this->buildApp($this->localConfig())->handle($request);
+
+        $allowed = array_map('trim', explode(',', $response->getHeaderLine('Access-Control-Allow-Methods')));
+        foreach (['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as $method) {
+            self::assertContains($method, $allowed);
+        }
+    }
+
+    /** @return array<string, mixed> */
+    private function errorBody(string $env, string $debug, string $path): array
+    {
+        $config = AppConfig::fromEnvironment([
+            'APP_ENV' => $env,
+            'APP_DEBUG' => $debug,
+            'APP_CORS_ORIGIN' => 'http://localhost:5173',
+            'JWT_SECRET' => str_repeat('c', 32),
+            'JWT_TTL_SECONDS' => '86400',
+            'TPAY_SANDBOX' => 'true',
+            'PAYNOW_SANDBOX' => 'true',
+        ]);
+        $response = $this->buildApp($config)->handle((new ServerRequestFactory())->createServerRequest('GET', $path));
+
+        return (array) json_decode((string) $response->getBody(), true);
+    }
+
+    public function testLocalDebugExposesExceptionDetailsOn404And500(): void
+    {
+        foreach (['/nope', '/boom'] as $path) {
+            $body = $this->errorBody('local', 'true', $path);
+            self::assertArrayHasKey('trace', $body['error']['details'], $path);
+        }
+        self::assertSame('boom', $this->errorBody('local', 'true', '/boom')['error']['message']);
+    }
+
+    public function testNonLocalEnvsNeverExposeDetailsEvenWithDebugOn(): void
+    {
+        foreach (['dev', 'staging'] as $env) {
+            foreach (['/nope', '/boom'] as $path) {
+                $body = $this->errorBody($env, 'true', $path);
+                self::assertArrayNotHasKey('details', $body['error'], "{$env} {$path}");
+                self::assertStringNotContainsString('trace', json_encode($body), "{$env} {$path}");
+                self::assertStringNotContainsString('boom', json_encode($body), "{$env} {$path}");
+            }
+        }
+    }
+
+    public function testLocalWithoutDebugExposesNoDetails(): void
+    {
+        $body = $this->errorBody('local', 'false', '/boom');
+        self::assertArrayNotHasKey('details', $body['error']);
+        self::assertSame('server_error', $body['error']['code']);
+    }
+
     private function assertHeadersPresent(\Psr\Http\Message\ResponseInterface $response): void
     {
         self::assertSame('nosniff', $response->getHeaderLine('X-Content-Type-Options'));

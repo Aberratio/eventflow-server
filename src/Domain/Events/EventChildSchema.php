@@ -68,6 +68,8 @@ final class EventChildSchema
             'ageCategories' => ['age_categories', 'json?', 'Kategorie wiekowe', []],
             'specialCategories' => ['special_categories', 'json?', 'Kategorie specjalne', []],
             'limit' => ['participant_limit', 'int?', 'Limit uczestników', []],
+            'bibRangeFrom' => ['bib_range_from', 'int?', 'Zakres numerów startowych (od)', []],
+            'bibRangeTo' => ['bib_range_to', 'int?', 'Zakres numerów startowych (do)', []],
             'price' => ['price', 'num!d', 'Cena dystansu', ['limit' => 99999999.99, 'scale' => 2, 'default' => 0]],
             'infoHtml' => ['info_html', 'html?', 'Informacje o dystansie', ['bytes' => self::BYTES_TEXT]],
             'priceTiers' => ['price_tiers', 'json?', 'Progi cenowe', []],
@@ -145,7 +147,7 @@ final class EventChildSchema
         'pricingVariants' => ['id', 'distanceId', 'sortOrder'],
         'paymentMethods' => ['id', 'eventId', 'sortOrder'],
         'merchandise' => ['id', 'eventId', 'sortOrder', 'shopProductId'],
-        'discountCodes' => ['id', 'eventId', 'sortOrder'],
+        'discountCodes' => ['id', 'eventId', 'sortOrder', 'batchId'],
         'galleryAlbums' => ['id', 'eventId', 'sortOrder'],
         'documents' => ['id', 'eventId', 'sortOrder'],
     ];

@@ -290,6 +290,8 @@ SQL;
                 $this->updateById('result_import_rows', $rowId, ['status' => 'committed', 'updated_at' => date(DATE_ATOM)]);
             }
 
+            // G-03: "miejsce wg płci" over the freshly written results of the classification.
+            ResultRepository::recomputeGenderPositions($this->pdo, (string) $batch['eventId'], (string) $batch['distanceId']);
             $this->updateById('result_import_batches', $batchId, [
                 'status' => 'committed',
                 'committed_at' => date(DATE_ATOM),

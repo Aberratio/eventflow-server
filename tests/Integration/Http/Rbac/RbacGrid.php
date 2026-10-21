@@ -40,6 +40,7 @@ final class RbacGrid
     public const CARE_HOLDER = 'CARE_HOLDER';
     public const CARE_OR_STAFF = 'CARE_OR_STAFF';
     public const CARE_REVOKE = 'CARE_REVOKE';
+    public const CARE_OR_MANAGER_ROLE = 'CARE_OR_MANAGER_ROLE';
     public const CAPTAIN_ONLY = 'CAPTAIN_ONLY';
     public const CAPTAIN_OR_MANAGER = 'CAPTAIN_OR_MANAGER';
     public const SELF_ONLY = 'SELF_ONLY';
@@ -74,6 +75,7 @@ final class RbacGrid
             self::CARE_HOLDER => [401, 403, $P, 403, 403, 403, 403, 403],
             self::CARE_OR_STAFF => [401, 403, $P, 403, 403, $P, $P, $P],
             self::CARE_REVOKE => [401, 404, $P, 404, 404, 404, 404, 404],
+            self::CARE_OR_MANAGER_ROLE => [401, 403, $P, 403, $P, $P, $P, $P],
             self::CAPTAIN_ONLY => [401, 403, $P, 403, 403, 403, 403, 403],
             self::CAPTAIN_OR_MANAGER => [401, 403, $P, 403, $P, $P, $P, $P],
             self::SELF_ONLY => [401, 404, self::OK, 404, 404, 404, 404, 404],
@@ -207,13 +209,22 @@ final class RbacGrid
         'GET /api/v1/events/{id}/form-field-aggregates' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'event'], 'basis' => 'event manager (owner, moderator, admin) (no extra per-row rule) (plan line 1575)'],
         'GET /api/v1/events/{id}/registration-stats' => ['policy' => self::EVENT_MANAGER, 'params' => ['id' => 'event'], 'basis' => 'event manager (owner, moderator, admin) (no extra per-row rule) (plan line 1587)'],
         'GET /api/v1/events/{eventId}/distances/{distanceId}/start-list-export' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'distanceId' => 'dist'], 'basis' => 'spec 21 (plan line 1603)'],
+        'POST /api/v1/events/{eventId}/discount-code-batches' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'R-07 ticket 07 pkt 7; same gate as start-list-export'],
+        'GET /api/v1/events/{eventId}/discount-code-batches' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'R-07 ticket 07 pkt 7; same gate as start-list-export'],
+        'GET /api/v1/events/{eventId}/discount-code-batches/{batchId}' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'batchId' => 'discountBatch'], 'basis' => 'R-07 ticket 07 pkt 7; same gate as start-list-export'],
+        'GET /api/v1/events/{eventId}/discount-code-batches/{batchId}/export' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'batchId' => 'discountBatch'], 'basis' => 'R-07 ticket 07 pkt 7; same gate as start-list-export'],
         'PUT /api/v1/events/{eventId}/form-fields/reorder' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'event manager (owner, moderator, admin) (no extra per-row rule) (plan line 1658)'],
+        'GET /api/v1/events/{eventId}/distances/{distanceId}/form-fields' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'distanceId' => 'dist'], 'basis' => 'R-04 per-Dystans form: event manager (owner, moderator, admin)'],
+        'POST /api/v1/events/{eventId}/distances/{distanceId}/form-fields' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'distanceId' => 'dist'], 'basis' => 'R-04 per-Dystans form: event manager (owner, moderator, admin)'],
+        'POST /api/v1/events/{eventId}/distances/{distanceId}/form-fields/{fieldId}/override' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'distanceId' => 'dist', 'fieldId' => 'formField'], 'basis' => 'R-04 per-Dystans form: event manager (owner, moderator, admin)'],
+        'DELETE /api/v1/events/{eventId}/distances/{distanceId}/form-fields/{fieldId}/override' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event', 'distanceId' => 'dist', 'fieldId' => 'formField'], 'basis' => 'R-04 per-Dystans form: event manager (owner, moderator, admin)'],
         'PUT /api/v1/registrations/{registrationId}/form-field-answers/{fieldId}' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['registrationId' => 'registration', 'fieldId' => 'formField'], 'basis' => 'PP.2 (plan line 1674)'],
         'GET /api/v1/registrations/{registrationId}/form-field-answers' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['registrationId' => 'registration'], 'basis' => 'PP.2 (plan line 1700)'],
         'GET /api/v1/users/{userId}/registrations' => ['policy' => self::SELF_OR_STAFF, 'params' => ['userId' => 'owner'], 'override' => ['owner' => self::OK], 'basis' => 'PP.2 (plan line 1710)'],
         'POST /api/v1/registrations' => ['policy' => self::AUTH, 'basis' => 'PP.52 (Opieka); H11 in targeted test (plan line 1717)'],
         'POST /api/v1/registrations/quote' => ['policy' => self::AUTH, 'basis' => 'B-02: same gate as POST /registrations (Opieka, event visibility); writes nothing'],
         'PATCH /api/v1/registrations/{id}' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'PP.2 (plan line 1830)'],
+        'POST /api/v1/events/{eventId}/bib-numbers/assign' => ['policy' => self::EVENT_MANAGER, 'params' => ['eventId' => 'event'], 'basis' => 'R-13 contract 5.1: event manager assigns start numbers from the distance ranges'],
         'POST /api/v1/registrations/{id}/cancel' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'PP.2 (plan line 1849)'],
         'GET /api/v1/registrations/{id}/changes' => ['policy' => self::REG_OWNER_OR_MANAGER, 'params' => ['id' => 'registration'], 'basis' => 'R-02: history of one Zapis, owner + manager (zakres P2)'],
         'PATCH /api/v1/registrations/{id}/payment-details' => ['policy' => self::REG_MONEY, 'params' => ['id' => 'registration'], 'basis' => 'H6 (plan line 1860)'],
@@ -326,6 +337,8 @@ final class RbacGrid
         'GET /api/v1/admin/online-sessions' => ['policy' => self::ADMIN, 'basis' => 'H10 (plan line 3231)'],
         'GET /api/v1/admin/sales-stats' => ['policy' => self::ADMIN, 'basis' => 'admin-only (G-05, same as platform-stats)'],
         'GET /api/v1/admin/platform-stats' => ['policy' => self::ADMIN, 'basis' => 'admin-only (macierz section 3) (no extra per-row rule) (plan line 3239)'],
+        'GET /api/v1/admin/settlements' => ['policy' => self::ADMIN, 'basis' => 'admin-only: raport rozliczeniowy trasy A (spec 13), organizator 403'],
+        'GET /api/v1/admin/settlements/export' => ['policy' => self::ADMIN, 'basis' => 'admin-only: eksport raportu rozliczeniowego (spec 13/21)'],
         'GET /api/v1/users/{userId}/tickets' => ['policy' => self::SELF_OR_STAFF, 'params' => ['userId' => 'owner'], 'override' => ['owner' => self::OK], 'basis' => 'PP.2 (plan line 3244)'],
         'GET /api/v1/users/{userId}/certificates' => ['policy' => self::SELF_OR_STAFF, 'params' => ['userId' => 'owner'], 'override' => ['owner' => self::OK], 'basis' => 'PP.2 (plan line 3251)'],
         'POST /api/v1/dev/seed-event' => ['policy' => self::ENV_GATED, 'basis' => '§3.6 (plan line 3262)'],
@@ -335,6 +348,9 @@ final class RbacGrid
         'DELETE /api/v1/care/{id}' => ['policy' => self::CARE_REVOKE, 'params' => ['id' => 'care'], 'basis' => 'E1.12 (plan line 3687)'],
         'POST /api/v1/competitors/{id}/rotate-identity-code' => ['policy' => self::CARE_HOLDER, 'params' => ['id' => 'child'], 'basis' => 'spec 11 §2 (plan line 3707)'],
         'POST /api/v1/competitors/{id}/anonymization' => ['policy' => self::CARE_HOLDER, 'params' => ['id' => 'child'], 'basis' => 'E6.6 (plan line 3729)'],
+        'POST /api/v1/competitors/{id}/duplicate-reports' => ['policy' => self::CARE_OR_MANAGER_ROLE, 'params' => ['id' => 'child'], 'basis' => 'R-08 (spec 22): opiekun, organizator zawodnika zapisanego na jego wydarzenie albo staff'],
+        'PATCH /api/v1/admin/competitors/duplicate-reports/{id}' => ['policy' => self::STAFF, 'params' => ['id' => 'dupReport'], 'basis' => 'R-08: odrzucenie zgłoszenia = Moderator/Admin'],
+        'GET /api/v1/admin/competitors/duplicate-reports' => ['policy' => self::STAFF, 'basis' => 'R-08: kolejka zgłoszeń = Moderator/Admin, jak scalanie'],
         'GET /api/v1/admin/competitors/search' => ['policy' => self::STAFF, 'basis' => 'macierz: Scalanie — Moderator ✔ (500 before PP.14 still = PASS) (plan line 3756)'],
         'GET /api/v1/admin/competitors/{idA}/merge-comparison/{idB}' => ['policy' => self::STAFF, 'params' => ['idA' => 'child', 'idB' => 'competitorB'], 'basis' => 'idem (plan line 3764)'],
         'POST /api/v1/admin/competitors/merge' => ['policy' => self::STAFF, 'basis' => 'idem (empty body → 422) (plan line 3778)'],

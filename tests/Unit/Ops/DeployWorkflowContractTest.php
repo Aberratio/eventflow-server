@@ -113,6 +113,35 @@ final class DeployWorkflowContractTest extends TestCase
         self::assertStringContainsString('tests/ops/backup-restore.it.sh', $yaml);
     }
 
+    public function testTestWorkflowRunsOnReadyPullRequestsOnly(): void
+    {
+        $yaml = $this->read('.github/workflows/test.yml');
+
+        // deploy.yml already runs lint, Unit and Integration before every master deploy.
+        self::assertDoesNotMatchRegularExpression('/^  push:/m', $yaml);
+        self::assertStringContainsString('ready_for_review', $yaml);
+        self::assertStringContainsString('cancel-in-progress: true', $yaml);
+        self::assertStringContainsString("- 'docs/**'", $yaml);
+        self::assertSame(
+            preg_match_all('/^  [a-z-]+:\n(?:    .*\n)*?    runs-on:/m', $yaml),
+            substr_count($yaml, self::SKIP_DRAFTS),
+            'every job in test.yml must skip draft pull requests'
+        );
+    }
+
+    public function testBzContractRunsAfterMergeManuallyAndWeekly(): void
+    {
+        $yaml = $this->read('.github/workflows/e2e-bz.yml');
+
+        self::assertDoesNotMatchRegularExpression('/^  pull_request:/m', $yaml);
+        self::assertMatchesRegularExpression('/^  push:/m', $yaml);
+        self::assertMatchesRegularExpression('/^  workflow_dispatch:/m', $yaml);
+        self::assertMatchesRegularExpression('/cron: "\d+ \d+ \* \* 1"/', $yaml);
+        self::assertStringContainsString('cancel-in-progress: true', $yaml);
+    }
+
+    private const SKIP_DRAFTS = "if: github.event_name != 'pull_request' || !github.event.pull_request.draft";
+
     private function root(): string
     {
         return dirname(__DIR__, 3);

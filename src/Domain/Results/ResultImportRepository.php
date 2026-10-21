@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Domain\Results;
 
 use PDO;
-use RuntimeException;
 use SimpleXMLElement;
 use ZipArchive;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
@@ -386,7 +385,7 @@ SQL);
         }
 
         if ($rows === []) {
-            throw new RuntimeException(trim($text) === '' ? 'pdf_text_not_detected' : 'pdf_table_not_detected');
+            throw new InvalidInput(trim($text) === '' ? 'pdf_text_not_detected' : 'pdf_table_not_detected');
         }
 
         return [

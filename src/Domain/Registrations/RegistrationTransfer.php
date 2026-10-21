@@ -115,7 +115,7 @@ trait RegistrationTransfer
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
-            throw new \RuntimeException($e->errorCode === 'insurance_birth_date_missing' ? 'transfer_insurance_birth_date_missing' : 'transfer_insurance_invalid', 0, $e);
+            throw new InvalidInput($e->errorCode === 'insurance_birth_date_missing' ? 'transfer_insurance_birth_date_missing' : 'transfer_insurance_invalid', [], $e);
         } catch (\Throwable $e) {
             if ($this->pdo->inTransaction()) {
                 $this->pdo->rollBack();

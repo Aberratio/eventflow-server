@@ -1,23 +1,22 @@
 # Scheduler runbook (`bin/scheduler.php`)
 
-PP.18. Time-based work no longer happens lazily inside GET requests. One CLI entrypoint runs
-eight idempotent jobs, in this order, on every tick:
+Time-based work no longer happens lazily inside GET requests. One CLI entrypoint runs
+ten idempotent jobs, in this order, on every tick:
 
 | # | Job | What it does | Limits |
 |---|---|---|---|
 | 1 | `events.finish_past` | Published -> Finished for events whose last day has passed | one UPDATE |
-| 2 | `registrations.form_snapshots` | Freezes the E1.14 form snapshot for finished events (non-confidential superset, always served filtered) | 500 Zapisy / tick |
+| 2 | `registrations.form_snapshots` | Freezes the form snapshot for finished events (non-confidential superset, always served filtered) | 500 Zapisy / tick |
 | 3 | `registrations.expire_unpaid` | `pending` -> `expired`, releases the Dystans slot | 500 / tick |
 | 4 | `registrations.payment_reminders` | Mail #7, once per payment window | 200 / tick |
 | 5 | `bz.outbox_retry` | Retries failed and stale-queued BZ pushes (skipped when `BZ_WEBHOOK_BASE_URL` is unset) | 100 / tick, 8 attempts, backoff 5 min .. 24 h |
 | 6 | `mail.outbox_reconcile` | Polls Central Mailer for the status of accepted rows (skipped when not configured) | 50 / tick |
-| 7 | `mail.results_published` | PP.19: fans pending "Publikacja wyników" requests out to deferred outbox rows, one per distinct confirmed e-mail of the event and distance (also runs when Central Mailer is not configured, so requests are drained) | 20 requests / tick |
-| 8 | `mail.outbox_retry` | PP.19: dispatches outbox rows Central Mailer never accepted (deferred, failed, stale in-flight); skipped when not configured | 50 / tick, 6 attempts, backoff 2 / 10 / 30 / 120 / 360 min, max age 48 h |
-| 9 | `calendar.outbox_retry` | R-17: sends approved Events to Google Calendar (skipped while the integration is off or `GOOGLE_CALENDAR_SERVICE_ACCOUNT_FILE` is missing) | 50 / tick, 8 attempts, backoff 5 min .. 10 h |
+| 7 | `mail.results_published` | fans pending "Publikacja wyników" requests out to deferred outbox rows, one per distinct confirmed e-mail of the event and distance (also runs when Central Mailer is not configured, so requests are drained) | 20 requests / tick |
+| 8 | `mail.outbox_retry` | dispatches outbox rows Central Mailer never accepted (deferred, failed, stale in-flight); skipped when not configured | 50 / tick, 6 attempts, backoff 2 / 10 / 30 / 120 / 360 min, max age 48 h |
+| 9 | `calendar.outbox_retry` | sends approved Events to Google Calendar (skipped while the integration is off or `GOOGLE_CALENDAR_SERVICE_ACCOUNT_FILE` is missing) | 50 / tick, 8 attempts, backoff 5 min .. 10 h |
+| 10 | `retention.purge` | deletes answers to confidential form fields once the Event ended more than `RETENTION_CONFIDENTIAL_ANSWERS_DAYS` days ago (default 90), and activity-log entries older than `RETENTION_ACTIVITY_LOG_MONTHS` months (default 12); an invalid value (not an integer > 0) falls back to the default with a log warning (reads no longer delete) | unbounded DELETEs, idempotent |
 
-| 10 | `retention.purge` | R-05: deletes answers to confidential form fields once the Event ended more than `RETENTION_CONFIDENTIAL_ANSWERS_DAYS` days ago (default 90), and activity-log entries older than `RETENTION_ACTIVITY_LOG_MONTHS` months (default 12); an invalid value (not an integer > 0) falls back to the default with a log warning (reads no longer delete) | unbounded DELETEs, idempotent |
-
-## Mail delivery (PP.19)
+## Mail delivery
 
 `CentralMailerOutboxService::enqueue()` writes the outbox row and tries to send it once. It no
 longer throws when Central Mailer fails (5xx, network, 429, rejection): the row is durable and
@@ -125,4 +124,4 @@ or remind early.
 * `Scheduler run log unavailable`: migration 065 was not applied; jobs still run.
 * Run a single job: `php bin/scheduler.php --job=<name>`.
 * Deploys are in place (`unzip -o`), so a tick can coincide with a deploy. Jobs are idempotent;
-  the worst case is one failed-run alert (PP.21 owns release directories).
+  the worst case is one failed-run alert (release directories are handled by the deploy workflow).

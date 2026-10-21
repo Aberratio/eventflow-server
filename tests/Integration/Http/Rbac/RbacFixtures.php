@@ -8,6 +8,7 @@ use PDO;
 use ZmierzymyCzas\Domain\Care\CareRepository;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
+use ZmierzymyCzas\Domain\Events\EventTeamRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Mailer\CriticalMails\MailCatalog;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
@@ -51,6 +52,10 @@ final class RbacFixtures
             'moderator' => 'moderator',
             'admin' => 'admin',
             'superadmin' => 'superadmin',
+            // R-01: Event Team members of someone else's Event - any global role (participant / organizer).
+            'coManager' => 'participant',
+            'coManagerOrg' => 'organizer',
+            'revoked' => 'participant',
         ];
         foreach ($roles as $actor => $role) {
             $email = $fx->prefix . '-' . strtolower($actor) . '@example.test';
@@ -81,6 +86,15 @@ final class RbacFixtures
         $fx->values['eventSlug'] = (string) $event['slug'];
         $fx->values['eventDraft'] = (string) $draft['id'];
         $fx->values['eventPrivate'] = (string) $private['id'];
+        $eventTeam = new EventTeamRepository($pdo);
+        foreach (['coManager', 'coManagerOrg', 'revoked'] as $member) {
+            foreach ([$event['id'], $draft['id'], $private['id']] as $teamEventId) {
+                $row = $eventTeam->addActive((string) $teamEventId, $fx->values[$member], $fx->actors[$member]['email'], $organizerId);
+                if ($member === 'revoked') {
+                    $eventTeam->revoke((string) $row['id']);
+                }
+            }
+        }
         $fx->values['dist'] = (string) $event['distances'][0]['id'];
         $fx->values['relay'] = (string) $event['distances'][1]['id'];
 

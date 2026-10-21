@@ -4443,7 +4443,15 @@ SQL;
             return true;
         }
 
-        return $role === 'organizer' && (string) ($distanceRow['organizerId'] ?? '') === $actorUserId;
+        if ($role === 'organizer' && (string) ($distanceRow['organizerId'] ?? '') === $actorUserId) {
+            return true;
+        }
+
+        // R-01: an active Co-manager (any global role) is on the Event's Team like the Owner.
+        $team = $this->pdo->prepare("SELECT 1 FROM event_team_members WHERE event_id = :eventId AND user_id = :userId AND status = 'active' LIMIT 1");
+        $team->execute(['eventId' => (string) ($data['eventId'] ?? ''), 'userId' => $actorUserId]);
+
+        return $team->fetchColumn() !== false;
     }
 
     /**

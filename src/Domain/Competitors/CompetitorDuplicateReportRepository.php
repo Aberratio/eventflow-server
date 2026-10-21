@@ -127,4 +127,19 @@ final class CompetitorDuplicateReportRepository extends Repository
 
         return $stmt->fetchColumn() !== false;
     }
+
+    /**
+     * R-01: czy Zawodnik ma Zapis na niekasowanym wydarzeniu, którego aktywnym Współzarządcą jest Konto.
+     */
+    public function competitorRegisteredOnCoManagedEvent(string $competitorId, string $accountId): bool
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT 1 FROM registrations r JOIN events e ON e.id = r.event_id
+             JOIN event_team_members m ON m.event_id = e.id AND m.user_id = :a AND m.status = 'active'
+             WHERE r.competitor_id = :c AND e.deleted_at IS NULL LIMIT 1"
+        );
+        $stmt->execute(['c' => $competitorId, 'a' => $accountId]);
+
+        return $stmt->fetchColumn() !== false;
+    }
 }

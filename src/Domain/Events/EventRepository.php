@@ -153,13 +153,17 @@ SQL;
         }
         if (empty($filters['includePrivate'])) {
             if ($privateViewer !== null && $privateViewer['userId'] !== '') {
+                // R-01: an active Co-manager sees the private Events of the Teams it belongs to, as the Owner does.
+                $teamExists = "EXISTS (SELECT 1 FROM event_team_members pv_t WHERE pv_t.event_id = events.id"
+                    . " AND pv_t.user_id = :privateViewerTeamUserId AND pv_t.status = 'active')";
+                $params['privateViewerTeamUserId'] = $privateViewer['userId'];
                 if ($privateViewer['isOrganizer']) {
-                    $where[] = '(is_private = 0 OR organizer_id = :privateViewerOrganizerId)';
+                    $where[] = "(is_private = 0 OR organizer_id = :privateViewerOrganizerId OR {$teamExists})";
                     $params['privateViewerOrganizerId'] = $privateViewer['userId'];
                 } else {
                     $zapisExists = 'EXISTS (SELECT 1 FROM registrations pv_r WHERE pv_r.event_id = events.id'
                         . ' AND (pv_r.user_id = :privateViewerUserId OR pv_r.registered_by_id = :privateViewerDelegateId))';
-                    $where[] = "(is_private = 0 OR {$zapisExists})";
+                    $where[] = "(is_private = 0 OR {$zapisExists} OR {$teamExists})";
                     $params['privateViewerUserId'] = $privateViewer['userId'];
                     $params['privateViewerDelegateId'] = $privateViewer['userId'];
                 }

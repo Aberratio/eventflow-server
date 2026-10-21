@@ -90,6 +90,7 @@ use ZmierzymyCzas\Domain\Registrations\RegistrationPatchPolicy;
 use ZmierzymyCzas\Http\Access\EventAccess;
 use ZmierzymyCzas\Http\Access\RegistrationAccess;
 use ZmierzymyCzas\Http\Access\Roles;
+use ZmierzymyCzas\Http\Controller\BibNumberController;
 use ZmierzymyCzas\Http\Controller\DiscountCodeBatchController;
 use ZmierzymyCzas\Http\Controller\EventTeamController;
 use ZmierzymyCzas\Http\Controller\RegistrationChangeController;
@@ -375,6 +376,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $logActivity = $activityLogger->log(...);
     $eventTeamController = new EventTeamController($events, $users, $eventTeam, $eventAccess, $activityLogger, $mailer, $logger);
     $registrationChangeController = new RegistrationChangeController($registrations, $events, $registrationAccess, $activityLogger);
+    $bibNumberController = new BibNumberController($events, $registrations, $eventAccess);
     $discountCodeBatchController = new DiscountCodeBatchController($events, $discountBatches, $eventAccess, $activityLogger);
 
     $publicUploadBase = '/' . trim((string) Env::get('APP_UPLOAD_PUBLIC_BASE', '/uploads'), '/');
@@ -395,7 +397,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
     // Convention: routes behind a plain `AuthMiddleware($jwt)` only require a valid session. Authorization that depends on
     // the resource (event Team, registration owner, ...) is decided per request inside the handler.
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync, $registrationChangeController, $discountCodeBatchController): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync, $registrationChangeController, $discountCodeBatchController, $bibNumberController): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // A cheap round trip on the connection index.php already opened.
             try {
@@ -2469,25 +2471,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $registrations->update((string) $args['id'], $policyResult['allowed']));
         })
             ->add(new AuthMiddleware($jwt));
-        // Bulk "assign start numbers" — next free number inside each distance's range.
-        $api->post('/events/{eventId}/bib-numbers/assign', function (Request $request, Response $response, array $args) use ($events, $registrations, $canManageEvent, $body) {
-            $auth = (array) $request->getAttribute('auth');
-            $eventId = (string) $args['eventId'];
-            if (!$canManageEvent($events->find($eventId), $auth)) {
-                return JsonResponder::forbidden($response);
-            }
-            $payload = $body($request);
-            $distanceIds = $payload['distanceIds'] ?? null;
-            if ($distanceIds !== null && (!is_array($distanceIds) || !array_is_list($distanceIds) || array_filter($distanceIds, static fn ($id): bool => !is_string($id)) !== [])) {
-                return JsonResponder::error($response, 'validation_error', 'Pole distanceIds musi być listą identyfikatorów dystansów.', 422, ['field' => 'distanceIds']);
-            }
-            $order = (string) ($payload['order'] ?? 'registered');
-            if (!in_array($order, ['registered', 'name'], true)) {
-                return JsonResponder::error($response, 'validation_error', 'Pole order musi mieć wartość registered albo name.', 422, ['field' => 'order']);
-            }
-            $paidOnly = (bool) ($payload['paidOnly'] ?? true);
-            return JsonResponder::ok($response, $registrations->bibNumbers()->assign($eventId, $distanceIds, $order, $paidOnly));
-        })->add(new AuthMiddleware($jwt));
+        $api->post('/events/{eventId}/bib-numbers/assign', [$bibNumberController, 'assign'])->add(new AuthMiddleware($jwt));
         $api->post('/registrations/{id}/cancel', [$registrationChangeController, 'cancel'])->add(new AuthMiddleware($jwt));
         // The history of one Zapis (what changed, when, by whom) - for its owner and the Event's manager.
         $api->get('/registrations/{id}/changes', function (Request $request, Response $response, array $args) use ($authorizeRegistration, $pdo) {

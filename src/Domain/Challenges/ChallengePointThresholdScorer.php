@@ -66,7 +66,7 @@ final class ChallengePointThresholdScorer
      *   breakdown: list<array{eventId: string, place: int, points: int}>
      * }
      */
-    public function score(array $node, string $userId): array
+    public function score(array $node, string $userId, ?string $competitorId = null): array
     {
         $settings = $this->pointsSettings->getSettings();
         $eventIds = array_values(array_unique(array_map(
@@ -76,7 +76,7 @@ final class ChallengePointThresholdScorer
 
         $perEvent = [];
         foreach ($eventIds as $eventId) {
-            $place = $this->placementFor($eventId, $userId);
+            $place = $this->placementFor($eventId, $userId, $competitorId);
             if ($place === null) {
                 // No finished result for this competitor on this Event - it
                 // simply doesn't contribute a candidate score, not a 0-point
@@ -116,12 +116,22 @@ final class ChallengePointThresholdScorer
         ];
     }
 
-    private function placementFor(string $eventId, string $userId): ?int
+    private function placementFor(string $eventId, string $userId, ?string $competitorId): ?int
     {
-        $stmt = $this->pdo->prepare(
-            "SELECT position FROM results WHERE event_id = :eventId AND user_id = :userId AND status = 'finished' ORDER BY position ASC LIMIT 1"
-        );
-        $stmt->execute(['eventId' => $eventId, 'userId' => $userId]);
+        if ($competitorId !== null) {
+            // R-06: progress is per Zawodnik - results of a registration made for a ward
+            // belong to the ward, not to the caregiver whose user_id is on the result.
+            $stmt = $this->pdo->prepare(
+                "SELECT r.position FROM results r" . ChallengeResultOwnership::JOINS
+                . " WHERE r.event_id = :eventId AND " . ChallengeResultOwnership::COMPETITOR_EXPR . " = :competitorId AND r.status = 'finished' ORDER BY r.position ASC LIMIT 1"
+            );
+            $stmt->execute(['eventId' => $eventId, 'competitorId' => $competitorId]);
+        } else {
+            $stmt = $this->pdo->prepare(
+                "SELECT position FROM results WHERE event_id = :eventId AND user_id = :userId AND status = 'finished' ORDER BY position ASC LIMIT 1"
+            );
+            $stmt->execute(['eventId' => $eventId, 'userId' => $userId]);
+        }
         $position = $stmt->fetchColumn();
         if ($position === false || $position === null || (int) $position < 1) {
             return null;

@@ -213,7 +213,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         if ($participation === null) {
             return;
         }
-        $completion = $challenges->checkCompletion((string) $participation['challengeId'], (string) $participation['userId']);
+        $completion = $challenges->checkCompletion(
+            (string) $participation['challengeId'],
+            (string) $participation['userId'],
+            ($participation['competitorId'] ?? null) !== null ? (string) $participation['competitorId'] : null
+        );
         if ($completion === null) {
             return;
         }
@@ -4045,15 +4049,28 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             return JsonResponder::ok($response, $archived, 'Challenge archived');
         })
             ->add(new AuthMiddleware($jwt, $adminRoles));
-        $api->get('/challenge-participations', fn (Request $request, Response $response) => JsonResponder::ok($response, $challenges->participations($request->getQueryParams()['challengeId'] ?? null, $request->getQueryParams()['userId'] ?? null)))
+        // R-06: the "my challenges" list (userId = auth.sub, no challengeId) also returns the Zawodnik
+        // under one's Opieka with `competitorName`; a per-challenge query stays the caller's own row.
+        $api->get('/challenge-participations', function (Request $request, Response $response) use ($challenges) {
+            $params = $request->getQueryParams();
+            $auth = (array) $request->getAttribute('auth');
+            $userId = $params['userId'] ?? null;
+            $includeCare = $userId !== null && $userId !== '' && empty($params['challengeId']) && (string) $userId === (string) ($auth['sub'] ?? '');
+            return JsonResponder::ok($response, $challenges->participations($params['challengeId'] ?? null, $userId, null, $includeCare));
+        })
             ->add(new AuthMiddleware($jwt));
-        $api->post('/challenges/{id}/join', function (Request $request, Response $response, array $args) use ($challenges, $users, $notifyChallengeCompletion) {
+        $api->post('/challenges/{id}/join', function (Request $request, Response $response, array $args) use ($challenges, $users, $care, $body, $notifyChallengeCompletion) {
             $auth = (array) $request->getAttribute('auth');
             $user = $users->find((string) ($auth['sub'] ?? ''));
             if (!$user) {
                 return JsonResponder::error($response, 'not_found', 'User not found', 404);
             }
-            $joined = $challenges->join($args['id'], $user);
+            // R-06: optional `competitorId` - the caller's own Zawodnik or a ward under their Opieka.
+            $competitorId = trim((string) ($body($request)['competitorId'] ?? ''));
+            if ($competitorId !== '' && !$care->canRegister((string) $user['id'], $competitorId)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do zapisania tego Zawodnika na Wyzwanie.', 403);
+            }
+            $joined = $challenges->join($args['id'], $user, $competitorId !== '' ? $competitorId : null);
             // E1.10 mail #13: joining runs syncResultEntries(), which can
             // auto-approve entries from already-finished results and cross
             // the completion threshold on the spot (e.g. late sign-up after
@@ -4062,7 +4079,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $notifyChallengeCompletion($joined);
             return JsonResponder::ok($response, $joined, 'Challenge joined', 201);
         })->add(new AuthMiddleware($jwt));
-        $api->post('/challenge-entries', function (Request $request, Response $response) use ($challenges, $body) {
+        $api->post('/challenge-entries', function (Request $request, Response $response) use ($challenges, $care, $body) {
             $payload = $body($request);
             $urlCheck = \ZmierzymyCzas\Support\UrlPolicy::apply($payload, \ZmierzymyCzas\Support\UrlPolicy::PROOF);
             if ($urlCheck['error'] !== null) {
@@ -4072,6 +4089,11 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             // PP.4: an entry is always the caller's own - identity comes from the JWT, never the body.
             $auth = (array) $request->getAttribute('auth');
             $payload['userId'] = (string) ($auth['sub'] ?? '');
+            // R-06: an entry may be submitted for a ward (competitorId), never for a stranger.
+            $entryCompetitorId = trim((string) ($payload['competitorId'] ?? ''));
+            if ($entryCompetitorId !== '' && !$care->canRegister($payload['userId'], $entryCompetitorId)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do zgłaszania wyniku tego Zawodnika.', 403);
+            }
             return JsonResponder::ok($response, $challenges->submitEntry($payload, $auth), 'Challenge entry submitted', 201);
         })
             ->add(new AuthMiddleware($jwt));
@@ -4082,13 +4104,18 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         // which itself reuses OrderRepository::create() for the actual order —
         // see its doc comment for the completion gate, double-claim lock and
         // why the order/challenge writes aren't in one shared transaction.
-        $api->post('/challenges/{id}/claim-reward', function (Request $request, Response $response, array $args) use ($challenges, $body) {
+        $api->post('/challenges/{id}/claim-reward', function (Request $request, Response $response, array $args) use ($challenges, $care, $body) {
             $auth = (array) $request->getAttribute('auth');
             $userId = (string) ($auth['sub'] ?? '');
             $payload = $body($request);
             $productId = (string) ($payload['productId'] ?? '');
+            // R-06: a caregiver can claim the reward of a ward's completed Wyzwanie.
+            $rewardCompetitorId = trim((string) ($payload['competitorId'] ?? ''));
+            if ($rewardCompetitorId !== '' && !$care->canRegister($userId, $rewardCompetitorId)) {
+                return JsonResponder::error($response, 'forbidden', 'Nie masz uprawnień do odebrania nagrody tego Zawodnika.', 403);
+            }
             try {
-                $participation = $challenges->claimReward((string) $args['id'], $productId, $payload, $userId);
+                $participation = $challenges->claimReward((string) $args['id'], $productId, $payload, $userId, $rewardCompetitorId !== '' ? $rewardCompetitorId : null);
             } catch (\RuntimeException $e) {
                 $notFound = ['challenge_not_found' => 'Wyzwanie nie istnieje.'];
                 if (isset($notFound[$e->getMessage()])) {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Domain\Challenges;
 
+use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Repository;
 use ZmierzymyCzas\Domain\Shop\OrderRepository;
 use ZmierzymyCzas\Support\InputRules;
@@ -487,49 +488,166 @@ final class ChallengeRepository extends Repository
         return $this->find($id);
     }
 
-    /** @return array<int, array<string, mixed>> */
-    public function participations(?string $challengeId = null, ?string $userId = null): array
+    private const PARTICIPATION_SELECT = "SELECT cp.id, cp.challenge_id AS challengeId, cp.user_id AS userId, cp.competitor_id AS competitorId, TRIM(CONCAT(COALESCE(c.first_name, ''), ' ', COALESCE(c.last_name, ''))) AS competitorName, cp.user_name AS userName, cp.joined_at AS joinedAt, cp.reward_granted AS rewardGranted, cp.reward_granted_at AS rewardGrantedAt, cp.selected_rewards AS selectedRewards, cp.assigned_number AS assignedNumber FROM challenge_participations cp LEFT JOIN competitors c ON c.id = cp.competitor_id";
+
+    /**
+     * R-06 (zakres P2): participations are per Zawodnik (`competitor_id`); rows the migration
+     * could not map keep `competitor_id` NULL and are read by `user_id` (fallback).
+     *
+     * $userId filters the Konto's own participations (own Zawodnik, or rows with no Zawodnik);
+     * with $includeCare it also returns every ward under its Opieka, whoever joined them
+     * ("my challenges" - one row per Zawodnik, each with `competitorName`).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function participations(?string $challengeId = null, ?string $userId = null, ?string $competitorId = null, bool $includeCare = false): array
     {
-        if ($challengeId && $userId) {
-            $this->syncResultEntries($challengeId, $userId);
-        }
         $where = [];
         $params = [];
         if ($challengeId) {
-            $where[] = 'challenge_id = :challengeId';
+            $where[] = 'cp.challenge_id = :challengeId';
             $params['challengeId'] = $challengeId;
         }
+        if ($competitorId) {
+            $where[] = 'cp.competitor_id = :competitorId';
+            $params['competitorId'] = $competitorId;
+        }
         if ($userId) {
-            $where[] = 'user_id = :userId';
+            $careIds = $includeCare ? $this->accountCompetitorIds($userId) : [];
+            if ($careIds === []) {
+                // Without $includeCare: the Konto's OWN participations - never the wards' rows it joined.
+                $own = $this->selfCompetitorId($userId);
+                $where[] = 'cp.user_id = :userId AND (cp.competitor_id IS NULL' . ($own !== null ? ' OR cp.competitor_id = :ownCompetitorId' : '') . ')';
+                if ($own !== null) {
+                    $params['ownCompetitorId'] = $own;
+                }
+            } else {
+                $marks = [];
+                foreach ($careIds as $i => $careId) {
+                    $marks[] = ':care' . $i;
+                    $params['care' . $i] = $careId;
+                }
+                $where[] = '(cp.user_id = :userId OR cp.competitor_id IN (' . implode(',', $marks) . '))';
+            }
             $params['userId'] = $userId;
         }
         $whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';
-        $stmt = $this->pdo->prepare("SELECT id, challenge_id AS challengeId, user_id AS userId, user_name AS userName, joined_at AS joinedAt, reward_granted AS rewardGranted, reward_granted_at AS rewardGrantedAt, selected_rewards AS selectedRewards, assigned_number AS assignedNumber FROM challenge_participations{$whereSql} ORDER BY joined_at DESC");
+        $stmt = $this->pdo->prepare(self::PARTICIPATION_SELECT . $whereSql . ' ORDER BY cp.joined_at DESC');
         $stmt->execute($params);
-        return array_map(fn (array $row): array => $this->hydrateParticipation($row), $stmt->fetchAll());
+        $rows = $stmt->fetchAll();
+        if ($challengeId && ($userId || $competitorId)) {
+            foreach ($rows as $row) {
+                $this->syncResultEntries((string) $row['challengeId'], (string) $row['userId'], $row['competitorId'] !== null ? (string) $row['competitorId'] : null);
+            }
+        }
+        return array_map(fn (array $row): array => $this->hydrateParticipation($row), $rows);
     }
 
-    /** @param array<string, mixed> $user */
-    public function join(string $challengeId, array $user): array
+    /** @return array<string, mixed>|null */
+    private function participationById(string $id): ?array
     {
-        $existing = $this->participations($challengeId, (string) $user['id']);
-        if ($existing !== []) {
-            return $existing[0];
+        $stmt = $this->pdo->prepare(self::PARTICIPATION_SELECT . ' WHERE cp.id = :id');
+        $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch();
+        return $row ? $this->hydrateParticipation($row) : null;
+    }
+
+    /** The Zawodnik profile of a Konto (`competitors.user_id`), if it has one. */
+    private function selfCompetitorId(string $userId): ?string
+    {
+        $stmt = $this->pdo->prepare('SELECT id FROM competitors WHERE user_id = :userId');
+        $stmt->execute(['userId' => $userId]);
+        $id = $stmt->fetchColumn();
+        return $id === false || $id === null ? null : (string) $id;
+    }
+
+    /**
+     * Own Zawodnik profile plus wards under Opieka (care_relations) of a Konto.
+     *
+     * @return list<string>
+     */
+    private function accountCompetitorIds(string $userId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id FROM competitors WHERE user_id = :userId1 UNION SELECT zawodnik_id FROM care_relations WHERE konto_id = :userId2'
+        );
+        $stmt->execute(['userId1' => $userId, 'userId2' => $userId]);
+        return array_map('strval', $stmt->fetchAll(\PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * The participation of $userId's own Zawodnik, or - with $competitorId - of that Zawodnik.
+     * A row with NULL `competitor_id` (could not be mapped by migration 120) is matched by
+     * `user_id`, but only for the Konto's own profile, never for a ward.
+     *
+     * @return array<string, mixed>|null id, competitorId, rewardGranted, completionNotifiedAt
+     */
+    private function findParticipationRow(string $challengeId, string $userId, ?string $competitorId): ?array
+    {
+        $self = $this->selfCompetitorId($userId);
+        $target = $competitorId ?? $self;
+        $select = 'SELECT id, competitor_id AS competitorId, reward_granted AS rewardGranted, completion_notified_at AS completionNotifiedAt FROM challenge_participations WHERE challenge_id = :challengeId AND ';
+        if ($target !== null) {
+            $sql = $select . '(competitor_id = :competitorId' . ($target === $self ? ' OR (competitor_id IS NULL AND user_id = :userId)' : '') . ') ORDER BY competitor_id IS NULL ASC LIMIT 1';
+            $params = ['challengeId' => $challengeId, 'competitorId' => $target];
+            if ($target === $self) {
+                $params['userId'] = $userId;
+            }
+        } else {
+            $sql = $select . 'user_id = :userId AND competitor_id IS NULL LIMIT 1';
+            $params = ['challengeId' => $challengeId, 'userId' => $userId];
+        }
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /**
+     * Joins $competitorId (a ward under the caller's Opieka - the caller checks that) or, when
+     * null, the Konto's own Zawodnik. `user_id` stays the Konto that joined (mail recipient).
+     *
+     * @param array<string, mixed> $user
+     */
+    public function join(string $challengeId, array $user, ?string $competitorId = null): array
+    {
+        $userId = (string) $user['id'];
+        $competitors = new CompetitorRepository($this->pdo);
+        $displayName = (string) $user['name'];
+        if ($competitorId === null) {
+            $competitorId = $this->selfCompetitorId($userId);
+        } else {
+            $competitor = $competitors->find($competitorId);
+            if ($competitor === null) {
+                throw new \RuntimeException('competitor_not_found');
+            }
+            if (($competitor['userId'] ?? null) !== $userId) {
+                $displayName = trim($competitor['firstName'] . ' ' . $competitor['lastName']);
+            }
+        }
+
+        $existing = $this->findParticipationRow($challengeId, $userId, $competitorId);
+        if ($existing !== null) {
+            if ($existing['competitorId'] === null && $competitorId !== null) {
+                $this->updateById('challenge_participations', (string) $existing['id'], ['competitor_id' => $competitorId]);
+            }
+            $this->syncResultEntries($challengeId, $userId, $competitorId);
+            return $this->participationById((string) $existing['id']);
         }
         $id = $this->id();
         $this->insert('challenge_participations', [
             'id' => $id,
             'challenge_id' => $challengeId,
-            'user_id' => $user['id'],
-            'user_name' => $user['name'],
+            'user_id' => $userId,
+            'competitor_id' => $competitorId,
+            'user_name' => $displayName,
             'joined_at' => date(DATE_ATOM),
             'reward_granted' => 0,
             'selected_rewards' => json_encode([], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         ]);
-        $this->syncResultEntries($challengeId, (string) $user['id']);
-        return $this->participations($challengeId, (string) $user['id'])[0];
+        $this->syncResultEntries($challengeId, $userId, $competitorId);
+        return $this->participationById($id);
     }
-
     /**
      * E6.5 (issue 15 §4-5): claims this challenge's reward Product for
      * $userId — "Uczestnictwo odblokowuje możliwość zakupu powiązanego
@@ -564,23 +682,20 @@ final class ChallengeRepository extends Repository
      * @param array<string, mixed> $item deliveryMethod/paymentMethod/shippingAddress/invoiceData/size/color, same shape OrderRepository::create() expects for a single-item cart
      * @return array<string, mixed> the updated participation (see hydrateParticipation())
      */
-    public function claimReward(string $challengeId, string $productId, array $item, string $userId): array
+    public function claimReward(string $challengeId, string $productId, array $item, string $userId, ?string $competitorId = null): array
     {
         $challenge = $this->find($challengeId);
         if ($challenge === null) {
             throw new \RuntimeException('challenge_not_found');
         }
 
-        $stmt = $this->pdo->prepare(
-            'SELECT id, reward_granted AS rewardGranted FROM challenge_participations WHERE challenge_id = :challengeId AND user_id = :userId'
-        );
-        $stmt->execute(['challengeId' => $challengeId, 'userId' => $userId]);
-        $participation = $stmt->fetch();
-        if ($participation === false) {
+        $participation = $this->findParticipationRow($challengeId, $userId, $competitorId);
+        if ($participation === null) {
             throw new \RuntimeException('challenge_not_joined');
         }
+        $rowCompetitorId = $participation['competitorId'] !== null ? (string) $participation['competitorId'] : null;
 
-        if (!$this->isChallengeCompletedForUser($challenge, $userId)) {
+        if (!$this->isChallengeCompletedForUser($challenge, $userId, $rowCompetitorId)) {
             throw new \RuntimeException('challenge_not_completed');
         }
 
@@ -637,7 +752,7 @@ final class ChallengeRepository extends Repository
                 'id' => $participationId,
             ]);
 
-        return $this->participations($challengeId, $userId)[0];
+        return $this->participationById($participationId);
     }
 
     /** Lazily builds the E6.5 order-creation collaborator — see its property doc comment. */
@@ -655,10 +770,13 @@ final class ChallengeRepository extends Repository
         $challengeId = (string) ($data['challengeId'] ?? '');
         $userId = (string) ($data['userId'] ?? $actor['sub'] ?? '');
         $eventId = (string) ($data['eventId'] ?? '');
-        $existing = $this->entryFor($challengeId, $userId, $eventId);
+        // R-06: a manual entry belongs to a Zawodnik - the caller's own, or a ward (the route checks Opieka).
+        $competitorId = isset($data['competitorId']) && $data['competitorId'] !== '' ? (string) $data['competitorId'] : $this->selfCompetitorId($userId);
+        $existing = $this->entryFor($challengeId, $userId, $competitorId, $eventId);
         $payload = [
             'challenge_id' => $challengeId,
             'user_id' => $userId,
+            'competitor_id' => $competitorId,
             'event_id' => $eventId,
             'status' => 'pending',
             'submitted_time' => $data['submittedTime'] ?? null,
@@ -709,25 +827,22 @@ final class ChallengeRepository extends Repository
      * isChallengeCompletedForUser()'s doc comment for the fallback rule and
      * why it still exists.
      *
-     * @return array{challengeId: string, userId: string, challengeName: string}|null
+     * @return array{challengeId: string, userId: string, competitorId: ?string, challengeName: string}|null
      */
-    public function checkCompletion(string $challengeId, string $userId): ?array
+    public function checkCompletion(string $challengeId, string $userId, ?string $competitorId = null): ?array
     {
         $challenge = $this->find($challengeId);
         if ($challenge === null) {
             return null;
         }
 
-        $stmt = $this->pdo->prepare(
-            'SELECT id, completion_notified_at AS completionNotifiedAt FROM challenge_participations WHERE challenge_id = :challengeId AND user_id = :userId'
-        );
-        $stmt->execute(['challengeId' => $challengeId, 'userId' => $userId]);
-        $participation = $stmt->fetch();
-        if ($participation === false || $participation['completionNotifiedAt'] !== null) {
+        $participation = $this->findParticipationRow($challengeId, $userId, $competitorId);
+        if ($participation === null || $participation['completionNotifiedAt'] !== null) {
             return null;
         }
+        $rowCompetitorId = $participation['competitorId'] !== null ? (string) $participation['competitorId'] : null;
 
-        if (!$this->isChallengeCompletedForUser($challenge, $userId)) {
+        if (!$this->isChallengeCompletedForUser($challenge, $userId, $rowCompetitorId)) {
             return null;
         }
 
@@ -735,7 +850,7 @@ final class ChallengeRepository extends Repository
             'completion_notified_at' => date(DATE_ATOM),
         ]);
 
-        return ['challengeId' => $challengeId, 'userId' => $userId, 'challengeName' => (string) $challenge['name']];
+        return ['challengeId' => $challengeId, 'userId' => $userId, 'competitorId' => $rowCompetitorId, 'challengeName' => (string) $challenge['name']];
     }
 
     /**
@@ -773,12 +888,12 @@ final class ChallengeRepository extends Repository
      *
      * @param array<string, mixed> $challenge as returned by find()/hydrate()
      */
-    private function isChallengeCompletedForUser(array $challenge, string $userId): bool
+    private function isChallengeCompletedForUser(array $challenge, string $userId, ?string $competitorId = null): bool
     {
         $tree = $challenge['conditionTree'] ?? null;
         if ($tree === null) {
             $completedCount = count(array_filter(
-                $this->entries((string) $challenge['id'], $userId),
+                $this->entries((string) $challenge['id'], $userId, $competitorId),
                 static fn (array $entry): bool => $entry['status'] === 'approved'
             ));
             return $completedCount >= (int) ($challenge['rule']['minCompleted'] ?? 1);
@@ -800,7 +915,7 @@ final class ChallengeRepository extends Repository
 
         $memo = [];
         try {
-            return $this->treeEvaluator()->evaluateNode($tree, $userId, $memo, 0, (string) $challenge['id']);
+            return $this->treeEvaluator()->evaluateNode($tree, $userId, $memo, 0, (string) $challenge['id'], $competitorId);
         } catch (\RuntimeException $e) {
             error_log('[ChallengeConditionTreeEvaluator] ' . $e->getMessage());
             return false;
@@ -878,22 +993,26 @@ final class ChallengeRepository extends Repository
         $row['rewardGranted'] = (bool) $row['rewardGranted'];
         $row['selectedRewards'] = $row['selectedRewards'] ? json_decode((string) $row['selectedRewards'], true) : [];
         $row['assignedNumber'] = $row['assignedNumber'] !== null ? (int) $row['assignedNumber'] : null;
-        $entries = $this->entries((string) $row['challengeId'], (string) $row['userId']);
+        $competitorId = $row['competitorId'] !== null ? (string) $row['competitorId'] : null;
+        $row['competitorId'] = $competitorId;
+        $row['competitorName'] = $competitorId !== null && trim((string) ($row['competitorName'] ?? '')) !== '' ? trim((string) $row['competitorName']) : null;
+        $entries = $this->entries((string) $row['challengeId'], (string) $row['userId'], $competitorId);
         $row['entries'] = $entries;
         $row['completedCount'] = count(array_filter($entries, static fn (array $entry): bool => $entry['status'] === 'approved'));
         $challenge = $this->find((string) $row['challengeId']);
         // E6.3: real tree-based completion (falls back to the flat
         // completedCount >= minCompleted rule for tree-less legacy rows —
         // see isChallengeCompletedForUser()'s doc comment).
-        $row['isCompleted'] = $challenge !== null && $this->isChallengeCompletedForUser($challenge, (string) $row['userId']);
+        $row['isCompleted'] = $challenge !== null && $this->isChallengeCompletedForUser($challenge, (string) $row['userId'], $competitorId);
         return $row;
     }
 
     /** @return array<int, array<string, mixed>> */
-    private function entries(string $challengeId, string $userId): array
+    private function entries(string $challengeId, string $userId, ?string $competitorId = null): array
     {
-        $stmt = $this->pdo->prepare('SELECT id, challenge_id AS challengeId, user_id AS userId, event_id AS eventId, status, submitted_time AS submittedTime, submitted_position AS submittedPosition, proof_url AS proofUrl, submitted_at AS submittedAt, reviewed_at AS reviewedAt, reviewed_by AS reviewedBy, rejection_reason AS rejectionReason FROM challenge_entries WHERE challenge_id = :challengeId AND user_id = :userId ORDER BY submitted_at ASC, id ASC');
-        $stmt->execute(['challengeId' => $challengeId, 'userId' => $userId]);
+        $who = $competitorId !== null ? '(competitor_id = :competitorId OR (competitor_id IS NULL AND user_id = :userId))' : 'user_id = :userId';
+        $stmt = $this->pdo->prepare('SELECT id, challenge_id AS challengeId, user_id AS userId, competitor_id AS competitorId, event_id AS eventId, status, submitted_time AS submittedTime, submitted_position AS submittedPosition, proof_url AS proofUrl, submitted_at AS submittedAt, reviewed_at AS reviewedAt, reviewed_by AS reviewedBy, rejection_reason AS rejectionReason FROM challenge_entries WHERE challenge_id = :challengeId AND ' . $who . ' ORDER BY submitted_at ASC, id ASC');
+        $stmt->execute($competitorId !== null ? ['challengeId' => $challengeId, 'competitorId' => $competitorId, 'userId' => $userId] : ['challengeId' => $challengeId, 'userId' => $userId]);
         return array_map(static fn (array $entry): array => [
             ...$entry,
             'submittedPosition' => $entry['submittedPosition'] !== null ? (int) $entry['submittedPosition'] : null,
@@ -902,7 +1021,7 @@ final class ChallengeRepository extends Repository
 
     private function entry(string $id): ?array
     {
-        $stmt = $this->pdo->prepare('SELECT id, challenge_id AS challengeId, user_id AS userId, event_id AS eventId, status, submitted_time AS submittedTime, submitted_position AS submittedPosition, proof_url AS proofUrl, submitted_at AS submittedAt, reviewed_at AS reviewedAt, reviewed_by AS reviewedBy, rejection_reason AS rejectionReason FROM challenge_entries WHERE id = :id');
+        $stmt = $this->pdo->prepare('SELECT id, challenge_id AS challengeId, user_id AS userId, competitor_id AS competitorId, event_id AS eventId, status, submitted_time AS submittedTime, submitted_position AS submittedPosition, proof_url AS proofUrl, submitted_at AS submittedAt, reviewed_at AS reviewedAt, reviewed_by AS reviewedBy, rejection_reason AS rejectionReason FROM challenge_entries WHERE id = :id');
         $stmt->execute(['id' => $id]);
         $row = $stmt->fetch();
         if (!$row) {
@@ -920,31 +1039,45 @@ final class ChallengeRepository extends Repository
      * the result-sourced entries, and returns those participations so the caller can run the
      * idempotent completion check (checkCompletion() + mail #13).
      *
-     * @return array<int, array{challengeId: string, userId: string}>
+     * R-06: a participation with a Zawodnik is matched through ChallengeResultOwnership (so a ward's
+     * result touches the ward's row, not the caregiver's own); a row without one by `user_id`.
+     *
+     * @return array<int, array{challengeId: string, userId: string, competitorId: ?string}>
      */
     public function syncForEvent(string $eventId): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT cp.challenge_id AS challengeId, cp.user_id AS userId
+            'SELECT DISTINCT cp.challenge_id AS challengeId, cp.user_id AS userId, cp.competitor_id AS competitorId
              FROM challenge_participations cp
              INNER JOIN challenge_events ce ON ce.challenge_id = cp.challenge_id AND ce.event_id = :eventId1
-             WHERE EXISTS (SELECT 1 FROM results r WHERE r.event_id = ce.event_id AND r.user_id = cp.user_id)
-                OR EXISTS (SELECT 1 FROM challenge_entries e WHERE e.challenge_id = cp.challenge_id AND e.user_id = cp.user_id AND e.event_id = ce.event_id AND e.source = \'result\')'
+             WHERE (cp.competitor_id IS NULL AND EXISTS (SELECT 1 FROM results r WHERE r.event_id = ce.event_id AND r.user_id = cp.user_id))
+                OR (cp.competitor_id IS NOT NULL AND EXISTS (SELECT 1 FROM results r' . ChallengeResultOwnership::JOINS . ' WHERE r.event_id = ce.event_id AND ' . ChallengeResultOwnership::COMPETITOR_EXPR . ' = cp.competitor_id))
+                OR EXISTS (SELECT 1 FROM challenge_entries e WHERE e.challenge_id = cp.challenge_id AND (e.competitor_id = cp.competitor_id OR (e.competitor_id IS NULL AND e.user_id = cp.user_id)) AND e.event_id = ce.event_id AND e.source = \'result\')'
         );
         $stmt->execute(['eventId1' => $eventId]);
         $touched = [];
         foreach ($stmt->fetchAll() as $row) {
-            $this->syncResultEntries((string) $row['challengeId'], (string) $row['userId']);
-            $touched[] = ['challengeId' => (string) $row['challengeId'], 'userId' => (string) $row['userId']];
+            $competitorId = $row['competitorId'] !== null ? (string) $row['competitorId'] : null;
+            $this->syncResultEntries((string) $row['challengeId'], (string) $row['userId'], $competitorId);
+            $touched[] = ['challengeId' => (string) $row['challengeId'], 'userId' => (string) $row['userId'], 'competitorId' => $competitorId];
         }
 
         return $touched;
     }
 
-    private function entryFor(string $challengeId, string $userId, string $eventId): ?array
+    private function entryFor(string $challengeId, string $userId, ?string $competitorId, string $eventId): ?array
     {
-        $stmt = $this->pdo->prepare('SELECT id FROM challenge_entries WHERE challenge_id = :challengeId AND user_id = :userId AND event_id = :eventId');
-        $stmt->execute(['challengeId' => $challengeId, 'userId' => $userId, 'eventId' => $eventId]);
+        // A Zawodnik's entry; a legacy row (NULL competitor) counts only for the Konto's own profile.
+        if ($competitorId !== null && $competitorId !== $this->selfCompetitorId($userId)) {
+            $stmt = $this->pdo->prepare('SELECT id FROM challenge_entries WHERE challenge_id = :challengeId AND competitor_id = :competitorId AND event_id = :eventId');
+            $stmt->execute(['challengeId' => $challengeId, 'competitorId' => $competitorId, 'eventId' => $eventId]);
+        } elseif ($competitorId !== null) {
+            $stmt = $this->pdo->prepare('SELECT id FROM challenge_entries WHERE challenge_id = :challengeId AND (competitor_id = :competitorId OR (competitor_id IS NULL AND user_id = :userId)) AND event_id = :eventId ORDER BY competitor_id IS NULL ASC LIMIT 1');
+            $stmt->execute(['challengeId' => $challengeId, 'competitorId' => $competitorId, 'userId' => $userId, 'eventId' => $eventId]);
+        } else {
+            $stmt = $this->pdo->prepare('SELECT id FROM challenge_entries WHERE challenge_id = :challengeId AND user_id = :userId AND competitor_id IS NULL AND event_id = :eventId');
+            $stmt->execute(['challengeId' => $challengeId, 'userId' => $userId, 'eventId' => $eventId]);
+        }
         $row = $stmt->fetch();
         return $row ?: null;
     }
@@ -961,18 +1094,27 @@ final class ChallengeRepository extends Repository
      * own idempotency (completion_notified_at) makes it safe to call from
      * multiple write paths without risk of double-sending mail #13.
      */
-    private function syncResultEntries(string $challengeId, string $userId): void
+    private function syncResultEntries(string $challengeId, string $userId, ?string $competitorId = null): void
     {
-        $stmt = $this->pdo->prepare("SELECT r.event_id AS eventId, r.time, r.position FROM results r INNER JOIN challenge_events ce ON ce.event_id = r.event_id WHERE ce.challenge_id = :challengeId AND r.user_id = :userId AND r.status = 'finished'");
-        $stmt->execute(['challengeId' => $challengeId, 'userId' => $userId]);
+        // R-06: with a Zawodnik, progress comes from that Zawodnik's results (ChallengeResultOwnership);
+        // without one (Konto with no profile) from the Konto's own results, as before.
+        if ($competitorId !== null) {
+            $stmt = $this->pdo->prepare("SELECT r.event_id AS eventId, r.time, r.position FROM results r" . ChallengeResultOwnership::JOINS . " INNER JOIN challenge_events ce ON ce.event_id = r.event_id WHERE ce.challenge_id = :challengeId AND " . ChallengeResultOwnership::COMPETITOR_EXPR . " = :competitorId AND r.status = 'finished'");
+            $stmt->execute(['challengeId' => $challengeId, 'competitorId' => $competitorId]);
+        } else {
+            $stmt = $this->pdo->prepare("SELECT r.event_id AS eventId, r.time, r.position FROM results r INNER JOIN challenge_events ce ON ce.event_id = r.event_id WHERE ce.challenge_id = :challengeId AND r.user_id = :userId AND r.status = 'finished'");
+            $stmt->execute(['challengeId' => $challengeId, 'userId' => $userId]);
+        }
         foreach ($stmt->fetchAll() as $result) {
-            if ($this->entryFor($challengeId, $userId, (string) $result['eventId'])) {
+            $existing = $this->entryFor($challengeId, $userId, $competitorId, (string) $result['eventId']);
+            if ($existing) {
                 continue;
             }
             $this->insert('challenge_entries', [
                 'id' => $this->id(),
                 'challenge_id' => $challengeId,
                 'user_id' => $userId,
+                'competitor_id' => $competitorId,
                 'event_id' => $result['eventId'],
                 'status' => 'approved',
                 'submitted_time' => $result['time'],
@@ -987,9 +1129,22 @@ final class ChallengeRepository extends Repository
         // G-02: a correction (or deletion) can take a result out of "finished"; the entry it
         // produced must go with it. Only system-derived entries are touched - a manual entry
         // approved by a reviewer stays.
+        if ($competitorId !== null) {
+            $legacy = $competitorId === $this->selfCompetitorId($userId) ? ' OR (e.competitor_id IS NULL AND e.user_id = :userId)' : '';
+            $params = ['challengeId' => $challengeId, 'competitorId' => $competitorId, 'competitorId2' => $competitorId];
+            if ($legacy !== '') {
+                $params['userId'] = $userId;
+            }
+            $this->pdo->prepare(
+                "DELETE e FROM challenge_entries e
+                 WHERE e.challenge_id = :challengeId AND (e.competitor_id = :competitorId{$legacy}) AND e.source = 'result'
+                   AND NOT EXISTS (SELECT 1 FROM results r" . ChallengeResultOwnership::JOINS . " WHERE r.event_id = e.event_id AND " . ChallengeResultOwnership::COMPETITOR_EXPR . " = :competitorId2 AND r.status = 'finished')"
+            )->execute($params);
+            return;
+        }
         $this->pdo->prepare(
             "DELETE e FROM challenge_entries e
-             WHERE e.challenge_id = :challengeId AND e.user_id = :userId AND e.source = 'result'
+             WHERE e.challenge_id = :challengeId AND e.user_id = :userId AND e.competitor_id IS NULL AND e.source = 'result'
                AND NOT EXISTS (SELECT 1 FROM results r WHERE r.event_id = e.event_id AND r.user_id = e.user_id AND r.status = 'finished')"
         )->execute(['challengeId' => $challengeId, 'userId' => $userId]);
     }

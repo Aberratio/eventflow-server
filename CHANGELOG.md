@@ -160,6 +160,9 @@ Integrations and mail
 - CSV exports (start list, settlement) neutralise text that starts with `=`, `+`,
   `-` or `@`, so a participant or label cannot run a formula when the file is
   opened in Excel; numeric values such as negative amounts stay numbers.
+- API error messages for discount codes, refunds, shop orders, teams and
+  registrations are now in Polish (they were mixed English/Polish), and
+  several Polish messages that lacked diacritics are corrected.
 - An unknown event slug returns a 404 error response (never 200 with empty data).
 - Error responses no longer leak exception messages or stack traces outside
   local debug mode (`APP_DEBUG=true` with `APP_ENV=local`).

@@ -166,6 +166,10 @@ Integrations and mail
 - A card or BLIK payment through Paynow is no longer lost when the gateway first reports
   an intermediate status (new, pending): the registration is still confirmed once the
   payment is confirmed, instead of staying unpaid and expiring.
+- Discount codes: a percentage code above 100% no longer discounts more than
+  the start fee (extras and insurance stay at full price), and a code with a
+  usage limit can no longer be used more times than allowed when two people
+  register at the same moment; the list of who used the code keeps every use.
 - An unknown event slug returns a 404 error response (never 200 with empty data).
 - Error responses no longer leak exception messages or stack traces outside
   local debug mode (`APP_DEBUG=true` with `APP_ENV=local`).

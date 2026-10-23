@@ -4245,8 +4245,9 @@ SQL;
                     isset($data['changingRegistrationId']) ? (string) $data['changingRegistrationId'] : null
                 );
                 $discountValue = (float) $discount['discount_value'];
+                // Either kind is capped at the start fee: a code discounts only the start fee (result >= 0).
                 $discountAmount = $discount['discount_type'] === 'percent'
-                    ? $this->roundMoney($runningTotal * ($discountValue / 100))
+                    ? min($runningTotal, $this->roundMoney($runningTotal * ($discountValue / 100)))
                     : min($runningTotal, $this->roundMoney($discountValue));
                 $discountAmount = $this->roundMoney($discountAmount);
                 $runningTotal = $this->roundMoney(max(0, $runningTotal - $discountAmount));
@@ -4572,7 +4573,20 @@ SQL;
      */
     private function markDiscountUsed(string $discountId, string $registrationId, array $data, array $pricing): void
     {
-        $usedBy = $pricing['usedBy'];
+        // Re-read under a row lock: the copy priced earlier may be stale, and two registrations
+        // racing for the last use must not both win (this runs inside create()'s transaction).
+        $stmt = $this->pdo->prepare('SELECT max_uses, used_count, used_by FROM event_discount_codes WHERE id = :id FOR UPDATE');
+        $stmt->execute(['id' => $discountId]);
+        $current = $stmt->fetch();
+        if (!$current) {
+            throw new InvalidInput('discount_code_invalid');
+        }
+        if ($current['max_uses'] !== null && (int) $current['used_count'] >= (int) $current['max_uses']) {
+            throw new InvalidInput('discount_code_used_up');
+        }
+        $usedBy = $current['used_by'] !== null && $current['used_by'] !== ''
+            ? (json_decode((string) $current['used_by'], true) ?: [])
+            : [];
         $usedBy[] = [
             'userId' => $data['userId'],
             'userName' => $data['userName'],

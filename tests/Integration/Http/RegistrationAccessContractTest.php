@@ -365,6 +365,8 @@ final class RegistrationAccessContractTest extends HttpTestCase
         self::assertSame(403, $this->request('POST', $path . '/cancel', [], $guardianAuth)->getStatusCode());
         // The registration's own user keeps access.
         self::assertSame(200, $this->request('GET', $path . '/form-field-answers', [], $this->bearer($ward['id'], 'participant', $ward['email']))->getStatusCode());
+    }
+
     public function testModeratorDoesNotSeeConfidentialAnswersButEventTeamAndOwnerDo(): void
     {
         $this->formFields->ensureSystemCatalog((string) $this->eventA['id']);

@@ -485,7 +485,16 @@ final class ResultRepository extends Repository
      */
     private function renumberEventDistance(string $eventId, string $distanceId): void
     {
-        $stmt = $this->pdo->prepare(
+        self::renumberClassification($this->pdo, $eventId, $distanceId);
+    }
+
+    /**
+     * Static variant of the renumbering above, so the results import can re-rank a whole
+     * event+distance after an upsert commit with exactly the same rules.
+     */
+    public static function renumberClassification(\PDO $pdo, string $eventId, string $distanceId): void
+    {
+        $stmt = $pdo->prepare(
             'SELECT id, category, position_manual AS positionManual, category_position AS categoryPosition,
                     position, category_position_manual AS categoryManual FROM results
              WHERE event_id = :eventId AND distance_id = :distanceId AND status = "finished"
@@ -528,10 +537,12 @@ final class ResultRepository extends Repository
                 $places['category_position'] = $next;
             }
             if ($places !== []) {
-                $this->updateById('results', (string) $row['id'], $places);
+                $assignments = array_map(static fn (string $column): string => "`{$column}` = :{$column}", array_keys($places));
+                $places['id'] = (string) $row['id'];
+                $pdo->prepare('UPDATE results SET ' . implode(', ', $assignments) . ' WHERE id = :id')->execute($places);
             }
         }
-        self::recomputeGenderPositions($this->pdo, $eventId, $distanceId);
+        self::recomputeGenderPositions($pdo, $eventId, $distanceId);
     }
 
     /**

@@ -176,6 +176,7 @@ Integrations and mail
   cancelled registration as an organizer no longer changes its status.
 - A guardian whose care over a competitor was revoked can no longer read, edit, cancel or request a refund for registrations they had made for that competitor.
 - Moderators no longer see answers to confidential registration-form fields, and event owners and co-managers no longer see the IP address and browser of the people behind entries in an event's activity log (platform admins still do).
+- Public results no longer reveal who an anonymised competitor is: their result row hides the account, registration and birth year, and searching results by their real name finds nothing.
 - An unknown event slug returns a 404 error response (never 200 with empty data).
 - Error responses no longer leak exception messages or stack traces outside
   local debug mode (`APP_DEBUG=true` with `APP_ENV=local`).

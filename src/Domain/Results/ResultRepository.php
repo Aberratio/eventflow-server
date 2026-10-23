@@ -36,8 +36,14 @@ final class ResultRepository extends Repository
     {
         return 'SELECT ' . self::COLUMNS_R . ',
                 COALESCE(comp_reg.is_anonymized, comp_self.is_anonymized, 0) AS isAnonymizedFlag,
-                COALESCE(comp_reg.id, comp_self.id) AS anonymizedCompetitorId
-            FROM results r
+                COALESCE(comp_reg.id, comp_self.id) AS anonymizedCompetitorId '
+            . self::anonymizationFromSql();
+    }
+
+    /** The FROM/JOIN part of anonymizationJoinSql(), also used by list()'s COUNT(*). */
+    private static function anonymizationFromSql(): string
+    {
+        return 'FROM results r
             LEFT JOIN registrations reg ON reg.id = r.registration_id
             LEFT JOIN competitors comp_reg ON comp_reg.id = reg.competitor_id
             LEFT JOIN competitors comp_self ON comp_self.user_id = r.user_id';
@@ -48,16 +54,25 @@ final class ResultRepository extends Repository
      * anonymizationJoinSql() above, mirroring byEvent()'s original
      * PHP-side masking so list()/byUser() behave identically.
      *
+     * $stripIdentity (the public classification and list): an anonymised row also loses
+     * userId, registrationId and birthYear - the name alone is not the only way to recognise
+     * a person. byUser() keeps them (the caller already addressed that user by id).
+     *
      * @param array<int, array<string, mixed>> $rows
      * @return array<int, array<string, mixed>>
      */
-    private static function maskAnonymizedRows(array $rows): array
+    private static function maskAnonymizedRows(array $rows, bool $stripIdentity = false): array
     {
-        return array_map(static function (array $row): array {
+        return array_map(static function (array $row) use ($stripIdentity): array {
             $isAnonymized = (bool) $row['isAnonymizedFlag'];
             $competitorId = $row['anonymizedCompetitorId'] !== null ? (string) $row['anonymizedCompetitorId'] : null;
             unset($row['isAnonymizedFlag'], $row['anonymizedCompetitorId']);
             $row['userName'] = CompetitorNamePresenter::publicName((string) $row['userName'], $isAnonymized, $competitorId);
+            if ($stripIdentity && $isAnonymized) {
+                $row['userId'] = null;
+                $row['registrationId'] = null;
+                $row['birthYear'] = null;
+            }
             return $row;
         }, $rows);
     }
@@ -86,13 +101,14 @@ final class ResultRepository extends Repository
         }
         if ($scalar($filters['search'] ?? null)) {
             // Native prepares (ATTR_EMULATE_PREPARES=false) reject a repeated named placeholder (HY093).
-            $where[] = '(r.user_name LIKE :searchName OR r.bib_number LIKE :searchBib)';
+            // An anonymised competitor is never found by their real name.
+            $where[] = '((COALESCE(comp_reg.is_anonymized, comp_self.is_anonymized, 0) = 0 AND r.user_name LIKE :searchName) OR r.bib_number LIKE :searchBib)';
             $params['searchName'] = $params['searchBib'] = '%' . $filters['search'] . '%';
         }
         $whereSql = $where ? ' WHERE ' . implode(' AND ', $where) : '';
         $pagination = $this->pagination($filters);
 
-        $count = $this->pdo->prepare("SELECT COUNT(*) FROM results r{$whereSql}");
+        $count = $this->pdo->prepare('SELECT COUNT(*) ' . self::anonymizationFromSql() . $whereSql);
         $count->execute($params);
         $total = (int) $count->fetchColumn();
 
@@ -104,7 +120,7 @@ final class ResultRepository extends Repository
         $stmt->bindValue(':offset', $pagination['offset'], \PDO::PARAM_INT);
         $stmt->execute();
 
-        return ['data' => self::maskAnonymizedRows($stmt->fetchAll()), 'total' => $total, 'page' => $pagination['page'], 'pageSize' => $pagination['pageSize']];
+        return ['data' => self::maskAnonymizedRows($stmt->fetchAll(), true), 'total' => $total, 'page' => $pagination['page'], 'pageSize' => $pagination['pageSize']];
     }
 
     /**
@@ -137,7 +153,7 @@ final class ResultRepository extends Repository
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
 
-        return self::maskAnonymizedRows($stmt->fetchAll());
+        return self::maskAnonymizedRows($stmt->fetchAll(), true);
     }
 
     /**

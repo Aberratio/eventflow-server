@@ -292,7 +292,13 @@ SQL;
             }
 
             // "miejsce wg płci" over the freshly written results of the classification.
-            ResultRepository::recomputeGenderPositions($this->pdo, (string) $batch['eventId'], (string) $batch['distanceId']);
+            if ($batch['mode'] === 'upsert') {
+                // The batch only holds the corrected rows - re-rank the whole classification
+                // (manual places respected) so they don't collide with the untouched results.
+                ResultRepository::renumberClassification($this->pdo, (string) $batch['eventId'], (string) $batch['distanceId']);
+            } else {
+                ResultRepository::recomputeGenderPositions($this->pdo, (string) $batch['eventId'], (string) $batch['distanceId']);
+            }
             $this->updateById('result_import_batches', $batchId, [
                 'status' => 'committed',
                 'committed_at' => date(DATE_ATOM),
@@ -906,6 +912,11 @@ SQL);
             return null;
         }
         $hasHourSegment = ($matches[3] ?? '') !== '';
+        // Out-of-range segments are a typo, not a time ("4:75", "1:75:00"); in the M:SS shape
+        // the minutes may exceed 59 ("75:30").
+        if ((int) $matches[$hasHourSegment ? 3 : 2] > 59 || ($hasHourSegment && (int) $matches[2] > 59)) {
+            return null;
+        }
         if ($hasHourSegment) {
             $hours = (int) $matches[1];
             $minutes = (int) $matches[2];
@@ -1208,23 +1219,27 @@ SQL);
     private function positions(array $rows): array
     {
         $finished = array_values(array_filter($rows, static fn (array $row): bool => ($row['mappedData']['status'] ?? '') === 'finished'));
-        usort($finished, static function (array $a, array $b): int {
-            $aPos = (int) ($a['mappedData']['position'] ?? 0);
-            $bPos = (int) ($b['mappedData']['position'] ?? 0);
-            if ($aPos > 0 && $bPos > 0) {
-                return $aPos <=> $bPos;
+        // One consistent ordering for the whole batch: honour the timing file's own places only
+        // when EVERY finished row carries one; otherwise rank all of them by time (hundredths
+        // included, ties keep file order - usort is stable) and number them 1..n.
+        $explicit = $finished !== [] && count(array_filter(
+            $finished,
+            static fn (array $row): bool => (int) ($row['mappedData']['position'] ?? 0) > 0
+        )) === count($finished);
+        usort($finished, static function (array $a, array $b) use ($explicit): int {
+            if ($explicit) {
+                return (int) $a['mappedData']['position'] <=> (int) $b['mappedData']['position'];
             }
-            return (int) $a['mappedData']['timeInSeconds'] <=> (int) $b['mappedData']['timeInSeconds'];
+            return (float) $a['mappedData']['timeInSeconds'] <=> (float) $b['mappedData']['timeInSeconds'];
         });
         $result = [];
         $categoryPositions = [];
         foreach ($finished as $index => $row) {
             $category = (string) ($row['mappedData']['category'] ?? '');
             $categoryPositions[$category] = ($categoryPositions[$category] ?? 0) + 1;
-            $position = (int) ($row['mappedData']['position'] ?? 0);
             $result[(string) $row['id']] = [
                 'row' => $row,
-                'position' => $position > 0 ? $position : $index + 1,
+                'position' => $explicit ? (int) $row['mappedData']['position'] : $index + 1,
                 'categoryPosition' => $categoryPositions[$category],
             ];
         }

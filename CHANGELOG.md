@@ -152,6 +152,11 @@ Integrations and mail
 
 ### Fixed
 
+- Results import: places are now ranked by the exact time including hundredths
+  of a second, never share a number when only some rows carry a place from the
+  file, and an upsert re-ranks the whole classification instead of numbering
+  only the corrected rows. Times with minutes or seconds above 59 (for example
+  "4:75") are rejected as invalid instead of being silently accepted.
 - An unknown event slug returns a 404 error response (never 200 with empty data).
 - Error responses no longer leak exception messages or stack traces outside
   local debug mode (`APP_DEBUG=true` with `APP_ENV=local`).

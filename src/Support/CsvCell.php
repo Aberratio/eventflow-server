@@ -22,11 +22,12 @@ final class CsvCell
 
     /**
      * Like text(), but a plain (optionally negative) number such as "-12,50" is a numeric value,
-     * not text, and stays untouched.
+     * not text, and stays untouched. So does a phone number such as "+48 600 100 200": digits and
+     * spaces after a plus cannot form a formula.
      */
     public static function safe(string $value): string
     {
-        if (preg_match('/^-?\d+(?:[.,]\d+)?$/', $value) === 1) {
+        if (preg_match('/^-?\d+(?:[.,]\d+)?$/', $value) === 1 || preg_match('/^\+\d[\d ]*$/', $value) === 1) {
             return $value;
         }
 

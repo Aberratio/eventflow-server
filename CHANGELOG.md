@@ -152,6 +152,14 @@ Integrations and mail
 
 ### Fixed
 
+- Results import: places are now ranked by the exact time including hundredths
+  of a second, never share a number when only some rows carry a place from the
+  file, and an upsert re-ranks the whole classification instead of numbering
+  only the corrected rows. Times with minutes or seconds above 59 (for example
+  "4:75") are rejected as invalid instead of being silently accepted.
+- CSV exports (start list, settlement) neutralise text that starts with `=`, `+`,
+  `-` or `@`, so a participant or label cannot run a formula when the file is
+  opened in Excel; numeric values such as negative amounts stay numbers.
 - API error messages for discount codes, refunds, shop orders, teams and
   registrations are now in Polish (they were mixed English/Polish), and
   several Polish messages that lacked diacritics are corrected.

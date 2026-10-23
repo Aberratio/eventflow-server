@@ -26,19 +26,31 @@ final class PayNowNotificationTest extends TestCase
     }
 
     /** @dataProvider nonPaidStatuses */
-    public function testNonConfirmedStatusIsNotPaid(string $status): void
+    public function testNonConfirmedStatusIsNotPaid(string $status, bool $failed): void
     {
         $body = json_encode(['paymentId' => 'PN-2', 'status' => $status]);
 
         $notification = PayNowNotification::fromRawBody((string) $body);
 
         self::assertFalse($notification->paid);
+        self::assertSame($failed, $notification->failed);
     }
 
-    /** @return array<int, array{0: string}> */
+    /** @return array<int, array{0: string, 1: bool}> status, whether it is a final failure */
     public static function nonPaidStatuses(): array
     {
-        return [['NEW'], ['PENDING'], ['REJECTED'], ['EXPIRED'], ['ABANDONED'], ['ERROR']];
+        return [
+            ['NEW', false], ['PENDING', false], ['SOMETHING_NEW', false], ['', false],
+            ['REJECTED', true], ['EXPIRED', true], ['ABANDONED', true], ['ERROR', true], ['rejected', true],
+        ];
+    }
+
+    public function testConfirmedIsNeverFailed(): void
+    {
+        $notification = PayNowNotification::fromRawBody((string) json_encode(['paymentId' => 'PN-4', 'status' => 'CONFIRMED']));
+
+        self::assertTrue($notification->paid);
+        self::assertFalse($notification->failed);
     }
 
     public function testMissingPaymentIdThrows(): void

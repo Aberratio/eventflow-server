@@ -152,6 +152,7 @@ Integrations and mail
 
 ### Fixed
 
+- Moderators no longer see answers to confidential registration-form fields, and event owners and co-managers no longer see the IP address and browser of the people behind entries in an event's activity log (platform admins still do).
 - An unknown event slug returns a 404 error response (never 200 with empty data).
 - Error responses no longer leak exception messages or stack traces outside
   local debug mode (`APP_DEBUG=true` with `APP_ENV=local`).

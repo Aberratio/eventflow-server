@@ -77,10 +77,17 @@ final class FormFieldAnswerRepository extends Repository
         return $this->decodeRow($stmt->fetch());
     }
 
-    /** @return array<int, array<string, mixed>> */
-    public function forRegistration(string $registrationId): array
+    /**
+     * @param bool $includeConfidential false drops answers to `is_confidential` fields
+     * @return array<int, array<string, mixed>>
+     */
+    public function forRegistration(string $registrationId, bool $includeConfidential = true): array
     {
-        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM form_field_answers WHERE registration_id = :registrationId');
+        $sql = 'SELECT ' . self::COLUMNS . ' FROM form_field_answers WHERE registration_id = :registrationId';
+        if (!$includeConfidential) {
+            $sql .= ' AND form_field_id NOT IN (SELECT id FROM form_fields WHERE is_confidential = 1)';
+        }
+        $stmt = $this->pdo->prepare($sql);
         $stmt->execute(['registrationId' => $registrationId]);
         $rows = $stmt->fetchAll();
         return array_map(fn (array $row): array => $this->decodeRow($row) ?? [], $rows);

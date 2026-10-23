@@ -66,6 +66,18 @@ final class RegistrationSelfCancelContractTest extends HttpTestCase
                 'registeredCount' => 0,
                 'price' => 80,
                 'routeFiles' => [],
+            ], [
+                'id' => $this->prefix . '-5k',
+                'name' => '5 km',
+                'length' => 5,
+                'unit' => 'km',
+                'categories' => ['Open'],
+                'ageCategories' => [],
+                'specialCategories' => [],
+                'limit' => 100,
+                'registeredCount' => 0,
+                'price' => 50,
+                'routeFiles' => [],
             ]],
         ]);
     }
@@ -144,6 +156,43 @@ final class RegistrationSelfCancelContractTest extends HttpTestCase
         self::assertSame('requested', $json['data']['refund']['status']);
         self::assertSame('self_cancel', $json['data']['refund']['reason']);
         self::assertSame(0, $this->registeredCount());
+    }
+
+    public function testOwnerCancellingAfterACheaperDistanceChangeRefundsEverythingPaid(): void
+    {
+        $reg = $this->register(true);
+        $change = $this->request('POST', '/api/v1/registrations/' . $reg['id'] . '/distance-change', ['distanceId' => $this->prefix . '-5k'], $this->ownerAuth());
+        self::assertSame(200, $change->getStatusCode());
+        self::assertSame('distance_change', $this->json($change)['data']['refund']['reason']);
+        self::assertEquals(30, $this->json($change)['data']['refund']['amount']);
+
+        $cancel = $this->request('POST', '/api/v1/registrations/' . $reg['id'] . '/cancel', [], $this->ownerAuth());
+        self::assertSame(200, $cancel->getStatusCode());
+        $refund = $this->json($cancel)['data']['refund'];
+        self::assertSame('requested', $refund['status']);
+        self::assertSame('self_cancel', $refund['reason']);
+
+        $approved = $this->registrations->approveRefund($reg['id'], $this->organizer['id']);
+
+        self::assertEquals(80, $approved['refund']['amount'], 'everything the participant paid (50 + 30 overpayment), not just the overpayment');
+    }
+
+    public function testManagerCancellingAnAlreadyInactiveRegistrationChangesNothing(): void
+    {
+        $manager = $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email']);
+        foreach (['expired', 'removed', 'cancelled'] as $status) {
+            $reg = $this->register(false);
+            $this->pdo->prepare('UPDATE registrations SET status = :s WHERE id = :id')->execute(['s' => $status, 'id' => $reg['id']]);
+
+            $response = $this->request('POST', '/api/v1/registrations/' . $reg['id'] . '/cancel', [], $manager);
+
+            self::assertSame(200, $response->getStatusCode());
+            self::assertSame($status, $this->json($response)['data']['status']);
+            self::assertSame($status, $this->registrations->find($reg['id'])['status']);
+            $history = $this->pdo->prepare('SELECT COUNT(*) FROM registration_changes WHERE registration_id = :id');
+            $history->execute(['id' => $reg['id']]);
+            self::assertSame(0, (int) $history->fetchColumn());
+        }
     }
 
     public function testCancellationIsRecordedInHistoryForOwnerAndManager(): void

@@ -2685,36 +2685,75 @@ SQL;
             return null;
         }
         $wasActive = !in_array((string) $before['status'], self::NOT_COUNTED_STATUSES, true);
-        $refundRequested = false;
-        if ($wasActive && !$actor['isManager'] && (string) $before['status'] === 'confirmed' && $this->totalAmountFor($id) > 0) {
-            $this->requestRefund($id, $actor['id'], self::SELF_CANCEL_REFUND_REASON);
-            $refundRequested = true;
+        if (!$wasActive) {
+            return ['registration' => $before, 'refundRequested' => false, 'changed' => false];
         }
-
-        $registration = $this->cancel($id) ?? $before;
-        if ($wasActive) {
-            (new RegistrationChangeRepository($this->pdo))->record(
-                $id,
-                RegistrationChangeRepository::TYPE_CANCELLED,
-                ['status' => (string) $before['status'], 'distanceId' => (string) $before['distanceId']],
-                ['status' => 'cancelled', 'refundRequested' => $refundRequested],
-                ['id' => $actor['id'], 'role' => $actor['isManager'] ? 'manager' : 'owner']
-            );
-            if (!$actor['isManager']) {
-                $this->mailer?->sendEventChanged(
-                    (string) $before['eventId'],
-                    $id,
-                    (string) $before['userEmail'],
-                    (string) $before['eventName'],
-                    'Twój zapis został anulowany na Twoją prośbę',
-                    $refundRequested
-                        ? 'Złożyliśmy wniosek o zwrot opłaty - organizator rozpatrzy go zgodnie z zasadami wydarzenia.'
-                        : 'Zapis nie wymagał zwrotu środków.'
-                );
+        $refundRequested = false;
+        if (!$actor['isManager'] && (string) $before['status'] === 'confirmed') {
+            if ($this->totalAmountFor($id) > 0) {
+                $this->requestRefund($id, $actor['id'], self::SELF_CANCEL_REFUND_REASON);
+                $refundRequested = true;
+            }
+            // A cheaper Dystans change may have left an overpayment refund open: the cancellation
+            // refunds everything paid, so that row becomes the cancellation refund.
+            if ($this->promoteDistanceChangeRefundToCancellation($id)) {
+                $refundRequested = true;
             }
         }
 
-        return ['registration' => $registration, 'refundRequested' => $refundRequested, 'changed' => $wasActive];
+        $registration = $this->cancel($id) ?? $before;
+        (new RegistrationChangeRepository($this->pdo))->record(
+            $id,
+            RegistrationChangeRepository::TYPE_CANCELLED,
+            ['status' => (string) $before['status'], 'distanceId' => (string) $before['distanceId']],
+            ['status' => 'cancelled', 'refundRequested' => $refundRequested],
+            ['id' => $actor['id'], 'role' => $actor['isManager'] ? 'manager' : 'owner']
+        );
+        if (!$actor['isManager']) {
+            $this->mailer?->sendEventChanged(
+                (string) $before['eventId'],
+                $id,
+                (string) $before['userEmail'],
+                (string) $before['eventName'],
+                'Twój zapis został anulowany na Twoją prośbę',
+                $refundRequested
+                    ? 'Złożyliśmy wniosek o zwrot opłaty - organizator rozpatrzy go zgodnie z zasadami wydarzenia.'
+                    : 'Zapis nie wymagał zwrotu środków.'
+            );
+        }
+
+        return ['registration' => $registration, 'refundRequested' => $refundRequested, 'changed' => true];
+    }
+
+    /**
+     * An open (`requested`) overpayment refund of a cheaper Dystans change turns into the
+     * cancellation refund. Its ceiling is what was actually paid: the current Rozliczenie
+     * total plus the overpayment still waiting to be refunded. An `approved` one is left as is.
+     */
+    private function promoteDistanceChangeRefundToCancellation(string $id): bool
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $existing = $this->lockRefund($id);
+            if ($existing === null
+                || $existing['status'] !== 'requested'
+                || (string) ($existing['reason'] ?? '') !== self::DISTANCE_CHANGE_REFUND_REASON
+                || $existing['amount'] === null) {
+                $this->pdo->commit();
+
+                return false;
+            }
+            $this->upsertRefundRow($id, [
+                'reason' => self::SELF_CANCEL_REFUND_REASON,
+                'amount' => $this->roundMoney($this->totalAmountFor($id) + (float) $existing['amount']),
+            ]);
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
+        return true;
     }
 
     /**
@@ -3038,9 +3077,10 @@ SQL;
             }
 
             $ceiling = $this->totalAmountFor($id);
-            if ((string) ($existing['reason'] ?? '') === self::DISTANCE_CHANGE_REFUND_REASON && $existing['amount'] !== null) {
-                // The overpayment of a cheaper Dystans was fixed when the change was made; it is the
-                // ceiling (and the default) here, not the - now smaller - Rozliczenie total.
+            if (in_array((string) ($existing['reason'] ?? ''), [self::DISTANCE_CHANGE_REFUND_REASON, self::SELF_CANCEL_REFUND_REASON], true) && $existing['amount'] !== null) {
+                // The amount fixed on the row is the ceiling (and the default) here, not the - now
+                // smaller - Rozliczenie total: the overpayment of a cheaper Dystans, or everything paid
+                // when the owner cancelled after such a change (see promoteDistanceChangeRefundToCancellation()).
                 $ceiling = (float) $existing['amount'];
             }
             $resolvedAmount = $amount !== null ? max(0.0, min($amount, $ceiling)) : $ceiling;

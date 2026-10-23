@@ -152,6 +152,7 @@ Integrations and mail
 
 ### Fixed
 
+- C:/Repos/zmierzymy-czas/.wt/discount-code-limits/
 - An unknown event slug returns a 404 error response (never 200 with empty data).
 - Error responses no longer leak exception messages or stack traces outside
   local debug mode (`APP_DEBUG=true` with `APP_ENV=local`).

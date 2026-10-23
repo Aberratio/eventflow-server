@@ -226,6 +226,29 @@ final class StartListExportTest extends TestCase
         @unlink($tmp);
     }
 
+    public function testCsvNeutralisesFormulaTextButKeepsNumbersNumeric(): void
+    {
+        $columns = [
+            ['key' => 'name', 'label' => 'Uczestnik'],
+            ['key' => 'amount', 'label' => 'Kwota (PLN)'],
+            ['key' => 'count', 'label' => 'Liczba'],
+        ];
+        $rows = [
+            ['name' => '=HYPERLINK("http://x","a")', 'amount' => '-12,50', 'count' => -3],
+            ['name' => '@SUM(A1)', 'amount' => '100,00', 'count' => 7],
+            ['name' => 'Anna Nowak', 'amount' => '0,00', 'count' => 0],
+        ];
+
+        $csv = StartListExportFormatter::toCsv($columns, $rows);
+        $lines = array_map('str_getcsv', explode("\n", trim(str_replace("\r\n", "\n", $csv))), array_fill(0, 4, ';'));
+
+        self::assertSame("'=HYPERLINK(\"http://x\",\"a\")", $lines[1][0]);
+        self::assertSame("'@SUM(A1)", $lines[2][0]);
+        self::assertSame('Anna Nowak', $lines[3][0]);
+        self::assertSame('-12,50', $lines[1][1], 'A negative amount is a number, not text.');
+        self::assertSame('-3', $lines[1][2]);
+    }
+
     private function findFieldByKey(string $key): array
     {
         foreach ($this->fields->listForEvent($this->eventId) as $field) {

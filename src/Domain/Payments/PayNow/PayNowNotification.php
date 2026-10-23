@@ -23,10 +23,19 @@ final class PayNowNotification
     /** Paynow's own documented payment statuses; only CONFIRMED means paid. */
     private const PAID_STATUS = 'CONFIRMED';
 
+    /**
+     * Statuses after which Paynow never moves the payment to CONFIRMED. Everything else
+     * (NEW, PENDING, anything unknown) is an intermediate step: Paynow notifies on every
+     * status change, and a later CONFIRMED must still be able to pay the registration.
+     */
+    private const FAILED_STATUSES = ['REJECTED', 'ERROR', 'EXPIRED', 'ABANDONED'];
+
     public function __construct(
         public readonly string $transactionId,
         public readonly bool $paid,
         public readonly ?string $registrationId,
+        /** True only for a final, unpaid status (REJECTED, ERROR, EXPIRED, ABANDONED). */
+        public readonly bool $failed = false,
     ) {
     }
 
@@ -45,6 +54,11 @@ final class PayNowNotification
         $status = strtoupper(trim((string) ($decoded['status'] ?? '')));
         $registrationId = (string) ($decoded['externalId'] ?? '');
 
-        return new self($transactionId, $status === self::PAID_STATUS, $registrationId !== '' ? $registrationId : null);
+        return new self(
+            $transactionId,
+            $status === self::PAID_STATUS,
+            $registrationId !== '' ? $registrationId : null,
+            in_array($status, self::FAILED_STATUSES, true)
+        );
     }
 }

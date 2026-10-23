@@ -438,6 +438,96 @@ PDF;
         ];
     }
 
+    public function testHundredthsDecideThePlaceWhenWholeSecondsAreEqual(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+        $distanceId = (string) $event['distances'][0]['id'];
+        $this->createRegistration($event, $this->createParticipant('Adam Wolny', 'M', 1990), 'M30', '401');
+        $this->createRegistration($event, $this->createParticipant('Bartek Szybki', 'M', 1990), 'M30', '402');
+
+        $csv = "numer,uczestnik,czas,kategoria\n401,Adam Wolny,00:40:10.90,M30\n402,Bartek Szybki,00:40:10.05,M30\n";
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $this->tempImportFile('csv', $csv), 'phpunit-admin');
+        $this->imports->commit((string) $batch['id']);
+
+        $byBib = $this->resultsByBib((string) $event['id'], $distanceId);
+        self::assertSame(1, (int) $byBib['402']['position']);
+        self::assertSame(2, (int) $byBib['401']['position']);
+        self::assertSame(1, (int) $byBib['402']['categoryPosition']);
+    }
+
+    public function testPartialFilePositionsFallBackToTimeRankWithoutSharedPlaces(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+        $distanceId = (string) $event['distances'][0]['id'];
+        $this->createRegistration($event, $this->createParticipant('Cezary Pierwszy', 'M', 1990), 'M30', '411');
+        $this->createRegistration($event, $this->createParticipant('Damian Drugi', 'M', 1990), 'M30', '412');
+
+        // Only one row carries a place from the file; the other has none.
+        $csv = "miejsce,numer,uczestnik,czas,kategoria\n2,411,Cezary Pierwszy,00:30:00,M30\n,412,Damian Drugi,00:40:00,M30\n";
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $this->tempImportFile('csv', $csv), 'phpunit-admin');
+        $this->imports->commit((string) $batch['id']);
+
+        $byBib = $this->resultsByBib((string) $event['id'], $distanceId);
+        self::assertSame(1, (int) $byBib['411']['position']);
+        self::assertSame(2, (int) $byBib['412']['position']);
+    }
+
+    public function testUpsertRenumbersTheWholeClassification(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+        $distanceId = (string) $event['distances'][0]['id'];
+        foreach ([['Ewa A', '421'], ['Ewa B', '422'], ['Ewa C', '423']] as [$name, $bib]) {
+            $this->createRegistration($event, $this->createParticipant($name, 'K', 1990), 'K30', $bib);
+        }
+
+        $first = "numer,uczestnik,czas,kategoria\n421,Ewa A,00:30:00,K30\n422,Ewa B,00:35:00,K30\n423,Ewa C,00:40:00,K30\n";
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $this->tempImportFile('csv', $first), 'phpunit-admin');
+        $this->imports->commit((string) $batch['id']);
+
+        // Correct one runner to a time between the others - only that row is in the upsert batch.
+        $fix = "numer,uczestnik,czas,kategoria\n423,Ewa C,00:32:00,K30\n";
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'upsert', $this->tempImportFile('csv', $fix), 'phpunit-admin');
+        $this->imports->commit((string) $batch['id']);
+
+        $byBib = $this->resultsByBib((string) $event['id'], $distanceId);
+        self::assertSame(1, (int) $byBib['421']['position']);
+        self::assertSame(2, (int) $byBib['423']['position']);
+        self::assertSame(3, (int) $byBib['422']['position']);
+        self::assertSame(2, (int) $byBib['423']['categoryPosition']);
+        self::assertSame(3, (int) $byBib['422']['categoryPosition']);
+    }
+
+    public function testOutOfRangeMinutesAndSecondsAreRejectedAsInvalidTime(): void
+    {
+        $event = $this->events->create($this->eventPayload());
+        $distanceId = (string) $event['distances'][0]['id'];
+        foreach ([['Fela A', '431'], ['Fela B', '432'], ['Fela C', '433']] as [$name, $bib]) {
+            $this->createRegistration($event, $this->createParticipant($name, 'K', 1990), 'K30', $bib);
+        }
+
+        $csv = "numer,uczestnik,czas,kategoria\n431,Fela A,4:75,K30\n432,Fela B,1:75:00,K30\n433,Fela C,75:30,K30\n";
+        $batch = $this->imports->create((string) $event['id'], $distanceId, 'replace', $this->tempImportFile('csv', $csv), 'phpunit-admin');
+
+        $rows = [];
+        foreach ($batch['rows'] as $row) {
+            $rows[(string) $row['mappedData']['bibNumber']] = $row;
+        }
+        self::assertContains('time_invalid', $rows['431']['errors']);
+        self::assertContains('time_invalid', $rows['432']['errors']);
+        self::assertNotContains('time_invalid', $rows['433']['errors']);
+        self::assertEqualsWithDelta(4530.0, $rows['433']['mappedData']['timeInSeconds'], 0.001);
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    private function resultsByBib(string $eventId, string $distanceId): array
+    {
+        $byBib = [];
+        foreach ($this->results->byEvent($eventId, $distanceId) as $result) {
+            $byBib[(string) $result['bibNumber']] = $result;
+        }
+        return $byBib;
+    }
+
     /** @return array<string, mixed> */
     private function createParticipant(string $name, string $gender, int $birthYear): array
     {

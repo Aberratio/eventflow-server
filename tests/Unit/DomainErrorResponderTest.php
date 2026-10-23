@@ -60,7 +60,7 @@ final class DomainErrorResponderTest extends TestCase
         [$status, $error] = self::read(DomainErrorResponder::respond(new Response(), new Conflict('registration_team_full'), ['registration_team_full']));
 
         self::assertSame(409, $status);
-        self::assertSame('This team already has its maximum number of members.', $error['message']);
+        self::assertSame('Ta drużyna ma już maksymalną liczbę członków.', $error['message']);
         self::assertArrayNotHasKey('details', $error);
     }
 
@@ -106,7 +106,28 @@ final class DomainErrorResponderTest extends TestCase
 
         [$status, $error] = self::read(DomainErrorResponder::respond(new Response(), new NotFound('team_not_found'), $handles));
         self::assertSame(404, $status);
-        self::assertSame('Team was not found.', $error['message']);
+        self::assertSame('Nie znaleziono drużyny.', $error['message']);
+    }
+
+    /** @return array<string, array{class-string<DomainError>, string, string}> */
+    public static function polishCatalogMessages(): array
+    {
+        return [
+            'discount code expired' => [Conflict::class, 'discount_code_expired', 'Kod rabatowy wygasł.'],
+            'order out of stock' => [Conflict::class, 'order_out_of_stock', 'Co najmniej jeden produkt w tym zamówieniu jest niedostępny.'],
+            'refund needs a paid registration' => [Conflict::class, 'refund_requires_paid_registration', 'Zwrotu można zażądać tylko dla opłaconego Zapisu.'],
+            'validation error diacritics' => [InvalidInput::class, 'validation_error', 'Sprawdź poprawność danych i spróbuj ponownie.'],
+            'xlsx diacritics' => [Internal::class, 'xlsx_not_supported', 'Serwer PHP nie obsługuje zapisu XLSX (brak rozszerzenia ZipArchive). Użyj eksportu CSV.'],
+        ];
+    }
+
+    /** @param class-string<DomainError> $class */
+    #[DataProvider('polishCatalogMessages')]
+    public function testCatalogMessagesArePolishWithDiacritics(string $class, string $code, string $expected): void
+    {
+        [, $error] = self::read(DomainErrorResponder::respond(new Response(), new $class($code), [$code]));
+
+        self::assertSame($expected, $error['message']);
     }
 
     public function testUnlistedDomainCodeIsRethrownWithoutAFallback(): void

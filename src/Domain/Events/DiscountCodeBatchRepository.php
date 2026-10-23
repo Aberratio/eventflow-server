@@ -7,6 +7,7 @@ namespace ZmierzymyCzas\Domain\Events;
 use ZmierzymyCzas\Domain\Errors\Conflict;
 use ZmierzymyCzas\Domain\Errors\Internal;
 use ZmierzymyCzas\Domain\Repository;
+use ZmierzymyCzas\Support\CsvCell;
 use ZmierzymyCzas\Support\InputValidationException;
 
 /**
@@ -176,11 +177,7 @@ final class DiscountCodeBatchRepository extends Repository
     /** Neutralises spreadsheet formula injection (leading = + - @ tab CR) in user-supplied text. */
     public static function csvCell(string $value): string
     {
-        if ($value !== '' && strpbrk($value[0], "=+-@\t\r") !== false) {
-            return "'" . $value;
-        }
-
-        return $value;
+        return CsvCell::text($value);
     }
 
     /**

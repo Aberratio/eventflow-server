@@ -105,6 +105,26 @@ final class EventAccess
     }
 
     /**
+     * The Event Team proper: the owning organizer or an active co-manager - staff roles (admin,
+     * moderator) are NOT included even though canManage() lets them in.
+     *
+     * @param array<string, mixed>|null $event
+     * @param array<string, mixed> $auth
+     */
+    public function isTeamMember(?array $event, array $auth): bool
+    {
+        $userId = (string) ($auth['sub'] ?? '');
+        if (!$event || $userId === '') {
+            return false;
+        }
+        if (($event['organizerId'] ?? null) === $userId && (string) ($auth['role'] ?? '') === 'organizer') {
+            return true;
+        }
+
+        return $this->eventTeam->isActiveCoManager((string) ($event['id'] ?? ''), $userId);
+    }
+
+    /**
      * @param array<string, mixed>|null $event
      * @param array<string, mixed> $auth
      */

@@ -7,6 +7,7 @@ namespace ZmierzymyCzas\Tests\Integration\Http;
 use ZmierzymyCzas\Domain\Care\CareRepository;
 use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
+use ZmierzymyCzas\Domain\FormFields\FormFieldAnswerRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Domain\Users\UserRepository;
@@ -364,6 +365,42 @@ final class RegistrationAccessContractTest extends HttpTestCase
         self::assertSame(403, $this->request('POST', $path . '/cancel', [], $guardianAuth)->getStatusCode());
         // The registration's own user keeps access.
         self::assertSame(200, $this->request('GET', $path . '/form-field-answers', [], $this->bearer($ward['id'], 'participant', $ward['email']))->getStatusCode());
+    }
+
+    public function testModeratorDoesNotSeeConfidentialAnswersButEventTeamAndOwnerDo(): void
+    {
+        $this->formFields->ensureSystemCatalog((string) $this->eventA['id']);
+        $open = $this->formFields->createCustom((string) $this->eventA['id'], [
+            'fieldType' => 'short_text',
+            'fieldKey' => 'custom_note',
+            'label' => 'Note',
+            'state' => 'shown',
+        ]);
+        $secret = $this->formFields->createCustom((string) $this->eventA['id'], [
+            'fieldType' => 'short_text',
+            'fieldKey' => 'custom_allergy',
+            'label' => 'Allergies',
+            'state' => 'shown',
+            'isConfidential' => true,
+        ]);
+        $answers = new FormFieldAnswerRepository($this->pdo);
+        $answers->saveAnswer($this->formFields, (string) $open['id'], (string) $this->registrationRP['id'], 'fine');
+        $answers->saveAnswer($this->formFields, (string) $secret['id'], (string) $this->registrationRP['id'], 'peanuts');
+        $this->pdo->prepare("UPDATE events SET publication_status = 'published' WHERE id = :id")->execute(['id' => $this->eventA['id']]);
+
+        $path = '/api/v1/registrations/' . $this->registrationRP['id'] . '/form-field-answers';
+        $fieldIds = fn (array $auth): array => array_column($this->json($this->request('GET', $path, [], $auth))['data'], 'formFieldId');
+
+        $moderator = $this->request('GET', $path, [], $this->bearer($this->moderator['id'], 'moderator', $this->moderator['email']));
+        self::assertSame(200, $moderator->getStatusCode());
+        self::assertSame([$open['id']], array_column($this->json($moderator)['data'], 'formFieldId'));
+
+        foreach ([
+            $this->bearer($this->organizerA['id'], 'organizer', $this->organizerA['email']),
+            $this->bearer($this->participantP['id'], 'participant', $this->participantP['email']),
+        ] as $auth) {
+            self::assertEqualsCanonicalizing([$open['id'], $secret['id']], $fieldIds($auth));
+        }
     }
 
     private function registrationPayload(array $event, array $user): array

@@ -362,7 +362,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $canManageEvent = $eventAccess->canManage(...);
     $canUploadResults = $eventAccess->canUploadResults(...);
     $canManageEventMoney = $eventAccess->canManageMoney(...);
-    $registrationAccess = new RegistrationAccess($registrations, $events, $eventAccess);
+    $registrationAccess = new RegistrationAccess($registrations, $events, $eventAccess, $care);
     $isRegistrationOwner = $registrationAccess->isOwner(...);
     $authorizeRegistration = $registrationAccess->authorize(...);
     // Every non-manager Event read goes through PublicEventPresenter (allowlist;

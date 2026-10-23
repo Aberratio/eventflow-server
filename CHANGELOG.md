@@ -174,6 +174,7 @@ Integrations and mail
   requests a refund of everything paid, not only the price difference that
   was still awaiting approval. Cancelling an already expired, removed or
   cancelled registration as an organizer no longer changes its status.
+- A guardian whose care over a competitor was revoked can no longer read, edit, cancel or request a refund for registrations they had made for that competitor.
 - An unknown event slug returns a 404 error response (never 200 with empty data).
 - Error responses no longer leak exception messages or stack traces outside
   local debug mode (`APP_DEBUG=true` with `APP_ENV=local`).

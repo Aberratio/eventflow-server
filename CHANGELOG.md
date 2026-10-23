@@ -152,6 +152,7 @@ Integrations and mail
 
 ### Fixed
 
+- Public results no longer reveal who an anonymised competitor is: their result row hides the account, registration and birth year, and searching results by their real name finds nothing.
 - An unknown event slug returns a 404 error response (never 200 with empty data).
 - Error responses no longer leak exception messages or stack traces outside
   local debug mode (`APP_DEBUG=true` with `APP_ENV=local`).

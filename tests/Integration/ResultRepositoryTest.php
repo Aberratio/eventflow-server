@@ -559,6 +559,50 @@ final class ResultRepositoryTest extends TestCase
         self::assertStringNotContainsString('Lista', $entry['userName']);
     }
 
+    /**
+     * Masking only the name is not enough: userId / registrationId / birthYear on an anonymised
+     * row would still identify the person in the public classification and list.
+     */
+    public function testAnonymizedRowsDropIdentifyingFieldsOnPublicClassificationAndList(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Tozsamosc Ukryta');
+        $this->competitors->setAnonymization($competitorId, true);
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+        $created = $this->results->create($this->resultPayload($account, [
+            'registrationId' => $registrationId,
+            'birthYear' => 1990,
+        ]));
+        self::assertSame(1990, (int) $this->pdo->query("SELECT birth_year FROM results WHERE id = '" . $created['id'] . "'")->fetchColumn());
+
+        $rows = [
+            $this->results->byEvent((string) $this->event['id']),
+            $this->results->list(['eventId' => $this->event['id']])['data'],
+        ];
+        foreach ($rows as $set) {
+            $entry = current(array_filter($set, static fn (array $r): bool => $r['id'] === $created['id']));
+            self::assertNotFalse($entry);
+            self::assertNull($entry['userId']);
+            self::assertNull($entry['registrationId']);
+            self::assertNull($entry['birthYear']);
+        }
+    }
+
+    /** A public search by real name must not find (and so confirm) an anonymised competitor's result. */
+    public function testPublicSearchDoesNotMatchAnonymizedCompetitorsRealName(): void
+    {
+        [$account, $competitorId] = $this->createCompetitorWithAccount('Szukany Anonim');
+        $this->competitors->setAnonymization($competitorId, true);
+        $registrationId = $this->insertRegistration((string) $this->event['id'], (string) $this->event['distances'][0]['id'], $competitorId, $account);
+        $created = $this->results->create($this->resultPayload($account, ['registrationId' => $registrationId]));
+
+        $page = $this->results->list(['eventId' => $this->event['id'], 'search' => 'Szukany']);
+
+        self::assertSame(0, $page['total']);
+        self::assertSame([], array_column($page['data'], 'id'));
+        // Without the filter the (masked) row is still listed.
+        self::assertContains($created['id'], array_column($this->results->list(['eventId' => $this->event['id']])['data'], 'id'));
+    }
+
     /** Non-anonymized competitor must keep appearing with their real name on the public list - no false-positive masking. */
     public function testNonAnonymizedCompetitorsNameAppearsNormallyOnThePublicResultsList(): void
     {

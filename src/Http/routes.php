@@ -1641,7 +1641,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         $api->get('/teams/{teamId}', function (Request $request, Response $response, array $args) use ($teams) {
             $team = $teams->find($args['teamId']);
             if ($team === null) {
-                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+                return JsonResponder::error($response, 'team_not_found', 'Nie znaleziono drużyny.', 404);
             }
             return JsonResponder::ok($response, $team);
         });
@@ -1700,7 +1700,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $auth = (array) $request->getAttribute('auth');
             $team = $teams->find((string) $args['teamId']);
             if ($team === null) {
-                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+                return JsonResponder::error($response, 'team_not_found', 'Nie znaleziono drużyny.', 404);
             }
             if (!TeamRepository::isCaptain($team, (string) ($auth['sub'] ?? '')) && !$canManageEvent($events->find((string) $team['eventId']), $auth)) {
                 return JsonResponder::error($response, 'team_not_captain', 'Tylko kapitan drużyny lub organizator wydarzenia widzi skład z możliwością wymiany.', 403);
@@ -1718,7 +1718,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $auth = (array) $request->getAttribute('auth');
             $team = $teams->find((string) $args['teamId']);
             if ($team === null) {
-                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+                return JsonResponder::error($response, 'team_not_found', 'Nie znaleziono drużyny.', 404);
             }
             $isManager = $canManageEvent($events->find((string) $team['eventId']), $auth);
             try {

@@ -6,6 +6,7 @@ namespace ZmierzymyCzas\Domain\Registrations;
 
 use ZipArchive;
 use ZmierzymyCzas\Domain\Errors\Internal;
+use ZmierzymyCzas\Support\CsvCell;
 
 /**
  * Start list export ("Eksport listy startowej": CSV (Windows-1250) + XLSX).
@@ -58,10 +59,12 @@ final class StartListExportFormatter
             throw new Internal('csv_buffer_unavailable');
         }
 
-        fputcsv($handle, array_map(static fn (array $c): string => $c['label'], $columns), ';');
+        // Text cells (organizer-defined labels, participant-supplied answers) are neutralised against
+        // spreadsheet formula injection; plain numbers (also negative amounts) stay numeric.
+        fputcsv($handle, array_map(static fn (array $c): string => CsvCell::safe($c['label']), $columns), ';');
         foreach ($rows as $row) {
             fputcsv($handle, array_map(
-                static fn (array $c): string => self::cellText($row[$c['key']] ?? ''),
+                static fn (array $c): string => CsvCell::safe(self::cellText($row[$c['key']] ?? '')),
                 $columns
             ), ';');
         }

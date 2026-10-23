@@ -2697,6 +2697,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 return JsonResponder::error($response, 'invalid_payload', 'Malformed webhook payload.', 400);
             }
 
+            // Paynow notifies on every status change. A non-final one (NEW, PENDING) must not
+            // close the transaction row as failed — a later CONFIRMED would then be ignored.
+            if (!$notification->paid && !$notification->failed) {
+                $logWebhook('paynow', 'ignored_non_final', [
+                    'transactionId' => $notification->transactionId,
+                    'paid' => false,
+                ]);
+
+                return $response->withStatus(200);
+            }
+
             try {
                 // PayNow's notification carries no amount (see PayNowNotification);
                 // null = not reported. applyGatewayNotification() exempts 'paynow'

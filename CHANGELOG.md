@@ -163,6 +163,9 @@ Integrations and mail
 - API error messages for discount codes, refunds, shop orders, teams and
   registrations are now in Polish (they were mixed English/Polish), and
   several Polish messages that lacked diacritics are corrected.
+- A card or BLIK payment through Paynow is no longer lost when the gateway first reports
+  an intermediate status (new, pending): the registration is still confirmed once the
+  payment is confirmed, instead of staying unpaid and expiring.
 - An unknown event slug returns a 404 error response (never 200 with empty data).
 - Error responses no longer leak exception messages or stack traces outside
   local debug mode (`APP_DEBUG=true` with `APP_ENV=local`).

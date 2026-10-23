@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace ZmierzymyCzas\Tests\Integration\Http;
 
+use ZmierzymyCzas\Domain\Care\CareRepository;
+use ZmierzymyCzas\Domain\Competitors\CompetitorRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\FormFields\FormFieldRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
@@ -71,6 +73,8 @@ final class RegistrationAccessContractTest extends HttpTestCase
         }
         $this->pdo->prepare('DELETE FROM form_fields WHERE event_id IN (:a, :b)')
             ->execute(['a' => $this->eventA['id'] ?? '', 'b' => $this->eventB['id'] ?? '']);
+        $this->pdo->prepare('DELETE cr FROM care_relations cr JOIN users u ON u.id = cr.konto_id WHERE u.email LIKE :email')->execute(['email' => $this->prefix . '-%@example.test']);
+        $this->pdo->prepare('DELETE c FROM competitors c JOIN users u ON u.id = c.user_id WHERE u.email LIKE :email')->execute(['email' => $this->prefix . '-%@example.test']);
         $this->pdo->prepare('DELETE FROM events WHERE slug LIKE :slug')->execute(['slug' => $this->prefix . '-%']);
         $this->pdo->prepare('DELETE FROM users WHERE email LIKE :email')->execute(['email' => $this->prefix . '-%@example.test']);
     }
@@ -335,6 +339,31 @@ final class RegistrationAccessContractTest extends HttpTestCase
         $stmt = $this->pdo->prepare('SELECT status FROM registrations WHERE id = :id');
         $stmt->execute(['id' => $this->registrationRP['id']]);
         return (string) $stmt->fetchColumn();
+    }
+
+    public function testGuardianLosesAccessToRegistrationAfterWardRevokesCare(): void
+    {
+        $guardian = $this->participantQ;
+        $ward = $this->participantP;
+        $competitor = (new CompetitorRepository($this->pdo))->findByUserId((string) $ward['id']);
+        self::assertNotNull($competitor);
+        $relation = (new CareRepository($this->pdo))->grant((string) $guardian['id'], (string) $competitor['id']);
+        $registration = $this->registrations->create($this->registrationPayload($this->eventA, $ward) + [
+            'competitorId' => $competitor['id'],
+            'registeredById' => $guardian['id'],
+        ]);
+        $guardianAuth = $this->bearer($guardian['id'], 'participant', $guardian['email']);
+        $path = '/api/v1/registrations/' . $registration['id'];
+
+        self::assertSame(200, $this->request('GET', $path . '/form-field-answers', [], $guardianAuth)->getStatusCode());
+
+        $revoke = $this->request('DELETE', '/api/v1/care/' . $relation['id'], [], $this->bearer($ward['id'], 'participant', $ward['email']));
+        self::assertSame(200, $revoke->getStatusCode());
+
+        self::assertSame(403, $this->request('GET', $path . '/form-field-answers', [], $guardianAuth)->getStatusCode());
+        self::assertSame(403, $this->request('POST', $path . '/cancel', [], $guardianAuth)->getStatusCode());
+        // The registration's own user keeps access.
+        self::assertSame(200, $this->request('GET', $path . '/form-field-answers', [], $this->bearer($ward['id'], 'participant', $ward['email']))->getStatusCode());
     }
 
     private function registrationPayload(array $event, array $user): array

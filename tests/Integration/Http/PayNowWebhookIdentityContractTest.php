@@ -109,6 +109,39 @@ final class PayNowWebhookIdentityContractTest extends TestCase
         self::assertSame('paid', $this->transactionStatus('PN-pp63-ok'));
     }
 
+    public function testPendingThenConfirmedStillConfirmsTheRegistration(): void
+    {
+        $registration = $this->registrationWithPayNowTransaction('PN-pp63-pend');
+
+        foreach (['NEW', 'PENDING'] as $status) {
+            $response = $this->notify('PN-pp63-pend', $registration['id'], $status);
+            self::assertSame(200, $response->getStatusCode());
+            self::assertSame('', (string) $response->getBody());
+            self::assertSame('pending', $this->registrationStatus($registration['id']));
+            self::assertSame('created', $this->transactionStatus('PN-pp63-pend'));
+        }
+        self::assertCount(2, array_filter(
+            $this->logs->getRecords(),
+            static fn ($r): bool => ($r->context['outcome'] ?? null) === 'ignored_non_final'
+        ));
+
+        $this->notify('PN-pp63-pend', $registration['id'], 'CONFIRMED');
+
+        self::assertSame('confirmed', $this->registrationStatus($registration['id']));
+        self::assertSame('paid', $this->transactionStatus('PN-pp63-pend'));
+    }
+
+    public function testRejectedClosesTheTransactionAsFailed(): void
+    {
+        $registration = $this->registrationWithPayNowTransaction('PN-pp63-rej');
+
+        $response = $this->notify('PN-pp63-rej', $registration['id'], 'REJECTED');
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('pending', $this->registrationStatus($registration['id']));
+        self::assertSame('failed', $this->transactionStatus('PN-pp63-rej'));
+    }
+
     public function testNonUuidExternalIdIsNotBlockedAndWarns(): void
     {
         $registration = $this->registrationWithPayNowTransaction('PN-pp63-fmt');
@@ -188,12 +221,12 @@ final class PayNowWebhookIdentityContractTest extends TestCase
         return $registration;
     }
 
-    private function notify(string $transactionId, string $externalId): ResponseInterface
+    private function notify(string $transactionId, string $externalId, string $status = 'CONFIRMED'): ResponseInterface
     {
         $body = (string) json_encode([
             'paymentId' => $transactionId,
             'externalId' => $externalId,
-            'status' => 'CONFIRMED',
+            'status' => $status,
             'modifiedAt' => '2026-10-03T10:00:00',
         ]);
         $request = (new ServerRequestFactory())->createServerRequest('POST', '/api/v1/webhooks/paynow')

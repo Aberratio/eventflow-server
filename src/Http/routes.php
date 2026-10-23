@@ -362,7 +362,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $canManageEvent = $eventAccess->canManage(...);
     $canUploadResults = $eventAccess->canUploadResults(...);
     $canManageEventMoney = $eventAccess->canManageMoney(...);
-    $registrationAccess = new RegistrationAccess($registrations, $events, $eventAccess);
+    $registrationAccess = new RegistrationAccess($registrations, $events, $eventAccess, $care);
     $isRegistrationOwner = $registrationAccess->isOwner(...);
     $authorizeRegistration = $registrationAccess->authorize(...);
     // Every non-manager Event read goes through PublicEventPresenter (allowlist;
@@ -1641,7 +1641,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         $api->get('/teams/{teamId}', function (Request $request, Response $response, array $args) use ($teams) {
             $team = $teams->find($args['teamId']);
             if ($team === null) {
-                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+                return JsonResponder::error($response, 'team_not_found', 'Nie znaleziono drużyny.', 404);
             }
             return JsonResponder::ok($response, $team);
         });
@@ -1700,7 +1700,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $auth = (array) $request->getAttribute('auth');
             $team = $teams->find((string) $args['teamId']);
             if ($team === null) {
-                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+                return JsonResponder::error($response, 'team_not_found', 'Nie znaleziono drużyny.', 404);
             }
             if (!TeamRepository::isCaptain($team, (string) ($auth['sub'] ?? '')) && !$canManageEvent($events->find((string) $team['eventId']), $auth)) {
                 return JsonResponder::error($response, 'team_not_captain', 'Tylko kapitan drużyny lub organizator wydarzenia widzi skład z możliwością wymiany.', 403);
@@ -1718,7 +1718,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $auth = (array) $request->getAttribute('auth');
             $team = $teams->find((string) $args['teamId']);
             if ($team === null) {
-                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+                return JsonResponder::error($response, 'team_not_found', 'Nie znaleziono drużyny.', 404);
             }
             $isManager = $canManageEvent($events->find((string) $team['eventId']), $auth);
             try {
@@ -2701,6 +2701,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $logWebhook('paynow', 'invalid_payload');
 
                 return JsonResponder::error($response, 'invalid_payload', 'Malformed webhook payload.', 400);
+            }
+
+            // Paynow notifies on every status change. A non-final one (NEW, PENDING) must not
+            // close the transaction row as failed — a later CONFIRMED would then be ignored.
+            if (!$notification->paid && !$notification->failed) {
+                $logWebhook('paynow', 'ignored_non_final', [
+                    'transactionId' => $notification->transactionId,
+                    'paid' => false,
+                ]);
+
+                return $response->withStatus(200);
             }
 
             try {

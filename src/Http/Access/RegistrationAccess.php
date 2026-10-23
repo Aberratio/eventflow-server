@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ZmierzymyCzas\Http\Access;
 
 use Psr\Http\Message\ResponseInterface as Response;
+use ZmierzymyCzas\Domain\Care\CareRepository;
 use ZmierzymyCzas\Domain\Events\EventRepository;
 use ZmierzymyCzas\Domain\Registrations\RegistrationRepository;
 use ZmierzymyCzas\Support\JsonResponder;
@@ -16,6 +17,7 @@ final class RegistrationAccess
         private readonly RegistrationRepository $registrations,
         private readonly EventRepository $events,
         private readonly EventAccess $eventAccess,
+        private readonly CareRepository $care,
     ) {
     }
 
@@ -29,10 +31,19 @@ final class RegistrationAccess
             return false;
         }
         $callerId = (string) ($auth['sub'] ?? '');
-        return $callerId !== '' && (
-            (string) $registration['userId'] === $callerId
-            || (string) ($registration['registeredById'] ?? '') === $callerId
-        );
+        if ($callerId === '') {
+            return false;
+        }
+        if ((string) $registration['userId'] === $callerId) {
+            return true;
+        }
+        if ((string) ($registration['registeredById'] ?? '') !== $callerId) {
+            return false;
+        }
+        // Whoever registered the competitor keeps access only while they can still act for them
+        // (care relation, or their own profile) - a revoked guardian must not retain the registration.
+        $competitorId = (string) ($registration['competitorId'] ?? '');
+        return $competitorId === '' || $this->care->canRegister($callerId, $competitorId);
     }
 
     /**

@@ -362,7 +362,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
     $canManageEvent = $eventAccess->canManage(...);
     $canUploadResults = $eventAccess->canUploadResults(...);
     $canManageEventMoney = $eventAccess->canManageMoney(...);
-    $registrationAccess = new RegistrationAccess($registrations, $events, $eventAccess);
+    $registrationAccess = new RegistrationAccess($registrations, $events, $eventAccess, $care);
     $isRegistrationOwner = $registrationAccess->isOwner(...);
     $authorizeRegistration = $registrationAccess->authorize(...);
     // Every non-manager Event read goes through PublicEventPresenter (allowlist;
@@ -401,7 +401,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
 
     // Convention: routes behind a plain `AuthMiddleware($jwt)` only require a valid session. Authorization that depends on
     // the resource (event Team, registration owner, ...) is decided per request inside the handler.
-    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync, $registrationChangeController, $discountCodeBatchController, $bibNumberController, $competitorDuplicateController, $settlementController): void {
+    $app->group('/api/v1', function (RouteCollectorProxy $api) use ($pdo, $jwt, $eventTeamController, $competitors, $competitorMerge, $care, $users, $events, $registrations, $teams, $results, $resultImports, $virtualResults, $series, $shop, $challenges, $challengePointsSettings, $challengePointThresholdScorer, $challengeRanking, $pages, $partners, $admin, $backgrounds, $uploads, $orders, $insurance, $certificates, $body, $query, $adminRoles, $staffRoles, $eventManagerRoles, $publisherRoles, $optionalAuth, $isStaffRole, $isSelf, $isAccountManager, $canReadUserScopedData, $isRegistrationOwner, $authorizeRegistration, $canViewEvent, $canManageEvent, $eventAccess, $canManageEventMoney, $canUploadResults, $isSuperAdmin, $touchesAdminAccount, $logActivity, $tpayNotificationVerifier, $payNowNotificationVerifier, $mailer, $mailTemplates, $centralMailerOutbox, $resultsMailRequests, $notifyEventChanged, $notifyChallengeCompletion, $formFields, $formFieldAnswers, $stripBzToken, $stripBzTokenFromList, $apiKeyConfig, $validateShopProduct, $logger, $logWebhook, $okOrNotFound, $onlinePaymentGatewayConfigured, $syncChallengesForEvent, $calendarSettings, $calendarSync, $registrationChangeController, $discountCodeBatchController, $bibNumberController, $competitorDuplicateController, $settlementController): void {
         $api->get('/health', static function (Request $request, Response $response) use ($pdo, $logger) {
             // A cheap round trip on the connection index.php already opened.
             try {
@@ -1641,7 +1641,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
         $api->get('/teams/{teamId}', function (Request $request, Response $response, array $args) use ($teams) {
             $team = $teams->find($args['teamId']);
             if ($team === null) {
-                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+                return JsonResponder::error($response, 'team_not_found', 'Nie znaleziono drużyny.', 404);
             }
             return JsonResponder::ok($response, $team);
         });
@@ -1700,7 +1700,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $auth = (array) $request->getAttribute('auth');
             $team = $teams->find((string) $args['teamId']);
             if ($team === null) {
-                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+                return JsonResponder::error($response, 'team_not_found', 'Nie znaleziono drużyny.', 404);
             }
             if (!TeamRepository::isCaptain($team, (string) ($auth['sub'] ?? '')) && !$canManageEvent($events->find((string) $team['eventId']), $auth)) {
                 return JsonResponder::error($response, 'team_not_captain', 'Tylko kapitan drużyny lub organizator wydarzenia widzi skład z możliwością wymiany.', 403);
@@ -1718,7 +1718,7 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $auth = (array) $request->getAttribute('auth');
             $team = $teams->find((string) $args['teamId']);
             if ($team === null) {
-                return JsonResponder::error($response, 'team_not_found', 'Team was not found.', 404);
+                return JsonResponder::error($response, 'team_not_found', 'Nie znaleziono drużyny.', 404);
             }
             $isManager = $canManageEvent($events->find((string) $team['eventId']), $auth);
             try {
@@ -2216,12 +2216,18 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             }
             return JsonResponder::ok($response, $saved);
         })->add(new AuthMiddleware($jwt));
-        $api->get('/registrations/{registrationId}/form-field-answers', function (Request $request, Response $response, array $args) use ($formFieldAnswers, $authorizeRegistration) {
-            $gate = $authorizeRegistration($response, (string) $args['registrationId'], (array) $request->getAttribute('auth'));
+        $api->get('/registrations/{registrationId}/form-field-answers', function (Request $request, Response $response, array $args) use ($formFieldAnswers, $authorizeRegistration, $isRegistrationOwner, $eventAccess, $events) {
+            $auth = (array) $request->getAttribute('auth');
+            $gate = $authorizeRegistration($response, (string) $args['registrationId'], $auth);
             if ($gate instanceof Response) {
                 return $gate;
             }
-            return JsonResponder::ok($response, $formFieldAnswers->forRegistration((string) $args['registrationId']));
+            // Confidential answers are for the Event Team and the registration's own side only - a
+            // Moderator who got in through staff rights does not see them.
+            $hideConfidential = (string) ($auth['role'] ?? '') === 'moderator'
+                && !$isRegistrationOwner($gate['registration'], $auth)
+                && !$eventAccess->isTeamMember($events->find((string) $gate['registration']['eventId']), $auth);
+            return JsonResponder::ok($response, $formFieldAnswers->forRegistration((string) $args['registrationId'], !$hideConfidential));
         })
             ->add(new AuthMiddleware($jwt));
 
@@ -2695,6 +2701,17 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
                 $logWebhook('paynow', 'invalid_payload');
 
                 return JsonResponder::error($response, 'invalid_payload', 'Malformed webhook payload.', 400);
+            }
+
+            // Paynow notifies on every status change. A non-final one (NEW, PENDING) must not
+            // close the transaction row as failed — a later CONFIRMED would then be ignored.
+            if (!$notification->paid && !$notification->failed) {
+                $logWebhook('paynow', 'ignored_non_final', [
+                    'transactionId' => $notification->transactionId,
+                    'paid' => false,
+                ]);
+
+                return $response->withStatus(200);
             }
 
             try {
@@ -3908,7 +3925,12 @@ return static function (App $app, PDO $pdo, JwtService $jwt, ?LoggerInterface $l
             $filters = $query($request);
             $filters['targetType'] = 'event';
             $filters['targetId'] = $args['id'];
-            return JsonResponder::ok($response, $admin->activityLogs($filters));
+            $logs = $admin->activityLogs($filters);
+            // The actors' IP / user agent are platform-admin data; the event team gets the entries only.
+            if (!in_array((string) ($auth['role'] ?? ''), ['admin', 'superadmin'], true)) {
+                $logs = array_map(static fn (array $row): array => array_merge($row, ['ipAddress' => null, 'userAgent' => null]), $logs);
+            }
+            return JsonResponder::ok($response, $logs);
         })->add(new AuthMiddleware($jwt));
         $api->get('/admin/security-settings', fn (Request $request, Response $response) => JsonResponder::ok($response, $admin->securitySettings()))
             ->add(new AuthMiddleware($jwt, ['admin']));

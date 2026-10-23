@@ -169,6 +169,36 @@ final class ActivityLogContractTest extends HttpTestCase
         self::assertSame(403, $strangerResponse->getStatusCode());
     }
 
+    public function testEventActivityLogsHideActorNetworkDataFromNonAdmins(): void
+    {
+        $event = $this->events->createForOrganizer($this->eventPayload(), $this->organizer, $this->organizer['id']);
+        $this->request(
+            'PATCH',
+            '/api/v1/events/' . $event['id'],
+            ['name' => 'Renamed by organizer'],
+            $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])
+        );
+        $this->pdo->prepare("UPDATE activity_logs SET ip_address = '203.0.113.7', user_agent = 'TestAgent/1.0' WHERE target_id = :id")
+            ->execute(['id' => $event['id']]);
+        // Staff (admin) manage an event only once it has cleared moderation.
+        $this->pdo->prepare("UPDATE events SET publication_status = 'published' WHERE id = :id")->execute(['id' => $event['id']]);
+        $path = '/api/v1/events/' . $event['id'] . '/activity-logs';
+
+        $ownerRows = $this->json($this->request('GET', $path, [], $this->bearer($this->organizer['id'], 'organizer', $this->organizer['email'])))['data'];
+        self::assertNotEmpty($ownerRows);
+        foreach ($ownerRows as $row) {
+            self::assertArrayHasKey('ipAddress', $row);
+            self::assertArrayHasKey('userAgent', $row);
+            self::assertNull($row['ipAddress']);
+            self::assertNull($row['userAgent']);
+        }
+
+        $adminRows = $this->json($this->request('GET', $path, [], $this->bearer($this->admin['id'], 'admin', $this->admin['email'])))['data'];
+        self::assertNotEmpty($adminRows);
+        self::assertSame('203.0.113.7', $adminRows[0]['ipAddress']);
+        self::assertSame('TestAgent/1.0', $adminRows[0]['userAgent']);
+    }
+
     private function eventPayload(array $overrides = []): array
     {
         $slug = $this->prefix . '-event';
